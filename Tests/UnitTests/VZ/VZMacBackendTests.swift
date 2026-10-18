@@ -159,6 +159,27 @@ import VMLabCore
     #expect(error?.code == .invalidRequest)
   }
 
+  /// CX-28: a guest with network none has no address to provision over; that is expected, so
+  /// provisioning is skipped (no error, which would kill the runner) and nothing is marked done.
+  @Test func networkNoneSkipsProvisioning() async throws {
+    let (home, store, backend, _) = try Self.sandbox()
+    defer { try? FileManager.default.removeItem(at: home) }
+    let record = try store.update(id: try Self.create(store).id) {
+      $0.network = NetworkSpec(mode: .disabled)
+    }
+    try await backend.create(record, plan: Self.plan)
+    try await backend.provision(try store.load(id: record.id), ip: nil)
+    #expect(!MacProvisioner.isProvisioned(store.directory(of: record.id)))
+
+    // With a network, no lease is still a provisioning failure.
+    let nat = try Self.create(store)
+    try await backend.create(nat, plan: Self.plan)
+    let error = await #expect(throws: VMLabError.self) {
+      try await backend.provision(try store.load(id: nat.id), ip: nil)
+    }
+    #expect(error?.code == .provisionFailed)
+  }
+
   /// CX-29: resources below the image's minimums are raised in vm.json too, so admission and the
   /// inventory count what the guest really gets.
   @Test func createRecordsTheEffectiveResources() async throws {

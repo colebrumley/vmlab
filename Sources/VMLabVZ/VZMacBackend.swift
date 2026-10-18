@@ -39,7 +39,8 @@ extension VZRunnerConfig {
 /// The `vz-macos` backend: create `tart clone`s the pulled image (an APFS clone, seconds) and
 /// records the clone's directory in `vm.json`; start runs the clone's files in our own `vmlab-vz`
 /// runner (`VZRunnerConfig.macOS`), so pause, stop and the control socket are the same as
-/// `vz-linux`; the first start provisions the guest over SSH (R-606, `MacProvisioner`); destroy
+/// `vz-linux`; the first start provisions the guest over SSH (R-606, `MacProvisioner`), unless
+/// the network is `none` (CX-28: no address, so no provisioning); destroy
 /// `tart delete`s the clone.
 public struct VZMacBackend: Backend {
   public let profile: Profile = .vzMacOS
@@ -190,8 +191,11 @@ public struct VZMacBackend: Backend {
     DisplayEndpoint.isProvisioned(record)
   }
 
-  /// R-606: the first boot's SSH provisioning (`MacProvisioner`).
+  /// R-606: the first boot's SSH provisioning (`MacProvisioner`). CX-28: a guest with network
+  /// `none` has no NIC and so no address to provision over; that is expected, not a failure, so
+  /// it is skipped and not marked done (no vmlab key, hostname or Screen Sharing in the guest).
   func provision(_ record: VMRecord, ip: String?) async throws(VMLabError) {
+    guard record.network.mode != .disabled else { return }
     let dir = store.directory(of: record.id)
     guard let ip else {
       throw VMLabError(
