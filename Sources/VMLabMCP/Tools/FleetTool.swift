@@ -1,0 +1,36 @@
+import VMLabCore
+
+extension ToolSpec {
+  static let fleet = ToolSpec(
+    name: "fleet",
+    summary:
+      "Run several identical VMs as a group. create makes count members named <name>-1 to "
+      + "<name>-n from one plan of requirements (or image, a template), joins them to segment "
+      + "(auto makes one) and waits for SSH on each; some members may fail and are listed with "
+      + "their error. status reports each member; list shows fleets; exec runs command on every "
+      + "member, or on members, in parallel; destroy removes the fleet and its VMs.",
+    inputSchema: Schema.input(
+      [
+        "action": Schema.action(["create", "list", "status", "exec", "destroy"], "What to do."),
+        "name": Schema.string("The fleet's name (every action but list)."),
+        "count": Schema.integer("create: how many members.", minimum: 1),
+        "requirements": Schema.requirements,
+        "allowUnverified": Schema.allowUnverified,
+        "image": Schema.string("create: image or template; overrides requirements.image."),
+        "segment": Schema.string("create: segment to join, or auto to make one for the fleet."),
+        "command": Schema.string("exec: the command, as for vm_exec."),
+        "members": Schema.array(
+          Schema.string("A member's name."), "exec: only these members.", unique: true),
+        "timeoutSeconds": Schema.timeoutSeconds(
+          "create: per-member wait for SSH; exec: per-member command timeout."),
+      ], required: ["action"]),
+    outputShape: """
+      create, status: { name, members: [ { vm, state, ip?, error? } ] }
+      list: { fleets: [ { name, members } ] }
+      exec: { results: { <member>: ExecResult }, allSucceeded }; destroy: { destroyed: [vm] }
+      """,
+    errors: [
+      .invalidRequest, .unsatisfiable, .unverifiedCapability, .limitMacOSGuests, .limitMemory,
+      .imageNotFound, .vmNotFound, .timeout,
+    ])
+}

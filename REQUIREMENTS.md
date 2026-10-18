@@ -276,7 +276,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   returns facts, an unknown tool returns a JSON-RPC error. Manual: Claude Code with
   `claude mcp add vmlab -- /path/to/vmlab serve` lists the tools.
 
-- [ ] **R-202 Tool schemas and generated reference**
+- [x] **R-202 Tool schemas and generated reference**
   Every tool in Appendix C has a JSON Schema input and a documented output shape in
   `Sources/VMLabMCP/Tools/*.swift`, one file per tool, with `description` text written for a model
   (what it does, when to use it, what it returns, the errors it can raise). `scripts/gen-docs.sh`

@@ -58,7 +58,11 @@ arm64/x86_64 layout. Errors are the module's own `GDBError`; the debug tool maps
 
 **`VMLabMCP`** (library). The MCP server on the official Swift SDK: tool schemas (Appendix C),
 handlers that call Core, rendering of `VMLabError` as structured refusals, and the stdio transport.
-`ToolDocs` renders `docs/TOOLS.md` from the schemas.
+Each tool of Appendix C is a `ToolSpec` (name, model-facing description, JSON Schema 2020-12
+input as Core's `JSONValue`, documented output shape, the Appendix D codes it raises) in
+`Tools/<Tool>Tool.swift`, built with the `Schema` helpers in `Tools/ToolSpec.swift`, which also
+hold the shared `requirements` schema; `ToolCatalog.all` lists them in Appendix C order. `ToolDocs`
+renders `docs/TOOLS.md` from the schemas.
 
 **`vmlab`** (executable). The CLI on swift-argument-parser: every MCP tool as a subcommand with
 `--json` output, `vmlab serve` for the MCP server, `vmlab doctor`, and the hidden `vmlab gen-docs`
