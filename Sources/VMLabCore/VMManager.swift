@@ -309,6 +309,16 @@ public actor VMManager {
     return try await backends.backend(for: record.profile).attach(record)
   }
 
+  /// Attaches every running or paused guest's backend, so the server watches what it did not
+  /// start itself (R-304 panic detection on serial and QMP events, R-1101 dead-peer detection)
+  /// from the moment it starts, not only once a tool touches the VM. Failures are ignored: the
+  /// next tool call on that VM reports them.
+  public func monitorLiveGuests() async {
+    for record in (try? store.list().records) ?? [] where record.state.isLive {
+      _ = try? await attach(record.id)
+    }
+  }
+
   // MARK: Helpers
 
   /// Serializes actions on `id`: first among this process's callers, then, through the VM's

@@ -259,6 +259,8 @@ public actor QEMUMachine {
     let qmp = try await connectFirst(
       monitors ?? [layout.qmpSocket.path], connectTimeout: timeout)
     let serial = SerialChannel(socketPath: layout.serialSocket.path, logURL: layout.serialLog)
+    // R-304: panic lines go to the event log from this channel's first line on.
+    await serial.watchForPanics(vmDirectory: layout.directory)
     do {
       try await serial.start(connectTimeout: timeout)
     } catch {

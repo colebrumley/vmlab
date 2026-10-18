@@ -36,6 +36,9 @@ public enum VMLabServer {
     } catch {
       logger.warning("reconcile at start failed: \(error.message)")
     }
+    // Watch the guests already running (panics, QMP events, dead peers) without delaying serving.
+    let manager = context.manager
+    Task { await manager.monitorLiveGuests() }
     let server = await makeServer(context: context)
     let transport = StdioTransport(
       input: FileDescriptor(rawValue: input), output: FileDescriptor(rawValue: output),

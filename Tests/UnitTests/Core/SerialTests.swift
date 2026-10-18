@@ -246,6 +246,35 @@ func eventually(_ condition: () async -> Bool) async -> Bool {
     await channel.stop()
   }
 
+  /// R-304: panic detection is one observer among others; none steals the lines.
+  @Test func lineObserversAreAdditiveAndPanicsReachTheLog() async throws {
+    let server = try FakeSerialServer()
+    defer { server.cleanUp() }
+    let vmDirectory = server.logURL.deletingLastPathComponent()
+    let channel = SerialChannel(socketPath: server.path, logURL: server.logURL)
+    let first = LineCollector()
+    let second = LineCollector()
+    await channel.setLineObserver { first.add($0) }
+    let key = await channel.addLineObserver { second.add($0) }
+    await channel.watchForPanics(vmDirectory: vmDirectory)
+    try await channel.start()
+    server.accept()
+    server.send("[   12.5] Kernel panic - not syncing: sysrq triggered crash\nok\n")
+    #expect(await eventually { second.all.count == 2 })
+    #expect(first.all.map(\.text) == second.all.map(\.text))
+    let log = EventLog(vmDirectory: vmDirectory)
+    #expect(await eventually { (try? await log.latestPanic()) != nil })
+    let panic = try await log.latestPanic()
+    #expect(panic?.message == "[   12.5] Kernel panic - not syncing: sysrq triggered crash")
+    #expect(panic?.data?["pattern"] == .string("Kernel panic - not syncing"))
+    await channel.removeLineObserver(key)
+    await channel.setLineObserver(nil)
+    server.send("later\n")
+    #expect(await eventually { await channel.endOffset > 64 })
+    #expect(second.all.count == 2 && first.all.count == 2)
+    await channel.stop()
+  }
+
   @Test func logIsAppendedAcrossRunsAndRotated() async throws {
     let server = try FakeSerialServer()
     defer { server.cleanUp() }

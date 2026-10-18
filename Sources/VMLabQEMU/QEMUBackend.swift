@@ -193,12 +193,31 @@ public final class QEMUBackend: Backend {
   /// for 5 s marks the VM broken with the reason and is dropped from the cache.
   func watch(_ machine: QEMUMachine, of id: String) async {
     let store = store
+    // R-304: QMP's asynchronous events (GUEST_PANICKED, RESET) go to the event log. Every QMP
+    // monitor receives them, so with two servers connected only the holder of the VM's
+    // `qmp-events` lock logs; another takes the lock at its next event once the holder is gone.
+    let events = await machine.qmp.events()
+    let log = EventLog(vmDirectory: store.directory(of: id))
+    let lockPath = store.locksDirectory.appending(path: "\(id).qmp-events.lock").path
+    Task { await Self.forward(events, to: log, lockPath: lockPath) }
     await machine.qmp.watchPeer { [weak self] reason in
       self?.machines.withLock { cached in
         if cached[id] === machine { cached[id] = nil }
       }
       await store.markBroken(id: id, reason: "qmp: \(reason)")
     }
+  }
+
+  /// Appends every QMP event `QMPEventLogging` logs to `log` while this connection holds the
+  /// lock at `lockPath` (taken at the first event it is free for, released when `events` ends).
+  static func forward(_ events: AsyncStream<QMPEvent>, to log: EventLog, lockPath: String) async {
+    var holder: FileLock?
+    for await event in events {
+      if holder == nil { holder = FileLock.tryLock(lockPath) }
+      guard holder != nil else { continue }
+      _ = try? await log.recordQMPEvent(event.name, data: .object(event.data))
+    }
+    holder?.unlock()
   }
 
   /// Whether the guest's NIC is `vmnet-shared` (R-309): the request asked for `net_fast` and the

@@ -66,3 +66,40 @@ final class HeldMonitor: Sendable {
     #expect(layout.sockets.contains(layout.secondaryQMPSocket))
   }
 }
+
+/// R-304: QMP events reach the event log once, from whichever server holds the events lock.
+@Suite struct QMPEventForwardingTests {
+  @Test func eventsAreLoggedOnceAndTheOtherServerTakesOver() async throws {
+    let dir = FileManager.default.temporaryDirectory.appending(path: "vmlab-qmpev-\(UUID())")
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let log = EventLog(vmDirectory: dir)
+    let lock = dir.appending(path: "vm.qmp-events.lock").path
+    let (a, aIn) = AsyncStream<QMPEvent>.makeStream()
+    let (b, bIn) = AsyncStream<QMPEvent>.makeStream()
+    let first = Task { await QEMUBackend.forward(a, to: log, lockPath: lock) }
+    let second = Task { await QEMUBackend.forward(b, to: log, lockPath: lock) }
+    // Both monitors receive every event, as QEMU broadcasts them.
+    let panic = QMPEvent(name: "GUEST_PANICKED", data: ["action": .string("pause")])
+    aIn.yield(panic)
+    try await Task.sleep(for: .milliseconds(100))
+    bIn.yield(panic)
+    aIn.yield(QMPEvent(name: "STOP"))  // not logged
+    bIn.yield(QMPEvent(name: "STOP"))
+    try await Task.sleep(for: .milliseconds(200))
+    var events = try await log.read().events
+    #expect(events.count == 1)
+    #expect(events.first?.kind == .panic)
+    // The first server goes away; the second logs from its next event.
+    aIn.finish()
+    await first.value
+    bIn.yield(
+      QMPEvent(name: "RESET", data: ["guest": .bool(true), "reason": .string("guest-reset")]))
+    try await Task.sleep(for: .milliseconds(200))
+    events = try await log.read().events
+    #expect(
+      events.map(\.message).last == "guest reset (QMP RESET, by the guest, reason guest-reset)")
+    bIn.finish()
+    await second.value
+  }
+}

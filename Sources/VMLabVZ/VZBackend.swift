@@ -255,6 +255,7 @@ final class VZSerialChannels: Sendable {
         let task = Task {
           let channel = SerialChannel(
             socketPath: socket, logURL: vmDirectory.appending(path: "serial.log"))
+          await channel.watchForPanics(vmDirectory: vmDirectory)  // R-304
           try await channel.start()
           return channel
         }

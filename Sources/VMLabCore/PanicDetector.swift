@@ -76,9 +76,9 @@ public final class PanicDetector: Sendable {
 
   deinit { continuation.finish() }
 
-  /// Hangs the detector on `channel`'s line observer (replacing any other observer).
+  /// Adds the detector to `channel`'s line observers (beside any others).
   public func attach(to channel: SerialChannel) async {
-    await channel.setLineObserver { [self] line in observe(line) }
+    await channel.addLineObserver { [self] line in observe(line) }
   }
 
   /// Checks one serial line; a match queues a `panic` event.
