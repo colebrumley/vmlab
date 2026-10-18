@@ -55,4 +55,25 @@ import VMLabCore
     #expect(outcome.status == SIGKILL)
     #expect(kill(pid, 0) == -1 && errno == ESRCH, "the child is still running")
   }
+
+  /// A child gets only stdin, stdout and stderr: a descriptor the parent holds without
+  /// close-on-exec (as another tool call's pipe would be) does not leak into it, so no reader
+  /// waits for EOF on an unrelated child's lifetime. Foundation's `Process` spawns with
+  /// `POSIX_SPAWN_CLOEXEC_DEFAULT` on Darwin; this pins that.
+  @Test func aChildInheritsOnlyTheStandardDescriptors() async throws {
+    var fds: [Int32] = [-1, -1]
+    #expect(pipe(&fds) == 0)
+    defer { fds.forEach { close($0) } }
+    #expect(fcntl(fds[0], F_GETFD) & FD_CLOEXEC == 0)
+    let url = FileManager.default.temporaryDirectory.appending(path: "vmlab-hp-\(UUID())")
+    FileManager.default.createFile(atPath: url.path, contents: nil)
+    defer { try? FileManager.default.removeItem(at: url) }
+    let handle = try FileHandle(forWritingTo: url)
+    // Every descriptor 3...63 the child holds (`/dev/fd` reflects the reader's own table).
+    let script = "for f in $(seq 3 63); do [ -e /dev/fd/$f ] && echo $f; done; exit 0"
+    let outcome = try await HostProcess.run("/bin/sh", ["-c", script], stdout: handle)
+    try handle.close()
+    #expect(outcome.status == 0)
+    #expect(try String(contentsOf: url, encoding: .utf8) == "")
+  }
 }
