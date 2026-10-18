@@ -109,6 +109,10 @@ public struct VMRecord: Codable, Sendable, Hashable {
   /// Why the VM is `broken` (R-1101: a dead engine peer, a missing disk); nil in any other state.
   /// Additive: schema 1 still.
   public var brokenReason: String?
+  /// For a `vz-macos` guest, the directory of its Tart clone (`~/.tart/vms/<id>/`, holding
+  /// `config.json`, `disk.img` and `nvram.bin`); its last component is the Tart VM name. Absent
+  /// for other profiles (additive: schema 1 still).
+  public var tartClone: String?
 
   public init(
     id: String, name: String? = nil, profile: Profile, guest: GuestSpec, features: [Feature],
@@ -116,7 +120,8 @@ public struct VMRecord: Codable, Sendable, Hashable {
     network: NetworkSpec = NetworkSpec(), createdAt: Date = Date(), state: VMState = .created,
     runtime: VMRuntime? = nil, checkpoints: [CheckpointRef] = [], plan: Plan? = nil,
     boot: BootSpec? = nil, extra: ExtraSpec? = nil, provision: ProvisionSpec? = nil,
-    share: SharedDirSpec? = nil
+    share: SharedDirSpec? = nil,
+    tartClone: String? = nil
   ) {
     self.schemaVersion = Self.currentSchemaVersion
     self.id = id
@@ -136,11 +141,13 @@ public struct VMRecord: Codable, Sendable, Hashable {
     self.extra = extra
     self.provision = provision
     self.share = share
+    self.tartClone = tartClone
   }
 
   enum CodingKeys: String, CodingKey {
     case schemaVersion, id, name, profile, guest, features, resources, image, network, createdAt
-    case state, runtime, checkpoints, plan, boot, extra, provision, share, clonedFrom, backingChain
+    case state, runtime, checkpoints, plan, boot, extra, provision, share, clonedFrom, backingChain,
+      tartClone
     case brokenReason
   }
 
@@ -167,6 +174,7 @@ public struct VMRecord: Codable, Sendable, Hashable {
     provision = try c.decodeIfPresent(ProvisionSpec.self, forKey: .provision)
     share = try c.decodeIfPresent(SharedDirSpec.self, forKey: .share)
     brokenReason = try c.decodeIfPresent(String.self, forKey: .brokenReason)
+    tartClone = try c.decodeIfPresent(String.self, forKey: .tartClone)
   }
 
   /// `vm-` plus six lowercase RFC 4648 base32 characters.

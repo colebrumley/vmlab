@@ -27,6 +27,9 @@ public actor RFBClient {
   public let transport: any RFBTransport
   /// The desktop name from `ServerInit`.
   public let desktopName: String
+  /// The server's ProtocolVersion line without its newline (`RFB 003.889` is macOS Screen
+  /// Sharing).
+  public nonisolated let serverVersion: String
   /// The pixel format the server announced in `ServerInit`, before ours replaced it.
   public let serverPixelFormat: PixelFormat
   public private(set) var framebuffer: Framebuffer
@@ -129,16 +132,19 @@ public actor RFBClient {
     }
 
     let client = RFBClient(
-      transport: transport, name: name, format: format, width: width, height: height)
+      transport: transport, version: version.trimmingCharacters(in: .newlines), name: name,
+      format: format, width: width, height: height)
     try await client.sendSetup()
     return client
   }
 
   private init(
-    transport: any RFBTransport, name: String, format: PixelFormat, width: Int, height: Int
+    transport: any RFBTransport, version: String, name: String, format: PixelFormat, width: Int,
+    height: Int
   ) {
     self.transport = transport
     desktopName = name
+    serverVersion = version
     serverPixelFormat = format
     framebuffer = Framebuffer(width: width, height: height)
   }

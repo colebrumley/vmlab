@@ -280,6 +280,32 @@ final class FakeDisplay: DisplaySession, DisplayConnector {
     #expect(direction?.data["field"] == .string("scrollDirection"))
   }
 
+  /// R-607: on a macOS guest the display is Screen Sharing with the VNC password, and a `key`
+  /// chord with `cmd` says that it went out as Super_L; elsewhere no note.
+  @Test func macOSKeyNotesCommandAsSuperL() async throws {
+    let mac = try Fixture(profile: .vzMacOS)
+    defer { mac.cleanUp() }
+    let pressed = try await mac.call(["action": .string("key"), "text": .string("cmd+space")])
+    #expect(mac.display.inputs == [.press("cmd+space")])
+    #expect(pressed.warnings.contains(Computer.commandNote))
+    #expect(
+      mac.display.endpoints.first
+        == DisplayEndpoint(
+          address: .tcp(host: "10.0.0.9", port: 5900),
+          auth: .vncPassword(
+            file: mac.context.store.directory(of: mac.record.id).appending(path: "vnc.pass").path),
+          hostSide: false))
+    let plain = try await mac.call(["action": .string("key"), "text": .string("Return")])
+    #expect(!plain.warnings.contains(Computer.commandNote))
+
+    let linux = try Fixture()
+    defer { linux.cleanUp() }
+    let other = try await linux.call(["action": .string("key"), "text": .string("cmd+space")])
+    #expect(!other.warnings.contains(Computer.commandNote))
+    #expect(Computer.usesCommand("ctrl+c Super_L+tab"))
+    #expect(!Computer.usesCommand("ctrl+c space"))
+  }
+
   @Test func screenInfoAndWait() async throws {
     let f = try Fixture()
     defer { f.cleanUp() }

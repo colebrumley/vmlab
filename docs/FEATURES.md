@@ -71,3 +71,7 @@ column is what the development host recorded (`docs/dev-host-facts.json`, refres
 - `nested_virt` on `qemu-hvf`: HVF does not expose nested virtualization to QEMU guests.
 - `cloud_init` on `vz-macos`: cloud-init is for Linux guests.
 - `many_guests` on `vz-macos`: macOS allows at most two macOS guests at once.
+
+## Engine notes
+
+- `vz-macos` boots `tart clone`s of `macos-base` (`ghcr.io/cirruslabs/macos-tahoe-base:latest`, which boots on the development host, R-605) in vmlab's own `vmlab-vz` runner, built from the clone's `config.json`, `nvram.bin` and `disk.img` (Tart 2.x layout); the `tart run --no-graphics` fallback is not used, so pause and checkpoints are the runner's, as on `vz-linux`.

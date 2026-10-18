@@ -48,6 +48,15 @@ import VMLabRFB
     #expect(error?.data["field"] == .string("text"))
   }
 
+  /// A uniform first frame (macOS Screen Sharing's black opener) is detected.
+  @Test func uniformFramesAreDetected() {
+    #expect(RFBDisplaySession.isUniform(Framebuffer(width: 64, height: 64).pixels))
+    var pixels = [UInt8](repeating: 0, count: 64 * 64 * 4)
+    #expect(RFBDisplaySession.isUniform(pixels))
+    pixels[4 * 31 * 9 + 1] = 200
+    #expect(!RFBDisplaySession.isUniform(pixels))
+  }
+
   @Test func unreachableDisplayIsGuestUnreachable() async {
     let connector = RFBDisplayConnector(firstFrameTimeout: .milliseconds(100))
     let error = await #expect(throws: VMLabError.self) {

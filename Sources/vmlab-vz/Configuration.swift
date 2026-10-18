@@ -67,6 +67,10 @@ enum ConfigurationBuilder {
     machine.platform = VZGenericPlatformConfiguration()
 
     switch plan.bootLoader {
+    case .macOS(let model, let identifier, let auxiliary):
+      machine.platform = try macPlatform(
+        hardwareModel: model, machineIdentifier: identifier, auxiliaryStorage: auxiliary)
+      machine.bootLoader = VZMacOSBootLoader()
     case .efi(let path):
       let storeURL = URL(filePath: path)
       let store: VZEFIVariableStore
@@ -120,12 +124,22 @@ enum ConfigurationBuilder {
       machine.memoryBalloonDevices = [VZVirtioTraditionalMemoryBalloonDeviceConfiguration()]
     }
     if let graphics = plan.graphics {
-      let device = VZVirtioGraphicsDeviceConfiguration()
-      device.scanouts = [
-        VZVirtioGraphicsScanoutConfiguration(
-          widthInPixels: graphics.width, heightInPixels: graphics.height)
-      ]
-      machine.graphicsDevices = [device]
+      if plan.platform == "mac" {
+        let device = VZMacGraphicsDeviceConfiguration()
+        device.displays = [
+          VZMacGraphicsDisplayConfiguration(
+            widthInPixels: graphics.width, heightInPixels: graphics.height,
+            pixelsPerInch: graphics.pixelsPerInch ?? 72)
+        ]
+        machine.graphicsDevices = [device]
+      } else {
+        let device = VZVirtioGraphicsDeviceConfiguration()
+        device.scanouts = [
+          VZVirtioGraphicsScanoutConfiguration(
+            widthInPixels: graphics.width, heightInPixels: graphics.height)
+        ]
+        machine.graphicsDevices = [device]
+      }
       machine.keyboards = [VZUSBKeyboardConfiguration()]
       machine.pointingDevices = [VZUSBScreenCoordinatePointingDeviceConfiguration()]
     }
@@ -134,6 +148,34 @@ enum ConfigurationBuilder {
       throw validationError(error)
     }
     return BuiltMachine(configuration: machine, console: pipes)
+  }
+
+  /// A `VZMacPlatformConfiguration` from a Tart clone's hardware model, machine identifier (base64
+  /// `dataRepresentation`s) and auxiliary storage file.
+  static func macPlatform(
+    hardwareModel: String, machineIdentifier: String, auxiliaryStorage: String
+  ) throws(VMLabError) -> VZMacPlatformConfiguration {
+    guard let modelData = Data(base64Encoded: hardwareModel),
+      let model = VZMacHardwareModel(dataRepresentation: modelData)
+    else { throw macError("the hardware model in config.json is not readable") }
+    guard model.isSupported else {
+      throw macError("this host cannot run the image's macOS hardware model")
+    }
+    guard let identifierData = Data(base64Encoded: machineIdentifier),
+      let identifier = VZMacMachineIdentifier(dataRepresentation: identifierData)
+    else { throw macError("the machine identifier (ecid) in config.json is not readable") }
+    let platform = VZMacPlatformConfiguration()
+    platform.hardwareModel = model
+    platform.machineIdentifier = identifier
+    platform.auxiliaryStorage = VZMacAuxiliaryStorage(url: URL(filePath: auxiliaryStorage))
+    return platform
+  }
+
+  static func macError(_ reason: String) -> VMLabError {
+    VMLabError(
+      code: .engineError, message: "Cannot build the macOS platform: \(reason)",
+      hint: "Pull the image again, or try macos-sequoia-base (Appendix H).",
+      data: ["engine": .string("vz"), "raw": .string(reason)])
   }
 
   /// A failed `validate()`: `host_missing_tool` when the process lacks the entitlement.
