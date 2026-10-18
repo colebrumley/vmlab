@@ -28,7 +28,8 @@ struct VMMemoryDumpHandler: ToolHandler {
     if let size, size > Self.confirmAbove, !(try arguments.bool("confirm")) {
       throw VMLabError(
         code: .confirmRequired,
-        message: "Dumping \(size) bytes needs confirmation (more than 256 MB).",
+        message:
+          "Dumping \(size) bytes needs confirmation (more than \(Self.confirmAbove >> 20) MB).",
         hint: "Call vm_memory_dump again with confirm: true, or dump a smaller range.",
         data: ["bytes": .number(Double(size))])
     }

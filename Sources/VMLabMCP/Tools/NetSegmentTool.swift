@@ -11,7 +11,7 @@ extension ToolSpec {
     inputSchema: Schema.input(
       [
         "action": Schema.action(["create", "list", "destroy"], "What to do."),
-        "name": Schema.string("create, destroy: the segment's name."),
+        "name": Schema.segmentName("create, destroy: the segment's name."),
       ], required: ["action"]),
     outputShape: """
       { name, subnet, members: [ { vm, ip } ] }

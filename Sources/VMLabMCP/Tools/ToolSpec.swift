@@ -63,7 +63,8 @@ enum Schema {
   }
 
   static func string(
-    _ description: String, enum values: [String]? = nil, default value: String? = nil
+    _ description: String, enum values: [String]? = nil, default value: String? = nil,
+    maxLength: Int? = nil
   )
     -> JSONValue
   {
@@ -71,6 +72,7 @@ enum Schema {
       "type": .string("string"), "description": .string(description),
     ]
     if let values { schema["enum"] = .array(values.map { .string($0) }) }
+    if let maxLength { schema["maxLength"] = .number(Double(maxLength)) }
     if let value { schema["default"] = .string(value) }
     return .object(schema)
   }
@@ -87,13 +89,15 @@ enum Schema {
     return .object(schema)
   }
 
-  static func number(_ description: String, minimum: Double? = nil, default value: Double? = nil)
-    -> JSONValue
-  {
+  static func number(
+    _ description: String, minimum: Double? = nil, maximum: Double? = nil,
+    default value: Double? = nil
+  ) -> JSONValue {
     var schema: [String: JSONValue] = [
       "type": .string("number"), "description": .string(description),
     ]
     if let minimum { schema["minimum"] = .number(minimum) }
+    if let maximum { schema["maximum"] = .number(maximum) }
     if let value { schema["default"] = .number(value) }
     return .object(schema)
   }
@@ -124,10 +128,28 @@ enum Schema {
 
   // MARK: Fragments shared by several tools
 
-  static let vm = string("The VM's id (vm-xxxxxx) or name, as vm_list or vm_create returned it.")
+  static let vm = string(
+    "The VM's id (vm-xxxxxx) or name, as vm_list or vm_create returned it.",
+    maxLength: VMRecord.maxNameLength)
 
-  static func timeoutSeconds(_ description: String, default value: Int? = nil) -> JSONValue {
-    integer(description, minimum: 1, default: value)
+  /// A new VM's name: the rule `Store` enforces.
+  static func vmName(_ description: String) -> JSONValue {
+    string(
+      description + " 1 to \(VMRecord.maxNameLength) letters, digits, '.', '_' or '-', starting "
+        + "with a letter or digit.", maxLength: VMRecord.maxNameLength)
+  }
+
+  /// A segment's name: the rule `SegmentStore.isValidName` enforces.
+  static func segmentName(_ description: String) -> JSONValue {
+    string(
+      description + " Lowercase letters, digits and '-', at most "
+        + "\(SegmentStore.maxNameLength) characters.", maxLength: SegmentStore.maxNameLength)
+  }
+
+  static func timeoutSeconds(
+    _ description: String, maximum: Int? = nil, default value: Int? = nil
+  ) -> JSONValue {
+    integer(description, minimum: 1, maximum: maximum, default: value)
   }
 
   static let allowUnverified = boolean(
@@ -168,7 +190,7 @@ enum Schema {
             "mode": string(
               "nat for outbound internet, none for no network device at all.",
               enum: NetworkSpec.Mode.allCases.map(\.rawValue)),
-            "segment": string("A private segment (net_segment) to join with a second NIC."),
+            "segment": segmentName("A private segment (net_segment) to join with a second NIC."),
             "forwards": array(
               object(
                 [
