@@ -5,7 +5,8 @@ import VMLabVZ
 
 /// Audit fixes (integration): a `vz-linux` lease that arrives after `start` stopped waiting still
 /// gives SSH and a recorded `runtime.ip`, and `resources.diskGB` larger than the image grows the
-/// guest's root filesystem.
+/// guest's root filesystem; a Linux guest without a `provision` still gets its first boot
+/// recorded.
 @Suite(.serialized) struct VZLeaseDiskIntegrationTests {
   static let ready = VZRunnerIntegrationTests.ready
 
@@ -81,5 +82,18 @@ import VMLabVZ
     let bytes = UInt64(df.output.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
     print("df /: \(bytes) bytes")
     #expect(bytes > 10 << 30, "root filesystem did not grow: \(df.output)")
+
+    // R-1004 without a provision: the first boot is recorded once cloud-init is done.
+    let clock = ContinuousClock()
+    let deadline = clock.now.advanced(by: .seconds(180))
+    var report: ProvisionReport?
+    while report == nil, clock.now < deadline {
+      _ = await guest.manager.collectFirstBoot(try guest.store.load(id: guest.id))
+      report = ProvisionReport.load(from: guest.directory)
+      if report == nil { try await Task.sleep(for: .seconds(2)) }
+    }
+    let steps = try #require(report, "cloud-init's outcome was never recorded").steps
+    #expect(steps.map(\.name) == ["cloud-init"])
+    #expect(steps.first?.status == .succeeded, "\(steps)")
   }
 }

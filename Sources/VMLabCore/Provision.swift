@@ -180,13 +180,23 @@ public struct ProvisionReport: Codable, Sendable, Hashable {
 /// start's warnings (`provision_failed: ...`).
 public protocol GuestProvisioning: Sendable {
   func provision(_ record: VMRecord, target: SSHTarget) async -> [String]
+  /// Records a first boot that finished since `provision` last looked, without waiting for it
+  /// (`vm_inspect`); its warnings. The default records nothing.
+  func collect(_ record: VMRecord, target: SSHTarget) async -> [String]
 }
 
-/// The provisioning a start runs over SSH when the request had a `provision`. On a Linux guest it
-/// waits for cloud-init (`cloud-init status --wait`), then reads back the steps the seed's runner
-/// recorded (R-1004); on a macOS guest it runs `provision.runCommands` one by one as the login
-/// user (after R-606's own first-boot steps). Steps go to `<vm>/provision.json` and their output
-/// to `<vm>/provision.log`; a VM whose report already has them is not provisioned again.
+extension GuestProvisioning {
+  public func collect(_ record: VMRecord, target: SSHTarget) async -> [String] { [] }
+}
+
+/// The provisioning a start runs over SSH. On a Linux guest with a `provision` it waits for
+/// cloud-init (`cloud-init status --wait`), then reads back the steps the seed's runner recorded
+/// (R-1004); a Linux guest without one has its first boot (the R-504 desktop install, the image's
+/// own modules) recorded too, but without waiting: one `cloud-init status --long`, at start and
+/// again from `collect` (`vm_inspect`) until cloud-init has finished. On a macOS guest it runs
+/// `provision.runCommands` one by one as the login user (after R-606's own first-boot steps).
+/// Steps go to `<vm>/provision.json` and their output to `<vm>/provision.log`; a VM whose report
+/// already has them is not provisioned again.
 public struct SSHProvisioner: GuestProvisioning {
   /// Runs one command in the guest; `SSHExecChannel` unless a test replaces it.
   public var exec: @Sendable (SSHTarget, ExecRequest) async throws(VMLabError) -> ExecResult
@@ -205,17 +215,33 @@ public struct SSHProvisioner: GuestProvisioning {
   }
 
   public func provision(_ record: VMRecord, target: SSHTarget) async -> [String] {
+    await firstBoot(record, target: target, wait: !(record.provision?.isEmpty ?? true))
+  }
+
+  public func collect(_ record: VMRecord, target: SSHTarget) async -> [String] {
+    await firstBoot(record, target: target, wait: false)
+  }
+
+  func firstBoot(_ record: VMRecord, target: SSHTarget, wait: Bool) async -> [String] {
     let directory = target.vmDirectory
     // A macOS guest's report already holds the backend's own first-boot steps (R-606: ssh,
     // authorized_keys, hostname, screen_sharing); the request's steps are added after them.
     let existing = ProvisionReport.load(from: directory)
-    guard let spec = record.provision, !spec.isEmpty,
-      !(existing?.hasRequestedSteps ?? false), existing?.failure == nil
-    else { return [] }
-    let steps =
-      record.guest.os == .macos
-      ? await runCommands(spec.runCommands, target: target)
-      : await collectCloudInit(spec.runCommands, target: target)
+    guard !(existing?.hasRequestedSteps ?? false), existing?.failure == nil else { return [] }
+    let spec = record.provision ?? ProvisionSpec()
+    let steps: [ProvisionStep]
+    switch record.guest.os {
+    case .macos:
+      guard !spec.isEmpty else { return [] }
+      steps = await runCommands(spec.runCommands, target: target)
+    case .linux:
+      guard
+        let collected = await collectCloudInit(spec.runCommands, target: target, wait: wait)
+      else { return [] }
+      steps = collected
+    default:
+      return []
+    }
     let report = ProvisionReport(vm: record.id, steps: (existing?.steps ?? []) + steps)
     do { try report.write(to: directory) } catch {
       return ["provision_failed: cannot write \(ProvisionReport.url(in: directory).path): \(error)"]
@@ -224,35 +250,39 @@ public struct SSHProvisioner: GuestProvisioning {
   }
 
   static let waitCommand = "cloud-init status --wait --long"
+  static let statusCommand = "cloud-init status --long"
   static let separator = "==vmlab-provision-log=="
 
-  /// Waits for cloud-init to finish, then reads the runner's `steps.tsv` and log as root.
-  /// cloud-init exits 0 when done, 2 when done with recoverable errors (deprecated keys and the
-  /// like), 1 on an error.
-  func collectCloudInit(_ commands: [String], target: SSHTarget) async -> [ProvisionStep] {
-    let log = ProvisionLog(url: ProvisionReport.logURL(in: target.vmDirectory))
-    let name = ProvisionStep.cloudInit
-    log.append("\(name): $ \(Self.waitCommand)")
-    let started = ContinuousClock.now
-    var steps: [ProvisionStep] = []
-    do {
-      let result = try await exec(
-        target, ExecRequest(command: Self.waitCommand, timeout: stepTimeout))
-      log.append(result.stdout + result.stderr)
-      log.append("\(name): exit \(result.exitCode) after \(result.durationMs) ms")
-      let ok = result.exitCode == 0 || result.exitCode == 2
-      steps.append(
-        ProvisionStep(
-          name: name, command: Self.waitCommand, status: ok ? .succeeded : .failed,
-          exitCode: Int(result.exitCode), durationMs: result.durationMs))
-    } catch {
-      let ms = Int((ContinuousClock.now - started) / .milliseconds(1))
-      log.append("\(name): \(error.code.rawValue): \(error.message)")
-      steps.append(
-        ProvisionStep(
-          name: name, command: Self.waitCommand, status: .failed, durationMs: ms,
-          error: error.message))
+  /// The `status:` of `cloud-init status` output (`running`, `done`, `error`, `degraded done`,
+  /// `not started`, `disabled`), nil when there is none.
+  static func cloudInitStatus(_ output: String) -> String? {
+    for line in output.split(whereSeparator: \.isNewline) {
+      let text = line.trimmingCharacters(in: .whitespaces)
+      if text.hasPrefix("status:") {
+        return text.dropFirst("status:".count).trimmingCharacters(in: .whitespaces)
+      }
     }
+    return nil
+  }
+
+  /// Waits for cloud-init to finish (or, without `wait`, asks once and returns nil while it has
+  /// not finished, or when SSH does not answer), then reads the runner's `steps.tsv` and log as
+  /// root. cloud-init exits 0 when done, 2 when done with recoverable errors (deprecated keys and
+  /// the like), 1 on an error. A guest without cloud-init gets one skipped step, so it is not
+  /// asked again.
+  func collectCloudInit(_ commands: [String], target: SSHTarget, wait: Bool = true) async
+    -> [ProvisionStep]?
+  {
+    let log = ProvisionLog(url: ProvisionReport.logURL(in: target.vmDirectory))
+    let step: ProvisionStep
+    if wait {
+      step = await waitForCloudInit(target: target, log: log)
+    } else {
+      guard let finished = await finishedCloudInit(target: target, log: log) else { return nil }
+      if finished.status == .skipped { return [finished] }
+      step = finished
+    }
+    var steps = [step]
 
     if !commands.isEmpty {
       let read =
@@ -302,6 +332,57 @@ public struct SSHProvisioner: GuestProvisioning {
       log.append(tail.stdout)
     }
     return steps
+  }
+
+  /// `cloud-init status --wait --long`: the step once cloud-init has finished.
+  func waitForCloudInit(target: SSHTarget, log: ProvisionLog) async -> ProvisionStep {
+    let name = ProvisionStep.cloudInit
+    log.append("\(name): $ \(Self.waitCommand)")
+    let started = ContinuousClock.now
+    do {
+      let result = try await exec(
+        target, ExecRequest(command: Self.waitCommand, timeout: stepTimeout))
+      log.append(result.stdout + result.stderr)
+      log.append("\(name): exit \(result.exitCode) after \(result.durationMs) ms")
+      let ok = result.exitCode == 0 || result.exitCode == 2
+      return ProvisionStep(
+        name: name, command: Self.waitCommand, status: ok ? .succeeded : .failed,
+        exitCode: Int(result.exitCode), durationMs: result.durationMs)
+    } catch {
+      let ms = Int((ContinuousClock.now - started) / .milliseconds(1))
+      log.append("\(name): \(error.code.rawValue): \(error.message)")
+      return ProvisionStep(
+        name: name, command: Self.waitCommand, status: .failed, durationMs: ms,
+        error: error.message)
+    }
+  }
+
+  /// One short `cloud-init status --long`: the step when cloud-init has finished, a skipped one
+  /// when the guest has no cloud-init, nil while it runs or when SSH does not answer (nothing is
+  /// logged then, so asking again is cheap).
+  func finishedCloudInit(target: SSHTarget, log: ProvisionLog) async -> ProvisionStep? {
+    let name = ProvisionStep.cloudInit
+    guard
+      let result = try? await exec(
+        target, ExecRequest(command: Self.statusCommand, timeout: .seconds(15)))
+    else { return nil }
+    let status = Self.cloudInitStatus(result.stdout)
+    if result.exitCode == 127 || status == "disabled" {
+      return ProvisionStep(
+        name: name, command: Self.statusCommand, status: .skipped, exitCode: Int(result.exitCode),
+        error: result.exitCode == 127
+          ? "cloud-init is not installed in the guest" : "cloud-init is disabled in the guest")
+    }
+    guard let status,
+      ["done", "error", "degraded done", "degraded error"].contains(status)
+    else { return nil }
+    log.append("\(name): $ \(Self.statusCommand)")
+    log.append(result.stdout + result.stderr)
+    log.append("\(name): exit \(result.exitCode) (\(status))")
+    let ok = (result.exitCode == 0 || result.exitCode == 2) && !status.hasSuffix("error")
+    return ProvisionStep(
+      name: name, command: Self.statusCommand, status: ok ? .succeeded : .failed,
+      exitCode: Int(result.exitCode))
   }
 
   /// Runs `commands` in order over SSH; after a failure the rest are `skipped`.

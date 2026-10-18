@@ -279,6 +279,22 @@ public actor VMManager {
     return (try? store.load(id: record.id)) ?? record
   }
 
+  /// R-1004: records a running Linux guest's first boot once cloud-init has finished, when no
+  /// start recorded it yet (cloud-init was still running then); its `provision_failed` warning.
+  /// One short SSH call, none once recorded, none while another action holds the VM.
+  public func collectFirstBoot(_ record: VMRecord) async -> [String] {
+    guard record.guest.os == .linux, record.state == .running, !busy.contains(record.id),
+      record.features.contains(.execSSH), record.network.mode != .disabled,
+      !(ProvisionReport.load(from: store.directory(of: record.id))?.hasRequestedSteps ?? false),
+      let backend = try? backends.backend(for: record.profile),
+      let endpoint = await backend.sshEndpoint(record, timeout: .zero)
+    else { return [] }
+    let target = SSHTarget(record: record, endpoint: endpoint, store: store)
+    let warnings = await provisioner.collect(record, target: target)
+    for warning in warnings { await log(record.id, warning, level: .warning) }
+    return warnings
+  }
+
   // MARK: Attach
 
   /// The channels of a running or paused VM; `wrong_state` in any other state.

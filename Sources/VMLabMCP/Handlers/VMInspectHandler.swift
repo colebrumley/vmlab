@@ -3,7 +3,8 @@ import VMLabCore
 /// `vm_inspect`: the record, the plan it was created from (null for a record older than the plan
 /// field), its resolved features, the runtime endpoints, the last 20 events and the latest panic
 /// (R-304; null when none), so a model can rediscover a VM after a context reset, and its
-/// first-boot report (R-1004): a failed step is a `provision_failed` warning, and a requested
+/// first-boot report (R-1004, collected first when a Linux guest's cloud-init finished after start
+/// returned): a failed step is a `provision_failed` warning, and a requested
 /// provisioning that was never collected (SSH never answered) says so instead of leaving only
 /// `ssh_unreachable`. `segments` lists the VM's segment addresses (R-902).
 struct VMInspectHandler: ToolHandler {
@@ -16,6 +17,8 @@ struct VMInspectHandler: ToolHandler {
   {
     let record = await context.manager.refreshingAddress(
       try context.store.find(try arguments.string("vm") ?? ""))
+    // R-1004: a first boot that finished after start returned is recorded now (one SSH call).
+    _ = await context.manager.collectFirstBoot(record)
     var warnings: [String] = []
     let log = EventLog(vmDirectory: context.store.directory(of: record.id))
     var events: [VMEvent] = []

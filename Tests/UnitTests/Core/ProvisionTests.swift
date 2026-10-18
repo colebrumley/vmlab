@@ -210,6 +210,63 @@ final class FakeProvisioner: GuestProvisioning {
     #expect(exec.commands.isEmpty && ProvisionReport.load(from: dir) == nil)
   }
 
+  /// R-1004: a Linux guest without a `provision` still has its first boot recorded, but nothing
+  /// waits: while cloud-init runs nothing is written; once it is done (or failed, as a desktop
+  /// install that could not fetch its packages) the step is recorded, and never asked again.
+  @Test func linuxFirstBootIsRecordedWithoutAProvisionSpec() async throws {
+    let dir = try Self.directory()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let status = Mutex("status: running\n")
+    let exit = Mutex<Int32>(0)
+    let asked = Mutex<[String]>([])
+    let provisioner = SSHProvisioner { _, request in
+      asked.withLock { $0.append(request.command) }
+      if request.command == SSHProvisioner.statusCommand {
+        return ExecResult(
+          exitCode: exit.withLock { $0 }, stdout: status.withLock { $0 }, stderr: "")
+      }
+      return ExecResult(exitCode: 0, stdout: "tail\n", stderr: "")
+    }
+    let record = Self.linux([])
+    var bare = record
+    bare.provision = nil
+    #expect(await provisioner.provision(bare, target: Self.target(dir)).isEmpty)
+    #expect(asked.withLock { $0 } == [SSHProvisioner.statusCommand])
+    #expect(ProvisionReport.load(from: dir) == nil)
+    #expect(!FileManager.default.fileExists(atPath: ProvisionReport.logURL(in: dir).path))
+
+    status.withLock { $0 = "status: error\nextended_status: error\n" }
+    exit.withLock { $0 = 1 }
+    let warnings = await provisioner.collect(bare, target: Self.target(dir))
+    let report = try #require(ProvisionReport.load(from: dir))
+    #expect(report.steps.map(\.name) == ["cloud-init"])
+    #expect(report.steps[0].status == .failed && report.steps[0].exitCode == 1)
+    #expect(warnings.first?.hasPrefix("provision_failed: vm-abcdef step cloud-init") == true)
+    let count = asked.withLock { $0.count }
+    #expect(await provisioner.collect(bare, target: Self.target(dir)).isEmpty)
+    #expect(asked.withLock { $0.count } == count)
+
+    // Done is a success; a guest without cloud-init is recorded as skipped.
+    let other = try Self.directory()
+    defer { try? FileManager.default.removeItem(at: other) }
+    status.withLock { $0 = "status: done\n" }
+    exit.withLock { $0 = 0 }
+    #expect(await provisioner.collect(bare, target: Self.target(other)).isEmpty)
+    #expect(ProvisionReport.load(from: other)?.steps.map(\.status) == [.succeeded])
+    let none = try Self.directory()
+    defer { try? FileManager.default.removeItem(at: none) }
+    status.withLock { $0 = "" }
+    exit.withLock { $0 = 127 }
+    #expect(await provisioner.collect(bare, target: Self.target(none)).isEmpty)
+    #expect(ProvisionReport.load(from: none)?.steps.map(\.status) == [.skipped])
+  }
+
+  @Test func cloudInitStatusParses() {
+    #expect(SSHProvisioner.cloudInitStatus("status: done\nboot_status_code: x\n") == "done")
+    #expect(SSHProvisioner.cloudInitStatus("\nstatus: degraded done\n") == "degraded done")
+    #expect(SSHProvisioner.cloudInitStatus("nothing") == nil)
+  }
+
   @Test func stepsTSVParses() {
     let steps = ProvisionPaths.parseSteps("0 0 12\n1 3 4500\njunk\n2 x 1\n")
     #expect(steps.count == 2)
