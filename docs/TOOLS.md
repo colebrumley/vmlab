@@ -577,6 +577,7 @@ The `requirements` object of `vm_plan`, `vm_create` and `fleet` (`Requirements` 
 | `provision` | object |  | First-boot provisioning beyond vmlab's own setup. |
 | `provision.packages` | array of string |  | Packages cloud-init installs on first boot (Linux only). |
 | `provision.runCommands` | array of string |  | Commands run in order on first boot: as root after cloud-init (Linux), or over SSH as the login user (macOS). The first that fails stops the rest; vm_inspect reports it as provision_failed. |
+| `provision.sudoPassword` | string |  | macOS only: the guest login user's password, for sudo. Needed only for a share.guest other than /Volumes/My Shared Files on an image that records no password (macos-base has one). Kept in the VM directory, never in vm.json or provision.json. |
 | `provision.userData` | string |  | cloud-init user-data merged after vmlab's own (its keys win, lists append); must start with #cloud-config, #!, #cloud-boothook or #include (Linux only). |
 | `require` | array of `exec_ssh` \| `exec_agent` \| `gui` \| `gui_preboot` \| `gui_desktop` \| `gui_accel` \| `serial` \| `gdb` \| `introspection` \| `memory_dump` \| `direct_kernel_boot` \| `custom_firmware` \| `custom_devices` \| `halt_at_start` \| `checkpoint_disk` \| `checkpoint_live` \| `pause` \| `net_nat` \| `net_fast` \| `net_segment` \| `net_port_forward` \| `net_none` \| `rosetta` \| `nested_virt` \| `shared_dir` \| `cloud_init` \| `many_guests` |  | Features the VM must have; a profile lacking any is ruled out. Default [] (VZ). |
 | `resources` | object |  | Guest resources; each omitted field takes the guest's default. |
@@ -584,5 +585,5 @@ The `requirements` object of `vm_plan`, `vm_create` and `fleet` (`Requirements` 
 | `resources.diskGB` | integer, 1–65536 |  | Disk size in GB. |
 | `resources.memoryGB` | integer, 1–4096 |  | Guest memory in GB. |
 | `share` | object |  | A host directory mounted read-write in the guest (implies shared_dir): 9p under QEMU (the guest kernel needs 9p; Debian's cloud kernel has none), virtiofs under VZ. |
-| `share.guest` | string, default `/mnt/host` |  | Absolute guest path it is mounted at. A macOS guest always mounts it at /Volumes/My Shared Files. |
+| `share.guest` | string, default `/mnt/host` |  | Absolute guest path it is mounted at. macOS: default /Volumes/My Shared Files (automounted); any other path is mounted at every boot by a LaunchDaemon that first boot installs with sudo, so the image must record the login password or provision.sudoPassword must give it. |
 | `share.host` | string |  | Absolute host path of an existing directory under /tmp, $TMPDIR or ~/vmlab-files (the guest writes it; never the home itself, a home dotfile or ~/Library). Omitted: the VM's own shared/ directory (vm_inspect endpoints.share). |

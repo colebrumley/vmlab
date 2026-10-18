@@ -235,6 +235,11 @@ endpoints, the last 20 events, any provisioning failure and the latest kernel pa
 - The image restores windows from its last session at login, so take a screenshot before you act
   instead of assuming an empty desktop.
 - Prefer `vm_exec` for anything `defaults`, `launchctl`, `osascript` or a shell script can do.
+- A `share` appears at `/Volumes/My Shared Files` by itself. Give `share.guest` to mount it
+  elsewhere (such as `/Users/admin/project`): first boot installs a LaunchDaemon that mounts it
+  there at every boot, using sudo with the image's password. An image that records no password
+  needs `provision.sudoPassword`; without it `vm_create` refuses with `invalid_request`. A guest
+  without `/sbin/mount_virtiofs` (before macOS 13) fails provisioning at step `share_check`.
 
 ## Custom QEMU arguments (custom_devices)
 

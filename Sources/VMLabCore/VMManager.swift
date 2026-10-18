@@ -94,8 +94,17 @@ public actor VMManager {
     // CR-4: boot images are model-supplied host paths the engine reads; the same policy, plus
     // VMLAB_HOME's images/ (where extract_kernel puts kernels), recorded canonical.
     if let boot = new.boot { new.boot = try Self.checkedBoot(boot, home: store.home) }
+    // A secret: kept in <vm>/sudo.pass for the backend, never in the record.
+    let sudoPassword = new.provision?.sudoPassword
+    if sudoPassword != nil {
+      new.provision?.sudoPassword = nil
+      if new.provision?.isEmpty == true { new.provision = nil }
+    }
     var stored = try store.create(new)
     do throws(VMLabError) {
+      if let sudoPassword {
+        try SudoPassword.write(sudoPassword, in: store.directory(of: stored.id))
+      }
       if let name = Self.segmentName(of: stored) {
         let attachment = try segments.join(name, vm: stored)
         stored = try store.update(id: stored.id) { $0.segment = attachment }

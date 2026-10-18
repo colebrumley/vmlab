@@ -11,7 +11,8 @@ extension VZRunnerConfig {
   /// Mac platform from `config.json` and `nvram.bin`, `disk.img`, one NAT NIC with the clone's
   /// MAC (so Tart's own lease lookup agrees) unless the network is `none`, no console (VZ gives
   /// macOS guests none), the balloon, always a Mac display (Screen Sharing needs one), and with
-  /// `vmDirectory` the record's share over virtiofs under `macOSAutomountTag`.
+  /// `vmDirectory` the record's share over virtiofs: under `macOSAutomountTag` when macOS mounts
+  /// it by itself, else under `MacProvisioner.shareTag` for the `io.vmlab.share` LaunchDaemon.
   public static func macOS(
     record: VMRecord, clone: TartVMFiles, config: TartVMConfig, segmentAttachSocket: String? = nil,
     vmDirectory: URL? = nil
@@ -26,10 +27,14 @@ extension VZRunnerConfig {
     let resources = ResourceLimits.resolve(record.resources, for: .macos)
     let cpus = max(resources.cpus ?? 4, config.cpuCountMin)
     let memory = max(UInt64(resources.memoryGB ?? 8) << 30, config.memorySizeMin)
-    // CX-27: the record's share (given the VM directory its default lives in), automounted.
+    // CX-27: the record's share (given the VM directory its default lives in).
     let shares = vmDirectory.flatMap { dir in
       SharedDirSpec.of(record).map {
-        [DirectoryShare(tag: macOSAutomountTag, path: $0.hostDirectory(vmDirectory: dir).path)]
+        [
+          DirectoryShare(
+            tag: $0.usesMacOSAutomount ? macOSAutomountTag : MacProvisioner.shareTag,
+            path: $0.hostDirectory(vmDirectory: dir).path)
+        ]
       }
     }
     return VZRunnerConfig(
@@ -113,14 +118,21 @@ public struct VZMacBackend: Backend {
         code: .imageNotFound, message: "Image \(name) is not a pulled Tart image",
         hint: "Run vmlab images pull macos-base.", data: ["image": .string(name)])
     }
-    // CX-27: macOS mounts the share at one place only.
+    // CX-27: macOS mounts the share at /Volumes/My Shared Files by itself; anywhere else takes
+    // a LaunchDaemon, installed with sudo, so the guest's password must be known before cloning.
     if let share = SharedDirSpec.of(record) {
-      if let guest = share.guest, guest != SharedDirSpec.macOSAutomountPath {
+      try share.validate(guest: .macos)
+      if !share.usesMacOSAutomount,
+        Self.sudoPassword(store.directory(of: record.id), login: pulled.login) == nil
+      {
         throw VMLabError.invalidRequest(
-          field: "share.guest",
+          field: "provision.sudoPassword",
           reason:
-            "a macOS guest mounts the share at \(SharedDirSpec.macOSAutomountPath), not \(guest)",
-          hint: "Leave share.guest out (or set it to \(SharedDirSpec.macOSAutomountPath)).")
+            "mounting the share at \(share.guestPath(for: .vzMacOS)) needs sudo in the guest, and "
+            + "image \(name) records no password for \(pulled.login.user)",
+          hint:
+            "Give the guest user's password as provision.sudoPassword, or leave share.guest out "
+            + "to use \(SharedDirSpec.macOSAutomountPath).")
       }
       try share.checkHostDirectory(vmDirectory: store.directory(of: record.id))
     }
@@ -155,6 +167,12 @@ public struct VZMacBackend: Backend {
       try? tart.delete(record.id)
       throw error
     }
+  }
+
+  /// The password sudo takes in the guest: the request's (`<vm>/sudo.pass`), else the image's
+  /// login password; nil when neither is known.
+  static func sudoPassword(_ vmDirectory: URL, login: ImageLogin?) -> String? {
+    SudoPassword.read(in: vmDirectory) ?? login?.password.flatMap { $0.isEmpty ? nil : $0 }
   }
 
   /// `resources` with CPUs and memory raised to the image's `cpuCountMin` and `memorySizeMin`
@@ -231,9 +249,12 @@ public struct VZMacBackend: Backend {
         hint: "Check vmnet (/var/db/dhcpd_leases) and <vm>/vz.log, then start again.",
         data: ["step": .string("lease"), "log": .string(dir.appending(path: "vz.log").path)])
     }
-    let login =
+    var login =
       record.image.flatMap { ImageStore(home: store.home).pulled($0)?.login }
       ?? ImageLogin(user: "admin", password: "admin")
+    let given = SudoPassword.read(in: dir)
+    // An image that records no password logs in with the one the request gave.
+    if (login.password ?? "").isEmpty, let given { login.password = given }
     let key: String
     do {
       key = try String(contentsOf: dir.appending(path: "id_ed25519.pub"), encoding: .utf8)
@@ -250,6 +271,10 @@ public struct VZMacBackend: Backend {
         ? try MacProvisioner.ensureVNCPassword(in: dir) : nil)
     provisioner.sshTimeout = bootTimeout
     provisioner.segment = record.network.mode == .disabled ? nil : record.segment
+    provisioner.sudoPassword = given
+    provisioner.sharePath = SharedDirSpec.of(record).flatMap {
+      $0.usesMacOSAutomount ? nil : $0.guestPath(for: .vzMacOS)
+    }
     try await provisioner.provision(ip: ip)
   }
 

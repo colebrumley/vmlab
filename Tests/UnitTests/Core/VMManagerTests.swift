@@ -310,3 +310,27 @@ import VMLabCore
     #expect(readiness.timeouts.last == .seconds(180))  // Appendix G, Linux under HVF
   }
 }
+
+extension VMManagerTests {
+  /// provision.sudoPassword goes to <vm>/sudo.pass (0600) before the backend runs, and never
+  /// into vm.json.
+  @Test func createMovesTheSudoPasswordOutOfTheRecord() async throws {
+    let f = try Fixture()
+    let draft = VMRecord(
+      id: "", name: "mac", profile: .qemuHVF, guest: GuestSpec(os: .macos, arch: .arm64),
+      features: [], image: "macos-base",
+      provision: ProvisionSpec(runCommands: ["true"], sudoPassword: "s3cret"))
+    let vm = try await f.manager.create(draft, plan: f.plan())
+    let dir = f.store.directory(of: vm.id)
+    #expect(SudoPassword.read(in: dir) == "s3cret")
+    #expect(vm.provision == ProvisionSpec(runCommands: ["true"]))
+    let json = try String(contentsOf: dir.appending(path: "vm.json"), encoding: .utf8)
+    #expect(!json.contains("s3cret") && !json.contains("sudoPassword"))
+    let only = try await f.manager.create(
+      VMRecord(
+        id: "", name: "mac2", profile: .qemuHVF, guest: GuestSpec(os: .macos, arch: .arm64),
+        features: [], image: "macos-base", provision: ProvisionSpec(sudoPassword: "x")),
+      plan: f.plan())
+    #expect(only.provision == nil)
+  }
+}
