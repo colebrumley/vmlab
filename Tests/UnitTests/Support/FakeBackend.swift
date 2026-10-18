@@ -18,8 +18,16 @@ final class FakeBackend: Backend {
 
   let profile: Profile
   let store: Store
-  private let state = Mutex<(calls: [Call], failures: [Operation: VMLabError], delay: Duration?)>(
-    ([], [:], nil))
+  private let state = Mutex<
+    (
+      calls: [Call], failures: [Operation: VMLabError], delay: Duration?,
+      holdUntil: (@Sendable () -> Bool)?
+    )
+  >(([], [:], nil, nil))
+  /// The forwarded SSH port the fake runtime reports; nil (the default) means no SSH endpoint.
+  private let ssh = Mutex<Int?>(nil)
+
+  func reportSSHPort(_ port: Int?) { ssh.withLock { $0 = port } }
 
   init(profile: Profile = .qemuHVF, store: Store) {
     self.profile = profile
@@ -35,6 +43,12 @@ final class FakeBackend: Backend {
 
   /// Makes `create` sleep, so a test can cancel it.
   func delayCreate(_ duration: Duration) { state.withLock { $0.delay = duration } }
+
+  /// Makes `create` wait (polling, up to 10 s) until `condition` holds, so a test that needs
+  /// something to happen during a create does not depend on how busy the machine is.
+  func holdCreate(until condition: @escaping @Sendable () -> Bool) {
+    state.withLock { $0.holdUntil = condition }
+  }
 
   static let engineFailure = VMLabError(
     code: .engineError, message: "fake engine failure", hint: "none")
@@ -52,6 +66,12 @@ final class FakeBackend: Backend {
     let disk = store.directory(of: record.id).appending(path: "disk.raw")
     FileManager.default.createFile(atPath: disk.path, contents: Data())
     if let delay = state.withLock({ $0.delay }) { try? await Task.sleep(for: delay) }
+    if let condition = state.withLock({ $0.holdUntil }) {
+      let deadline = ContinuousClock.now + .seconds(10)
+      while !condition(), ContinuousClock.now < deadline, !Task.isCancelled {
+        try? await Task.sleep(for: .milliseconds(10))
+      }
+    }
   }
 
   func start(_ record: VMRecord) async throws(VMLabError) -> VMRuntime {
@@ -88,7 +108,8 @@ final class FakeBackend: Backend {
     return VMRuntime(
       pid: 4242, controlSocket: dir.appending(path: "control.sock").path,
       serialSocket: dir.appending(path: "serial.sock").path,
-      vncSocket: dir.appending(path: "vnc.sock").path, gdbEndpoint: "tcp:127.0.0.1:1234")
+      vncSocket: dir.appending(path: "vnc.sock").path, gdbEndpoint: "tcp:127.0.0.1:1234",
+      sshPort: ssh.withLock { $0 })
   }
 }
 

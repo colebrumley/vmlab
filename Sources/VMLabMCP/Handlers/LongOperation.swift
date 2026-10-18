@@ -55,10 +55,11 @@ enum LongOperation {
   }
 
   /// Starts `record` under the start gate (slot, macOS count and memory budget), with a heartbeat
-  /// while it boots. A legal-state check comes first, so a running VM is `wrong_state`, not a
-  /// limit refusal.
+  /// while it boots and, for an `exec_ssh` guest, until SSH answers (R-400). A legal-state check
+  /// comes first, so a running VM is `wrong_state`, not a limit refusal. Returns the record and
+  /// the start's warnings (`ssh_unreachable`).
   static func start(_ record: VMRecord, context: ToolContext) async throws(VMLabError)
-    -> VMRecord
+    -> (record: VMRecord, warnings: [String])
   {
     _ = try Lifecycle.transition(.start, from: record.state, vm: record.id)
     let store = context.store
@@ -67,14 +68,14 @@ enum LongOperation {
     let host = context.hostFacts()
     let started = try await context.progress.during(
       "starting \(record.id)", every: context.heartbeat
-    ) { () throws(VMLabError) -> VMRecord? in
+    ) { () throws(VMLabError) -> VMManager.Outcome in
       try await typed("start", vm: record.id) {
         try await gate.withStart(
           Inventory.Guest(record: record), running: { store.inventory() }, host: host
-        ) { try await manager.perform(.start, on: record.id) }
+        ) { try await manager.run(.start, on: record.id) }
       }
     }
-    guard let started else { return try store.load(id: record.id) }
-    return started
+    if let after = started.record { return (after, started.warnings) }
+    return (try store.load(id: record.id), started.warnings)
   }
 }

@@ -32,12 +32,20 @@ public protocol Backend: Sendable {
   func destroy(_ record: VMRecord) async throws(VMLabError)
   /// Handles on the channels of a running or paused guest.
   func attach(_ record: VMRecord) async throws(VMLabError) -> any RunningVM
+  /// Where the guest's sshd is reached (R-400). The default reads the recorded runtime (the
+  /// forwarded loopback port, else the IP). A backend that learns the address after `start`
+  /// returns (a DHCP lease) overrides it and may wait up to `timeout` for it; nil when unknown.
+  func sshEndpoint(_ record: VMRecord, timeout: Duration) async -> SSHEndpoint?
   /// The checkpoints of the VM in any state. The default attaches (so needs a live guest) and
   /// returns its `checkpoints` channel; an engine that checkpoints stopped guests overrides it.
   func checkpoints(_ record: VMRecord) async throws(VMLabError) -> any CheckpointProvider
 }
 
 extension Backend {
+  public func sshEndpoint(_ record: VMRecord, timeout: Duration) async -> SSHEndpoint? {
+    SSHEndpoint(runtime: record.runtime)
+  }
+
   public func checkpoints(_ record: VMRecord) async throws(VMLabError) -> any CheckpointProvider {
     try await attach(record).channel(.checkpoints)
   }
@@ -100,28 +108,58 @@ public struct GDBEndpoint: Codable, Sendable, Hashable {
   }
 }
 
-/// A command run in the guest (R-401 adds cwd, env, user, background).
+/// How `vm_exec` reaches the guest: SSH, the guest agent (R-403), or SSH when granted, else the
+/// agent.
+public enum ExecVia: String, CaseIterable, Codable, Sendable {
+  case auto, ssh, agent
+}
+
+/// A command run in the guest (R-401): by the guest user's shell, in `cwd` with `env` added, as
+/// `user` (sudo) when that is not the login user, killed with its whole process group after
+/// `timeout`.
 public struct ExecRequest: Sendable, Hashable {
   public var command: String
   public var stdin: Data?
   public var timeout: Duration
+  public var cwd: String?
+  public var env: [String: String]
+  public var user: String?
+  public var via: ExecVia
 
-  public init(command: String, stdin: Data? = nil, timeout: Duration = .seconds(120)) {
+  public init(
+    command: String, stdin: Data? = nil, timeout: Duration = .seconds(120), cwd: String? = nil,
+    env: [String: String] = [:], user: String? = nil, via: ExecVia = .auto
+  ) {
     self.command = command
     self.stdin = stdin
     self.timeout = timeout
+    self.cwd = cwd
+    self.env = env
+    self.user = user
+    self.via = via
   }
 }
 
+/// What a finished command left. Output over `ExecOutput.inlineLimit` keeps its head and tail
+/// with `truncated` set, and the whole text is at `logPath`.
 public struct ExecResult: Sendable, Hashable {
   public var exitCode: Int32
   public var stdout: String
   public var stderr: String
+  public var durationMs: Int
+  public var truncated: Bool
+  public var logPath: String?
 
-  public init(exitCode: Int32, stdout: String, stderr: String) {
+  public init(
+    exitCode: Int32, stdout: String, stderr: String, durationMs: Int = 0, truncated: Bool = false,
+    logPath: String? = nil
+  ) {
     self.exitCode = exitCode
     self.stdout = stdout
     self.stderr = stderr
+    self.durationMs = durationMs
+    self.truncated = truncated
+    self.logPath = logPath
   }
 }
 
@@ -285,7 +323,16 @@ extension Channel where Value == any MemoryDumper {
 }
 
 extension Channel where Value == any ExecChannel {
+  /// SSH or the agent, whichever the backend offers (`via: auto`).
   public static var exec: Self { Self(name: "exec", features: [.execSSH, .execAgent]) { $0.exec } }
+  /// SSH only (`via: ssh`).
+  public static var execSSH: Self {
+    Self(name: "exec_ssh", features: [.execSSH]) { $0.exec }
+  }
+  /// The guest agent only (`via: agent`); no backend offers it before R-403.
+  public static var execAgent: Self {
+    Self(name: "exec_agent", features: [.execAgent]) { _ in nil }
+  }
 }
 
 extension Channel where Value == any CheckpointProvider {

@@ -189,31 +189,53 @@ public struct NetworkSpec: Codable, Sendable, Hashable {
   }
 }
 
+/// How a guest boots (R-305). `disk` boots the image through UEFI; `kernel` loads a kernel,
+/// initrd and optional device tree directly (`kernel: nil` takes the image's extracted or
+/// registered kernel); `firmware` supplies the firmware itself, as a pflash image or a `-bios`
+/// ROM; `binary` loads a raw image at `loadAddress` and starts the first CPU there.
 public struct BootSpec: Codable, Sendable, Hashable {
   public enum Mode: String, CaseIterable, Codable, Sendable {
-    case disk, kernel, firmware
+    case disk, kernel, firmware, binary
+  }
+
+  /// How a `firmware` image is attached: a flash device (UEFI builds) or a ROM.
+  public enum FirmwareFormat: String, CaseIterable, Codable, Sendable {
+    case pflash, bios
   }
 
   public var mode: Mode
   public var kernel: String?
   public var initrd: String?
   public var cmdline: String?
+  public var dtb: String?
   public var firmware: String?
+  public var firmwareFormat: FirmwareFormat
+  public var binary: String?
+  /// Where `binary` is loaded: hex (`0x40080000`) or decimal.
+  public var loadAddress: String?
   public var haltAtStart: Bool
 
   public init(
     mode: Mode = .disk, kernel: String? = nil, initrd: String? = nil, cmdline: String? = nil,
-    firmware: String? = nil, haltAtStart: Bool = false
+    dtb: String? = nil, firmware: String? = nil, firmwareFormat: FirmwareFormat = .pflash,
+    binary: String? = nil, loadAddress: String? = nil, haltAtStart: Bool = false
   ) {
     self.mode = mode
     self.kernel = kernel
     self.initrd = initrd
     self.cmdline = cmdline
+    self.dtb = dtb
     self.firmware = firmware
+    self.firmwareFormat = firmwareFormat
+    self.binary = binary
+    self.loadAddress = loadAddress
     self.haltAtStart = haltAtStart
   }
 
-  enum CodingKeys: String, CodingKey { case mode, kernel, initrd, cmdline, firmware, haltAtStart }
+  enum CodingKeys: String, CodingKey {
+    case mode, kernel, initrd, cmdline, dtb, firmware, firmwareFormat, binary, loadAddress
+    case haltAtStart
+  }
 
   public init(from decoder: any Decoder) throws {
     let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -221,8 +243,70 @@ public struct BootSpec: Codable, Sendable, Hashable {
     kernel = try c.decodeIfPresent(String.self, forKey: .kernel)
     initrd = try c.decodeIfPresent(String.self, forKey: .initrd)
     cmdline = try c.decodeIfPresent(String.self, forKey: .cmdline)
+    dtb = try c.decodeIfPresent(String.self, forKey: .dtb)
     firmware = try c.decodeIfPresent(String.self, forKey: .firmware)
+    firmwareFormat =
+      try c.decodeIfPresent(FirmwareFormat.self, forKey: .firmwareFormat) ?? .pflash
+    binary = try c.decodeIfPresent(String.self, forKey: .binary)
+    loadAddress = try c.decodeIfPresent(String.self, forKey: .loadAddress)
     haltAtStart = try c.decodeIfPresent(Bool.self, forKey: .haltAtStart) ?? false
+  }
+
+  /// `loadAddress` as a number, accepting `0x` hex or decimal; nil when absent or malformed.
+  public var parsedLoadAddress: UInt64? {
+    guard let text = loadAddress?.trimmingCharacters(in: .whitespaces), !text.isEmpty else {
+      return nil
+    }
+    let lower = text.lowercased()
+    if lower.hasPrefix("0x") { return UInt64(lower.dropFirst(2), radix: 16) }
+    return UInt64(lower)
+  }
+}
+
+/// Engine-specific additions to a request (R-306). `qemuArgs` are appended verbatim after
+/// vmlab's own QEMU arguments; naming any implies `custom_devices`. Options vmlab owns (its
+/// control sockets and process handling) are refused with `invalid_request`.
+public struct ExtraSpec: Codable, Sendable, Hashable {
+  public var qemuArgs: [String]
+
+  /// QEMU options a request may not pass: vmlab's QMP, serial, VNC and GDB endpoints, its pid
+  /// file and daemonizing, and any second monitor. Matched on the option name with one or two
+  /// leading dashes and without an `=value` suffix; `-s` is `-gdb tcp::1234`, `-qmp-pretty`
+  /// and `-mon` are monitors, and `-readconfig` could add any of them from a file.
+  public static let deniedQEMUOptions: Set<String> = [
+    "qmp", "qmp-pretty", "serial", "vnc", "gdb", "s", "pidfile", "daemonize", "monitor", "mon",
+    "readconfig",
+  ]
+
+  public init(qemuArgs: [String] = []) { self.qemuArgs = qemuArgs }
+
+  enum CodingKeys: String, CodingKey { case qemuArgs }
+
+  public init(from decoder: any Decoder) throws {
+    let c = try decoder.container(keyedBy: CodingKeys.self)
+    qemuArgs = try c.decodeIfPresent([String].self, forKey: .qemuArgs) ?? []
+  }
+
+  /// The option name of a QEMU argument (`-device` → `device`, `--gdb=x` → `gdb`), or nil for a
+  /// value.
+  public static func optionName(_ argument: String) -> String? {
+    guard argument.hasPrefix("-"), argument.count > 1 else { return nil }
+    var name = argument.dropFirst()
+    if name.hasPrefix("-") { name = name.dropFirst() }
+    return String(name.prefix { $0 != "=" })
+  }
+
+  /// Throws `invalid_request` naming the first denied option.
+  public func validate() throws(VMLabError) {
+    for (index, argument) in qemuArgs.enumerated() {
+      if let name = Self.optionName(argument), Self.deniedQEMUOptions.contains(name) {
+        throw .invalidRequest(
+          field: "extra.qemuArgs[\(index)]",
+          reason: "\(argument) is managed by vmlab and cannot be passed through",
+          hint: "Drop \(argument); vmlab already wires QMP, serial, VNC, GDB and the process. "
+            + "Use the vm_serial, vm_computer and vm_debug tools instead.")
+      }
+    }
   }
 }
 
@@ -236,12 +320,13 @@ public struct Requirements: Codable, Sendable, Hashable {
   public var network: NetworkSpec
   public var image: String?
   public var boot: BootSpec?
+  public var extra: ExtraSpec?
 
   /// Builds a request and checks it as decoding would.
   public init(
     guest: GuestSpec, require: [Feature] = [], prefer: [Feature] = [],
     resources: ResourceSpec = ResourceSpec(), network: NetworkSpec = NetworkSpec(),
-    image: String? = nil, boot: BootSpec? = nil
+    image: String? = nil, boot: BootSpec? = nil, extra: ExtraSpec? = nil
   ) throws(VMLabError) {
     self.guest = guest
     self.require = require
@@ -250,11 +335,12 @@ public struct Requirements: Codable, Sendable, Hashable {
     self.network = network
     self.image = image
     self.boot = boot
+    self.extra = extra
     try validate()
   }
 
   enum CodingKeys: String, CodingKey {
-    case guest, require, prefer, resources, network, image, boot
+    case guest, require, prefer, resources, network, image, boot, extra
   }
 
   public init(from decoder: any Decoder) throws {
@@ -266,6 +352,7 @@ public struct Requirements: Codable, Sendable, Hashable {
     network = try c.decodeIfPresent(NetworkSpec.self, forKey: .network) ?? NetworkSpec()
     image = try c.decodeIfPresent(String.self, forKey: .image)
     boot = try c.decodeIfPresent(BootSpec.self, forKey: .boot)
+    extra = try c.decodeIfPresent(ExtraSpec.self, forKey: .extra)
     try validate()
   }
 
@@ -349,10 +436,13 @@ public struct Requirements: Codable, Sendable, Hashable {
     if let boot {
       switch boot.mode {
       case .kernel: named.append((.directKernelBoot, "boot.mode"))
-      case .firmware: named.append((.customFirmware, "boot.mode"))
+      case .firmware, .binary: named.append((.customFirmware, "boot.mode"))
       case .disk: break
       }
       if boot.haltAtStart { named.append((.haltAtStart, "boot.haltAtStart")) }
+    }
+    if let extra, !extra.qemuArgs.isEmpty {
+      named.append((.customDevices, "extra.qemuArgs"))
     }
     return named
   }
@@ -383,17 +473,25 @@ public struct Requirements: Codable, Sendable, Hashable {
       }
     }
     if let boot {
-      if boot.mode == .kernel, boot.kernel == nil {
-        throw .invalidRequest(
-          field: "boot.kernel", reason: "boot mode kernel needs a kernel",
-          hint: "Give boot.kernel the path of the kernel image.")
-      }
       if boot.mode == .firmware, boot.firmware == nil {
         throw .invalidRequest(
           field: "boot.firmware", reason: "boot mode firmware needs a firmware image",
           hint: "Give boot.firmware the path of the firmware image.")
       }
+      if boot.mode == .binary, boot.binary == nil {
+        throw .invalidRequest(
+          field: "boot.binary", reason: "boot mode binary needs a binary image",
+          hint: "Give boot.binary the path of the raw image to load.")
+      }
+      if boot.mode == .binary, boot.parsedLoadAddress == nil {
+        throw .invalidRequest(
+          field: "boot.loadAddress",
+          reason: boot.loadAddress.map { "\"\($0)\" is not an address" }
+            ?? "boot mode binary needs a load address",
+          hint: "Give boot.loadAddress in hex, such as \"0x40080000\".")
+      }
     }
+    try extra?.validate()
     try checkContradictions()
   }
 

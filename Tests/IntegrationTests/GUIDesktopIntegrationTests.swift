@@ -60,7 +60,7 @@ import VMLabRFB
   func desktopInstallsAndVMComputerDrivesIt() async throws {
     let guest = try await QEMUGuest.boot(
       features: [.serial, .gui, .guiDesktop, .netNAT], requested: [.gui, .guiDesktop],
-      memoryGB: 4, diskGB: 12, sshKey: true)
+      memoryGB: 4, diskGB: 12)
     do {
       // R-504: the desktop within 10 minutes of first boot.
       let first = try await Self.waitForDesktop(guest, timeout: .seconds(600), tag: "first")

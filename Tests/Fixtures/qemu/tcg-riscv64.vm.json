@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "id": "vm-tcgrv6",
+  "name": "riscv",
+  "profile": "qemu-tcg",
+  "guest": { "os": "linux", "arch": "riscv64" },
+  "features": ["serial", "net_nat"],
+  "resources": { "cpus": 12, "memoryGB": 2 },
+  "image": "debian-13-riscv64",
+  "network": {},
+  "createdAt": "2026-10-01T12:00:00Z",
+  "state": "created"
+}

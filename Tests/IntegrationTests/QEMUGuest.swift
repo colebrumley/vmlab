@@ -15,14 +15,20 @@ struct QEMUGuest {
   let backend: QEMUBackend
   let record: VMRecord
   let machine: QEMUMachine
+  /// The warnings of the start (R-400: `ssh_unreachable` when exec_ssh was granted and the guest
+  /// never answered).
+  var startWarnings: [String] = []
 
   /// `requested` becomes the plan's `requested` features (R-504 installs a desktop for
-  /// `gui_desktop`); with `sshKey`, `<vm>/id_ed25519` is generated first, so the guest boots
+  /// `gui_desktop`). `VMManager.create` generates `<vm>/id_ed25519` (R-400), so the guest boots
   /// with a cloud-init seed that authorizes it. `prepare` runs on the VM directory after create
   /// and before the first start (to drop an `id_ed25519.pub` there, say).
   static func boot(
     features: [Feature] = [.serial, .gui, .netNAT], requested: [Feature] = [], memoryGB: Int = 2,
-    diskGB: Int = 8, sshKey: Bool = false, prepare: ((URL) throws -> Void)? = nil
+    diskGB: Int = 8, prepare: ((URL) throws -> Void)? = nil,
+    boot: BootSpec? = nil, network: NetworkSpec = NetworkSpec(), profile: Profile = .qemuHVF,
+    guest: GuestSpec = GuestSpec(os: .linux, arch: .arm64), image: String = "debian-13-arm64",
+    cpus: Int = 2
   ) async throws -> QEMUGuest {
     let n = counterLock.withLock {
       counter += 1
@@ -36,47 +42,32 @@ struct QEMUGuest {
       withDestinationURL: FileManager.default.homeDirectoryForCurrentUser.appending(
         path: ".vmlab/images"))
     let store = Store(home: home)
-    let backend = QEMUBackend(profile: .qemuHVF, store: store)
+    let backend = QEMUBackend(profile: profile, store: store)
     let registry = BackendRegistry()
     registry.register(backend)
     let manager = VMManager(store: store, backends: registry)
-    let guest = GuestSpec(os: .linux, arch: .arm64)
     let plan = Plan(
-      profile: .qemuHVF, guest: guest,
-      resources: ResourceSpec(cpus: 2, memoryGB: memoryGB, diskGB: diskGB), features: features,
+      profile: profile, guest: guest,
+      resources: ResourceSpec(cpus: cpus, memoryGB: memoryGB, diskGB: diskGB), features: features,
       requested: requested, estimatedStartupSeconds: 15)
     let created = try await manager.create(
       VMRecord(
-        id: "", name: "it-\(n)", profile: .qemuHVF, guest: guest, features: features,
-        image: "debian-13-arm64"), plan: plan)
+        id: "", name: "it-\(n)", profile: profile, guest: guest, features: features,
+        image: image, network: network, boot: boot), plan: plan)
     do {
-      if sshKey { try generateKey(in: store.directory(of: created.id)) }
       try prepare?(store.directory(of: created.id))
-      guard let running = try await manager.perform(.start, on: created.id) else {
+      let outcome = try await manager.run(.start, on: created.id)
+      guard let running = outcome.record else {
         throw VMLabError(code: .internal, message: "start returned no record", hint: "")
       }
       let machine = try await backend.machine(for: running)
       return QEMUGuest(
-        home: home, manager: manager, backend: backend, record: running, machine: machine)
+        home: home, manager: manager, backend: backend, record: running, machine: machine,
+        startWarnings: outcome.warnings)
     } catch {
       try? await backend.kill(created)
       try? FileManager.default.removeItem(at: home)
       throw error
-    }
-  }
-
-  /// `ssh-keygen -t ed25519` into `<dir>/id_ed25519` (and `.pub`).
-  static func generateKey(in dir: URL) throws {
-    let process = Process()
-    process.executableURL = URL(filePath: "/usr/bin/ssh-keygen")
-    process.arguments = [
-      "-q", "-t", "ed25519", "-N", "", "-C", "vmlab-test", "-f",
-      dir.appending(path: "id_ed25519").path,
-    ]
-    try process.run()
-    process.waitUntilExit()
-    guard process.terminationStatus == 0 else {
-      throw VMLabError(code: .internal, message: "ssh-keygen failed", hint: "")
     }
   }
 

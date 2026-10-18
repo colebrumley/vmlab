@@ -12,7 +12,8 @@ extension ToolSpec {
     outputShape: """
       { vm: { id, name }, record: VMRecord, plan: Plan, features: [feature],
         endpoints: { ssh?, ip?, serial?, gdb?,
-          display?: { kind, address, auth, passwordFile?, hostSide } },
+          display?: { kind, address, auth, passwordFile?, hostSide },
+          forwards?: [ { guest, host: "127.0.0.1:port" } ] },
         segments: [ { name, ip } ], events: [ Event ], panic?: { line, offset, at }, warnings }
       """,
     errors: [.vmNotFound])

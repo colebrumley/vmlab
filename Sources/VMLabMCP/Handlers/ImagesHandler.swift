@@ -2,14 +2,13 @@ import Foundation
 import VMLabCore
 
 /// `images`: list, pull and remove over `ImageStore` (R-300); `pull` reports progress while it
-/// downloads. register (R-1002), template_create (R-804), prune (R-1003) and extract_kernel
-/// (R-305) are refused until their items land.
+/// downloads. extract_kernel and the kernel form of register are R-305's; registering a disk
+/// (R-1002), template_create (R-804) and prune (R-1003) are refused until their items land.
 struct ImagesHandler: ToolHandler {
   var spec: ToolSpec { .images }
 
   static let owners = [
     "register": "R-1002", "template_create": "R-804", "prune": "R-1003",
-    "extract_kernel": "R-305",
   ]
 
   func call(_ arguments: ToolArguments, context: ToolContext) async throws(VMLabError)
@@ -41,16 +40,55 @@ struct ImagesHandler: ToolHandler {
         "removed": .array(removed ? [.string(name)] : []),
         "bytesFreed": .number(Double(removed ? freed : 0)),
       ])
+    case "extract_kernel":
+      let name = try Self.name(arguments)
+      let images = context.images
+      let files = try await context.progress.during(
+        "extracting the kernel of \(name)", every: context.heartbeat
+      ) { () throws(VMLabError) -> KernelFiles in
+        try await LongOperation.typed("images extract_kernel \(name)") {
+          try await images.extractKernel(name)
+        }
+      }
+      return Self.kernelResult(files, context)
+    case "register" where try arguments.string("kernel") != nil:
+      let name = try Self.name(arguments)
+      guard try arguments.string("path") == nil else {
+        throw VMLabError.invalidRequest(
+          field: "path", reason: "register takes a kernel or a disk path, not both",
+          hint: "Register the kernel and the disk under separate calls.")
+      }
+      let kernel = URL(filePath: try arguments.string("kernel") ?? "")
+      let initrd = try arguments.string("initrd").map { URL(filePath: $0) }
+      let guest = GuestSpec(
+        os: .linux, arch: GuestSpec.Arch(rawValue: try arguments.string("arch") ?? "arm64"))
+      let images = context.images
+      let files = try await LongOperation.typed("images register \(name)") {
+        try await images.registerKernel(name, kernel: kernel, initrd: initrd, guest: guest)
+      }
+      return Self.kernelResult(files, context)
     default:
       if let owner = Self.owners[action] {
         throw VMLabError.invalidRequest(
           field: "action", reason: "images \(action) is not built yet (\(owner))",
-          hint: "list, pull and remove work now.")
+          hint: "list, pull, remove, extract_kernel and register with kernel work now.")
       }
       throw VMLabError.invalidRequest(
         field: "action", reason: "\(action) is not an images action",
         hint: "Use list, pull or remove.")
     }
+  }
+
+  static func kernelResult(_ files: KernelFiles, _ context: ToolContext) -> ToolResult {
+    var object: [String: JSONValue] = [
+      "name": .string(files.image),
+      "path": .string(context.images.kernelDirectory(files.image).path),
+      "files": .array(files.all.map { .string($0.path) }),
+      "kernel": .string(files.kernel.path),
+      "initrd": files.initrd.map { .string($0.path) } ?? .null,
+    ]
+    if let version = files.version { object["version"] = .string(version) }
+    return ToolResult(object)
   }
 
   static func name(_ arguments: ToolArguments) throws(VMLabError) -> String {

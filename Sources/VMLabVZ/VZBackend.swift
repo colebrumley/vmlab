@@ -58,8 +58,7 @@ public struct VZBackend: Backend {
           hint: "Check free disk space and permissions under VMLAB_HOME.")
       }
     }
-    let key = try SSHKey.ensure(
-      at: dir.appending(path: "id_ed25519"), comment: "vmlab-\(record.id)", commands: commands)
+    let key = try SSHKeys.generate(in: dir, comment: "vmlab-\(record.id)", runner: commands)
     let seed = CloudInitConfig(
       instanceID: record.id, hostname: Self.hostname(for: record), user: pulled.login.user,
       sshPublicKey: key, gui: try Self.guiStack(plan: plan, vmDirectory: dir), console: .hvc0,
@@ -155,7 +154,11 @@ public struct VZBackend: Backend {
 
   public func attach(_ record: VMRecord) async throws(VMLabError) -> any RunningVM {
     let handle = try await VMLabVZ.attach(socketPath: target(record).client.socketPath)
-    return VZRunningVM(id: record.id, profile: profile, features: record.features, handle: handle)
+    let ssh = SSHEndpoint(runtime: record.runtime).map {
+      SSHTarget(record: record, endpoint: $0, store: store)
+    }
+    return VZRunningVM(
+      id: record.id, profile: profile, features: record.features, handle: handle, ssh: ssh)
   }
 
   /// The runner's client and pid, from the record's runtime or the VM directory.
@@ -191,12 +194,17 @@ public struct VZRunningVM: RunningVM {
   public let profile: Profile
   public let features: [Feature]
   public let handle: VZRunnerHandle
+  /// The guest's leased address on port 22 (R-400); nil when no lease was recorded.
+  public var ssh: SSHTarget? = nil
 
   public var serial: SerialChannel? { nil }
   public var display: DisplayEndpoint? { nil }
   public var gdb: GDBEndpoint? { nil }
   public var introspection: (any Introspection)? { nil }
-  public var exec: any ExecChannel { NotYet(vm: id, channel: "exec", item: "R-400") }
+  public var exec: any ExecChannel {
+    if let ssh { return SSHExecChannel(target: ssh) }
+    return NotYet(vm: id, channel: "exec", item: "R-400: no DHCP lease was recorded for SSH")
+  }
   public var checkpoints: any CheckpointProvider {
     NotYet(vm: id, channel: "checkpoints", item: "R-605")
   }

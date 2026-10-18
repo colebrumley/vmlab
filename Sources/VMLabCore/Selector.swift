@@ -291,8 +291,12 @@ public enum ProfileSelector {
       }
       if onChosen || onEliminated { unverified.append(feature) }
     }
+    var planned = resources
+    if profile == .qemuTCG, let cpus = planned.cpus, cpus > maxTCGCPUs {
+      planned.cpus = maxTCGCPUs
+    }
     var plan = Plan(
-      profile: profile, guest: r.guest, resources: resources, features: features,
+      profile: profile, guest: r.guest, resources: planned, features: features,
       requested: requested, preferredDenied: preferredDenied, unverified: unverified,
       allowUnverified: allowUnverified, estimatedStartupSeconds: 0)
     plan.estimatedStartupSeconds = estimatedStartupSeconds(plan)
@@ -345,6 +349,9 @@ public enum ProfileSelector {
     return out
   }
 
+  /// The most virtual CPUs a `qemu-tcg` guest gets (R-310): emulated CPUs past this add little.
+  public static let maxTCGCPUs = 8
+
   /// A rough figure for the model: time from start to a reachable guest.
   static func estimatedStartupSeconds(_ plan: Plan) -> Int {
     let base =
@@ -368,6 +375,16 @@ public enum ProfileSelector {
       notes.append(
         "qemu-tcg emulates the guest CPU: slow, expect many times the run time of hardware "
           + "virtualization")
+    }
+    if profile == .qemuTCG, let cpus = ResourceLimits.resolve(r.resources, for: r.guest.os).cpus,
+      cpus > maxTCGCPUs
+    {
+      notes.append("qemu-tcg runs at most \(maxTCGCPUs) virtual CPUs; \(cpus) were asked for")
+    }
+    if case .other(let arch) = r.guest.arch {
+      notes.append(
+        "vmlab has no defaults for \(arch) beyond -machine virt: give boot (kernel, firmware or "
+          + "binary) and any devices in extra.qemuArgs")
     }
     if profile == .qemuTCG, asked.contains(.nestedVirt) {
       var note = "nested virtualization is emulated under qemu-tcg and very slow"

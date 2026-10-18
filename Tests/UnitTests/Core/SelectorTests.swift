@@ -41,6 +41,29 @@ import Testing
     return nil
   }
 
+  /// R-310: qemu-tcg caps the CPUs at 8 and says so; other architectures get a defaults warning.
+  @Test func tcgCapsCPUsAndWarnsAboutOtherArchitectures() throws {
+    let many = try select(
+      try Requirements(guest: Self.x86, resources: ResourceSpec(cpus: 12)), host: Self.devHost(),
+      running: .empty
+    ).get()
+    #expect(many.profile == .qemuTCG && many.resources.cpus == 8)
+    #expect(many.notes.contains { $0.contains("at most 8 virtual CPUs; 12 were asked for") })
+    #expect(many.notes.contains { $0.contains("emulates the guest CPU") })
+
+    let ppc = try select(
+      try Requirements(guest: GuestSpec(os: .linux, arch: .other("ppc64"))), host: Self.devHost(),
+      running: .empty
+    ).get()
+    #expect(ppc.profile == .qemuTCG)
+    #expect(ppc.notes.contains { $0.contains("no defaults for ppc64 beyond -machine virt") })
+    let riscv = try select(
+      try Requirements(guest: GuestSpec(os: .linux, arch: .riscv64)), host: Self.devHost(),
+      running: .empty
+    ).get()
+    #expect(riscv.profile == .qemuTCG && !riscv.notes.contains { $0.contains("no defaults") })
+  }
+
   // MARK: Appendix I worked examples, in table order
 
   @Test func linuxWithNothingRequiredIsVZLinux() throws {
