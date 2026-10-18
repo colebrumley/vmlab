@@ -35,16 +35,20 @@ enum LongOperation {
   }
 
   /// Pulls `name` unless it is already pulled; nil when nothing was fetched.
-  static func pullIfMissing(_ name: String, context: ToolContext) async throws(VMLabError)
-    -> PullResult?
-  {
+  static func pullIfMissing(
+    _ name: String, confirm: Bool = false, context: ToolContext
+  ) async throws(VMLabError) -> PullResult? {
     if context.images.pulled(name) != nil { return nil }
-    return try await pull(name, context: context)
+    return try await pull(name, confirm: confirm, context: context)
   }
 
-  /// Pulls `name` (a no-op when current), with a heartbeat while it downloads.
-  static func pull(_ name: String, context: ToolContext) async throws(VMLabError) -> PullResult {
+  /// Pulls `name` (a no-op when current), with a heartbeat while it downloads. A pull of more
+  /// than 10 GB needs `confirm` (R-1003).
+  static func pull(
+    _ name: String, confirm: Bool = false, context: ToolContext
+  ) async throws(VMLabError) -> PullResult {
     let images = context.images
+    try images.checkPullSize(name, confirm: confirm)
     let result = try await context.progress.during(
       "pulling image \(name)", every: context.heartbeat
     ) { () throws(VMLabError) -> PullResult in

@@ -164,18 +164,9 @@ public struct HostProbe: Sendable {
     return values?.volumeAvailableCapacityForImportantUsage ?? 0
   }
 
+  /// The image cache's allocated size (R-1003), through a symlinked `images` too.
   private func imagesBytes() -> Int64 {
-    let images = home.appending(path: "images")
-    guard
-      let enumerator = FileManager.default.enumerator(
-        at: images, includingPropertiesForKeys: [.totalFileAllocatedSizeKey, .isRegularFileKey])
-    else { return 0 }
-    var total: Int64 = 0
-    for case let url as URL in enumerator {
-      let values = try? url.resourceValues(forKeys: [.totalFileAllocatedSizeKey, .isRegularFileKey])
-      if values?.isRegularFile == true { total += Int64(values?.totalFileAllocatedSize ?? 0) }
-    }
-    return total
+    ImageStore.sizes(of: home.appending(path: "images")).allocated
   }
 
   // MARK: Parsers (fixture-tested)

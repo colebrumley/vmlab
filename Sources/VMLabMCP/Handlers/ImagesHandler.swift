@@ -2,14 +2,13 @@ import Foundation
 import VMLabCore
 
 /// `images`: list, pull and remove over `ImageStore` (R-300); `pull` reports progress while it
-/// downloads. extract_kernel and the kernel form of register are R-305's; registering a disk
-/// (R-1002), template_create (R-804) and prune (R-1003) are refused until their items land.
+/// downloads. extract_kernel and the kernel form of register are R-305's; registering a disk or
+/// an IPSW is R-1002's; prune and the confirm gate on large pulls are R-1003's; template_create
+/// (R-804) is refused until its item lands.
 struct ImagesHandler: ToolHandler {
   var spec: ToolSpec { .images }
 
-  static let owners = [
-    "register": "R-1002", "template_create": "R-804", "prune": "R-1003",
-  ]
+  static let owners = ["template_create": "R-804"]
 
   func call(_ arguments: ToolArguments, context: ToolContext) async throws(VMLabError)
     -> ToolResult
@@ -20,7 +19,8 @@ struct ImagesHandler: ToolHandler {
       return ToolResult(["images": .array(context.images.list().map { Self.row($0, context) })])
     case "pull":
       let name = try Self.name(arguments)
-      let result = try await LongOperation.pull(name, context: context)
+      let result = try await LongOperation.pull(
+        name, confirm: try arguments.bool("confirm"), context: context)
       let folder = context.images.imageDirectory(name)
       return ToolResult([
         "name": .string(name), "path": .string(folder.path),
@@ -67,16 +67,124 @@ struct ImagesHandler: ToolHandler {
         try await images.registerKernel(name, kernel: kernel, initrd: initrd, guest: guest)
       }
       return Self.kernelResult(files, context)
+    case "register":
+      return try await Self.register(arguments, context: context)
+    case "prune":
+      return try await Self.prune(confirm: try arguments.bool("confirm"), context: context)
     default:
       if let owner = Self.owners[action] {
         throw VMLabError.invalidRequest(
           field: "action", reason: "images \(action) is not built yet (\(owner))",
-          hint: "list, pull, remove, extract_kernel and register with kernel work now.")
+          hint: "list, pull, remove, register, prune and extract_kernel work now.")
       }
       throw VMLabError.invalidRequest(
         field: "action", reason: "\(action) is not an images action",
         hint: "Use list, pull or remove.")
     }
+  }
+
+  /// `register` with `path`: a disk image (`guest`, `arch`, `format`) or an `.ipsw`.
+  static func register(_ arguments: ToolArguments, context: ToolContext) async throws(VMLabError)
+    -> ToolResult
+  {
+    guard let path = try arguments.string("path"), !path.isEmpty else {
+      throw VMLabError.invalidRequest(
+        field: "path", reason: "register needs path (a disk image or .ipsw) or kernel",
+        hint: "Give path with the host path of a raw or qcow2 disk, or of an .ipsw.")
+    }
+    let file = URL(filePath: path)
+    let images = context.images
+    let record: PulledImage
+    if file.pathExtension.lowercased() == "ipsw" {
+      let name = try arguments.string("name") ?? "macos-ipsw"
+      record = try await context.progress.during(
+        "installing \(file.lastPathComponent) with tart create", every: context.heartbeat
+      ) { () throws(VMLabError) -> PulledImage in
+        try await LongOperation.typed("images register \(name)") {
+          try await images.registerIPSW(name, ipsw: file)
+        }
+      }
+    } else {
+      let name = try Self.name(arguments)
+      let os =
+        try arguments.string("guest").map { value throws(VMLabError) -> GuestSpec.OS in
+          guard let os = GuestSpec.OS(rawValue: value) else {
+            throw VMLabError.invalidRequest(
+              field: "guest", reason: "\(value) is not a guest OS", hint: "Use linux.")
+          }
+          return os
+        } ?? .linux
+      let guest = GuestSpec(
+        os: os, arch: GuestSpec.Arch(rawValue: try arguments.string("arch") ?? "arm64"))
+      let format = try arguments.string("format").map { value throws(VMLabError) -> ImageFormat in
+        guard let format = ImageFormat(rawValue: value), format == .raw || format == .qcow2 else {
+          throw VMLabError.invalidRequest(
+            field: "format", reason: "\(value) is not a disk format", hint: "Use raw or qcow2.")
+        }
+        return format
+      }
+      record = try await context.progress.during(
+        "registering \(file.lastPathComponent)", every: context.heartbeat
+      ) { () throws(VMLabError) -> PulledImage in
+        try await LongOperation.typed("images register \(name)") {
+          try await images.registerDisk(name, disk: file, guest: guest, format: format)
+        }
+      }
+    }
+    let folder = images.imageDirectory(record.name)
+    var object: [String: JSONValue] = [
+      "name": .string(record.name), "path": .string(folder.path),
+      "guest": .string(record.guest.os.rawValue), "arch": .string(record.guest.arch.rawValue),
+      "format": .string(record.format.rawValue),
+      "files": .array(
+        record.files.values.sorted().map { .string(folder.appending(path: $0).path) }),
+    ]
+    if let vm = record.tartVM { object["tartVM"] = .string(vm) }
+    var warnings: [String] = []
+    if record.format == .tart {
+      warnings.append(
+        "macOS is installed but not set up: run `tart run \(record.tartVM ?? "")`, finish Setup "
+          + "Assistant with the account admin/admin and turn on Remote Login (docs/AGENT.md)")
+    }
+    return ToolResult(object, warnings: warnings)
+  }
+
+  /// `prune`: removes every image no VM uses. If a VM record cannot be read nothing is removed,
+  /// since its image is unknown; more than 10 GB at once needs `confirm`.
+  static func prune(confirm: Bool, context: ToolContext) async throws(VMLabError) -> ToolResult {
+    let listed = try context.store.list()
+    let images = context.images
+    if !listed.unreadable.isEmpty {
+      let ids = listed.unreadable.keys.sorted()
+      return ToolResult(
+        ["removed": .array([]), "bytesFreed": .number(0)],
+        warnings: [
+          "kept every image: the records of \(ids.joined(separator: ", ")) cannot be read, so "
+            + "the images they use are unknown"
+        ])
+    }
+    let referenced = ImageStore.references(listed.records)
+    let doomed = images.unreferenced(referenced)
+    let total = doomed.reduce(Int64(0)) { $0 + $1.bytes }
+    if total > ImageStore.confirmAboveBytes, !confirm {
+      let gb = (Double(total) / 1e9).formatted(.number.precision(.fractionLength(1)))
+      throw VMLabError(
+        code: .confirmRequired,
+        message: "Pruning removes \(doomed.count) images, \(gb) GB: "
+          + doomed.map(\.name).joined(separator: ", "),
+        hint: "Call again with confirm: true to remove them.",
+        data: [
+          "bytes": .number(Double(total)), "names": .array(doomed.map { .string($0.name) }),
+        ])
+    }
+    let removed = try await LongOperation.typed("images prune") {
+      try await images.prune(referenced: referenced)
+    }
+    return ToolResult([
+      "removed": .array(removed.map { .string($0.name) }),
+      "bytesFreed": .number(Double(removed.reduce(Int64(0)) { $0 + $1.bytes })),
+      "kept": .array(referenced.sorted().map { .string($0) }),
+    ])
   }
 
   static func kernelResult(_ files: KernelFiles, _ context: ToolContext) -> ToolResult {

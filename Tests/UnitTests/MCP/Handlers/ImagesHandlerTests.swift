@@ -56,9 +56,88 @@ import VMLabCore
     }
     #expect(unnamed?.data["field"] == .string("name"))
     let unbuilt = await #expect(throws: VMLabError.self) {
-      try await Self.images(["action": .string("prune")], in: f)
+      try await Self.images(["action": .string("template_create")], in: f)
     }
     #expect(unbuilt?.code == .invalidRequest)
+  }
+
+  /// R-1003: prune keeps what a VM uses, removes the rest, and keeps everything when a VM record
+  /// cannot be read.
+  @Test func pruneKeepsWhatVMsUse() async throws {
+    let f = try Fixture()
+    defer { f.cleanUp() }
+    _ = try await Self.images(["action": .string("pull"), "name": .string("tiny-arm64")], in: f)
+    let kernel = f.context.home.appending(path: "Image")
+    try Data("kernel".utf8).write(to: kernel)
+    _ = try await Self.images(
+      ["action": .string("register"), "name": .string("spare"), "kernel": .string(kernel.path)],
+      in: f)
+    _ = try await f.create(["autostart": .bool(false)])
+
+    let broken = f.context.store.vmsDirectory.appending(path: "vm-zzzzzz")
+    try FileManager.default.createDirectory(at: broken, withIntermediateDirectories: true)
+    try Data("{not json".utf8).write(to: broken.appending(path: "vm.json"))
+    let careful = try await Self.images(["action": .string("prune")], in: f)
+    #expect(careful.value["removed"] == .array([]))
+    #expect(careful.warnings.first?.contains("vm-zzzzzz") == true, "\(careful.warnings)")
+    try FileManager.default.removeItem(at: broken)
+
+    let pruned = try await Self.images(["action": .string("prune")], in: f)
+    #expect(pruned.value["removed"] == .array([.string("spare")]))
+    #expect(pruned.value["kept"] == .array([.string("tiny-arm64")]))
+    #expect(f.context.images.pulled("tiny-arm64") != nil)
+  }
+
+  /// R-1003: a pull over 10 GB, by images pull or by vm_create, needs confirm: true.
+  @Test func largePullsNeedConfirm() async throws {
+    var catalogue = try ImagesTests.catalogue()
+    catalogue.images[0].approxBytes = 12 << 30
+    let f = try Fixture(catalogue: catalogue)
+    defer { f.cleanUp() }
+    let refused = await #expect(throws: VMLabError.self) {
+      try await Self.images(["action": .string("pull"), "name": .string("tiny-arm64")], in: f)
+    }
+    #expect(refused?.code == .confirmRequired)
+    #expect(refused?.data["bytes"] == .number(Double(12 << 30)))
+    let viaCreate = await #expect(throws: VMLabError.self) { try await f.create() }
+    #expect(viaCreate?.code == .confirmRequired)
+    #expect(f.vmDirectories().isEmpty)
+    let pulled = try await Self.images(
+      ["action": .string("pull"), "name": .string("tiny-arm64"), "confirm": .bool(true)], in: f)
+    #expect(pulled.value["cached"] == .bool(false))
+  }
+
+  /// R-1002: register a local raw disk through the tool; it lists as an arm64 raw image.
+  @Test func registerADisk() async throws {
+    let f = try Fixture()
+    defer { f.cleanUp() }
+    let disk = f.context.home.appending(path: "local.raw")
+    try Data(repeating: 1, count: 512).write(to: disk)
+    let registered = try await Self.images(
+      [
+        "action": .string("register"), "name": .string("local"), "path": .string(disk.path),
+        "guest": .string("linux"), "arch": .string("arm64"), "format": .string("raw"),
+      ], in: f)
+    #expect(registered.value["format"] == .string("raw"))
+    #expect(registered.value["arch"] == .string("arm64"))
+    #expect(registered.value["files"]?.arrayValue?.count == 2)
+    let rows = try await Self.images(["action": .string("list")], in: f)
+    #expect(
+      rows.value["images"]?.arrayValue?.contains {
+        $0["name"] == .string("local") && $0["pulled"] == .bool(true)
+      } == true)
+    let noPath = await #expect(throws: VMLabError.self) {
+      try await Self.images(["action": .string("register"), "name": .string("x")], in: f)
+    }
+    #expect(noPath?.data["field"] == .string("path"))
+    let badFormat = await #expect(throws: VMLabError.self) {
+      try await Self.images(
+        [
+          "action": .string("register"), "name": .string("y"), "path": .string(disk.path),
+          "format": .string("vmdk"),
+        ], in: f)
+    }
+    #expect(badFormat?.data["field"] == .string("format"))
   }
 
   /// R-305: register a kernel, then extract_kernel from a pulled image's ext4 root.

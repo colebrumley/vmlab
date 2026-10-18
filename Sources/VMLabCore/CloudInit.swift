@@ -139,12 +139,16 @@ public struct CloudInitConfig: Codable, Sendable, Hashable {
   /// User-supplied `user-data`, merged after ours (cloud-config, shell script, boothook or
   /// include). Its cloud-config keys win; lists are appended.
   public var extraUserData: String?
+  /// The request's `provision.runCommands` (R-1001), run as root in order after vmlab's own
+  /// `runcmd` entries.
+  public var runCommands: [String]
 
   public init(
     instanceID: String, hostname: String, user: String, sshPublicKey: String,
     packages: [String] = [], gui: GUIStack? = nil, segment: SegmentNIC? = nil,
     mounts: [GuestMount] = [], console: ConsoleDevice = .ttyAMA0,
-    dhcpIdentifierMAC: String? = nil, rosetta: Bool = false, extraUserData: String? = nil
+    dhcpIdentifierMAC: String? = nil, rosetta: Bool = false, extraUserData: String? = nil,
+    runCommands: [String] = []
   ) {
     self.instanceID = instanceID
     self.hostname = hostname
@@ -158,6 +162,19 @@ public struct CloudInitConfig: Codable, Sendable, Hashable {
     self.dhcpIdentifierMAC = dhcpIdentifierMAC
     self.rosetta = rosetta
     self.extraUserData = extraUserData
+    self.runCommands = runCommands
+  }
+
+  /// `provision` applied: its packages, user-data and commands.
+  public func provisioned(_ provision: ProvisionSpec?) -> CloudInitConfig {
+    guard let provision else { return self }
+    var config = self
+    for package in provision.packages where !config.packages.contains(package) {
+      config.packages.append(package)
+    }
+    if let userData = provision.userData, !userData.isEmpty { config.extraUserData = userData }
+    config.runCommands += provision.runCommands
+    return config
   }
 }
 
@@ -300,6 +317,25 @@ public enum CloudInit {
         ))
     }
     if !bootcmd.isEmpty { entries.append(("bootcmd", .list(bootcmd))) }
+    if !config.runCommands.isEmpty {
+      // R-1004: each command is a file the runner times and records, so the host can read every
+      // step's exit and duration back from steps.tsv.
+      for (index, command) in config.runCommands.enumerated() {
+        writeFiles.append(
+          .map([
+            ("path", .string("\(ProvisionPaths.guestDirectory)/\(index).sh")),
+            ("permissions", "0700"),
+            ("content", .string(command.hasSuffix("\n") ? command : command + "\n")),
+          ]))
+      }
+      writeFiles.append(
+        .map([
+          ("path", .string(ProvisionPaths.runner)),
+          ("permissions", "0700"),
+          ("content", .string(ProvisionPaths.runnerScript(count: config.runCommands.count))),
+        ]))
+      runcmd.append(.list(["/bin/sh", .string(ProvisionPaths.runner)]))
+    }
     if !writeFiles.isEmpty { entries.append(("write_files", .list(writeFiles))) }
     entries.append(("runcmd", .list(runcmd)))
     return "#cloud-config\n" + YAML.map(entries).render()

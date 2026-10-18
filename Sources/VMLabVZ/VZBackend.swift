@@ -74,7 +74,8 @@ public struct VZBackend: Backend {
       console: .hvc0,
       dhcpIdentifierMAC: record.network.mode == .disabled
         ? nil : VZRunnerConfig.stableMAC(for: record.id),
-      rosetta: VZRunnerConfig.wantsRosetta(record))
+      rosetta: VZRunnerConfig.wantsRosetta(record)
+    ).provisioned(record.provision)
     do {
       try CloudInit.makeSeed(
         seed, directory: dir.appending(path: "seed"), iso: dir.appending(path: "seed.iso"),

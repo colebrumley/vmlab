@@ -102,6 +102,8 @@ public struct VMRecord: Codable, Sendable, Hashable {
   public var boot: BootSpec?
   /// The request's `extra` (R-306: `qemuArgs`); nil when it had none. Additive: schema 1 still.
   public var extra: ExtraSpec?
+  /// The request's `provision` (R-1001); nil when it had none. Additive: schema 1 still.
+  public var provision: ProvisionSpec?
   /// The request's `share` (R-404); nil when it had none. Additive: schema 1 still.
   public var share: SharedDirSpec?
 
@@ -110,7 +112,8 @@ public struct VMRecord: Codable, Sendable, Hashable {
     resources: ResourceSpec = ResourceSpec(), image: String? = nil,
     network: NetworkSpec = NetworkSpec(), createdAt: Date = Date(), state: VMState = .created,
     runtime: VMRuntime? = nil, checkpoints: [CheckpointRef] = [], plan: Plan? = nil,
-    boot: BootSpec? = nil, extra: ExtraSpec? = nil, share: SharedDirSpec? = nil
+    boot: BootSpec? = nil, extra: ExtraSpec? = nil, provision: ProvisionSpec? = nil,
+    share: SharedDirSpec? = nil
   ) {
     self.schemaVersion = Self.currentSchemaVersion
     self.id = id
@@ -128,12 +131,13 @@ public struct VMRecord: Codable, Sendable, Hashable {
     self.plan = plan
     self.boot = boot
     self.extra = extra
+    self.provision = provision
     self.share = share
   }
 
   enum CodingKeys: String, CodingKey {
     case schemaVersion, id, name, profile, guest, features, resources, image, network, createdAt
-    case state, runtime, checkpoints, plan, boot, extra, share, clonedFrom, backingChain
+    case state, runtime, checkpoints, plan, boot, extra, provision, share, clonedFrom, backingChain
   }
 
   public init(from decoder: any Decoder) throws {
@@ -156,6 +160,7 @@ public struct VMRecord: Codable, Sendable, Hashable {
     clonedFrom = try c.decodeIfPresent(CloneOrigin.self, forKey: .clonedFrom)
     backingChain = try c.decodeIfPresent([String].self, forKey: .backingChain)
     extra = try c.decodeIfPresent(ExtraSpec.self, forKey: .extra)
+    provision = try c.decodeIfPresent(ProvisionSpec.self, forKey: .provision)
     share = try c.decodeIfPresent(SharedDirSpec.self, forKey: .share)
   }
 
