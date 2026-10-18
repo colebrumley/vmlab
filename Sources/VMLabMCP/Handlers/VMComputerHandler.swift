@@ -84,7 +84,8 @@ struct VMComputerHandler: ToolHandler {
         field: "action", reason: "\(action) is not a vm_computer action",
         hint: "Use one of: \(Self.actions.joined(separator: ", ")).")
     }
-    let record = try context.store.find(try arguments.string("vm") ?? "")
+    let record = await context.manager.refreshingAddress(
+      try context.store.find(try arguments.string("vm") ?? ""))
     let endpoint = try DisplayEndpoint.resolve(
       record, vmDirectory: context.store.directory(of: record.id))
     let session = try await context.displays.session(vm: record.id, endpoint: endpoint)

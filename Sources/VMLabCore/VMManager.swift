@@ -264,6 +264,18 @@ public actor VMManager {
     return SSHTarget(record: record, endpoint: endpoint, store: store)
   }
 
+  /// `record` with the address its backend learned since `start` returned (a late DHCP lease,
+  /// which the backend records), so `ip`, forwards and the display follow it. Unchanged when the
+  /// runtime already has an endpoint, the VM is not live or networking is off. Never waits.
+  public func refreshingAddress(_ record: VMRecord) async -> VMRecord {
+    guard record.state.isLive, record.network.mode != .disabled, record.runtime != nil,
+      SSHEndpoint(runtime: record.runtime) == nil,
+      let backend = try? backends.backend(for: record.profile),
+      await backend.sshEndpoint(record, timeout: .zero) != nil
+    else { return record }
+    return (try? store.load(id: record.id)) ?? record
+  }
+
   // MARK: Attach
 
   /// The channels of a running or paused VM; `wrong_state` in any other state.
@@ -281,7 +293,8 @@ public actor VMManager {
           "legalActions": .array(legal.map { .string($0) }),
         ])
     }
-    return try await backends.backend(for: record.profile).attach(record)
+    let current = await refreshingAddress(record)
+    return try await backends.backend(for: current.profile).attach(current)
   }
 
   // MARK: Helpers

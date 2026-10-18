@@ -98,4 +98,54 @@ import VMLabCore
     #expect(stack.vncPassword.map { $0 + "\n" } == password)
     #expect(stack.vncPort == 5900)
   }
+
+  /// A lease that appears after `start` stopped waiting still yields the SSH endpoint, and it is
+  /// recorded as `runtime.ip` for that runner only (both VZ backends).
+  @Test(arguments: [Profile.vzLinux, .vzMacOS]) func lateLeaseIsWaitedForAndRecorded(
+    profile: Profile
+  ) async throws {
+    let home = FileManager.default.temporaryDirectory.appending(path: "vmlab-vzlease-\(UUID())")
+    defer { try? FileManager.default.removeItem(at: home) }
+    let store = Store(home: home)
+    var record = try store.create(
+      VMRecord(
+        id: "", profile: profile, guest: GuestSpec(os: .linux, arch: .arm64),
+        features: [.execSSH]))
+    record = try store.update(id: record.id) {
+      $0.state = .running
+      $0.runtime = VMRuntime(pid: 4242, controlSocket: "/nonexistent/control.sock")
+    }
+    let mac = VZRunnerConfig.stableMAC(for: record.id)
+    try VZRunnerConfig(
+      cpus: 1, memoryBytes: 1 << 30, boot: .efi(variableStore: "efi.bin"), disks: [],
+      network: [.nat(macAddress: mac)]
+    )
+    .write(to: VZRunnerPaths(vmDirectory: store.directory(of: record.id)).config)
+    let leases = home.appending(path: "dhcpd_leases")
+    let backend: any Backend =
+      profile == .vzLinux
+      ? VZBackend(store: store, leasePath: leases.path)
+      : VZMacBackend(store: store, leasePath: leases.path)
+
+    #expect(await backend.sshEndpoint(record, timeout: .zero) == nil)
+    let expires = String(Int(Date().timeIntervalSince1970) + 3600, radix: 16)
+    let writer = Task {
+      try await Task.sleep(for: .milliseconds(600))
+      try Data(
+        "{\n\tname=late\n\tip_address=192.168.64.77\n\thw_address=1,\(mac)\n\tlease=0x\(expires)\n}\n"
+          .utf8
+      ).write(to: leases)
+    }
+    let endpoint = await backend.sshEndpoint(record, timeout: .seconds(10))
+    try await writer.value
+    #expect(endpoint == SSHEndpoint(host: "192.168.64.77"))
+    #expect(try store.load(id: record.id).runtime?.ip == "192.168.64.77")
+
+    // A runner that is no longer the recorded one does not overwrite the record.
+    try store.update(id: record.id) {
+      $0.runtime = VMRuntime(pid: 5151, controlSocket: "/nonexistent/control.sock")
+    }
+    #expect(await backend.sshEndpoint(record, timeout: .zero) != nil)
+    #expect(try store.load(id: record.id).runtime?.ip == nil)
+  }
 }

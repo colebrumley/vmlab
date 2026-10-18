@@ -14,7 +14,8 @@ struct VMInspectHandler: ToolHandler {
   func call(_ arguments: ToolArguments, context: ToolContext) async throws(VMLabError)
     -> ToolResult
   {
-    let record = try context.store.find(try arguments.string("vm") ?? "")
+    let record = await context.manager.refreshingAddress(
+      try context.store.find(try arguments.string("vm") ?? ""))
     var warnings: [String] = []
     let log = EventLog(vmDirectory: context.store.directory(of: record.id))
     var events: [VMEvent] = []

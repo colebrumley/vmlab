@@ -195,6 +195,14 @@ public struct VZMacBackend: Backend {
     try await provisioner.provision(ip: ip)
   }
 
+  /// The recorded endpoint, else a lease that arrived after `start` stopped waiting, recorded
+  /// as `runtime.ip` (`VZBackend.lateLease`).
+  public func sshEndpoint(_ record: VMRecord, timeout: Duration) async -> SSHEndpoint? {
+    if let known = SSHEndpoint(runtime: record.runtime) { return known }
+    guard let ip = await runner.lateLease(record, timeout: timeout) else { return nil }
+    return SSHEndpoint(host: ip)
+  }
+
   public func stop(_ record: VMRecord) async throws(VMLabError) { try await runner.stop(record) }
   public func kill(_ record: VMRecord) async throws(VMLabError) { try await runner.kill(record) }
   public func pause(_ record: VMRecord) async throws(VMLabError) { try await runner.pause(record) }

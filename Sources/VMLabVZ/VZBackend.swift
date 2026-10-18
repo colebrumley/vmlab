@@ -155,6 +155,41 @@ public struct VZBackend: Backend {
     return runtime
   }
 
+  /// The recorded runtime's endpoint, else the guest's DHCP lease, waited for up to `timeout`
+  /// and recorded as `runtime.ip` so `vm_inspect`, forwards and the display see it too (a lease
+  /// that arrived after `start` stopped waiting).
+  public func sshEndpoint(_ record: VMRecord, timeout: Duration) async -> SSHEndpoint? {
+    if let known = SSHEndpoint(runtime: record.runtime) { return known }
+    guard let ip = await lateLease(record, timeout: timeout) else { return nil }
+    return SSHEndpoint(host: ip)
+  }
+
+  /// A live guest's lease that `start` did not record, persisted into its `vm.json` (under the
+  /// VM's lock, only while the same runner is still the recorded one). Nil when the guest has no
+  /// NAT NIC, is not running, or leased nothing within `timeout`.
+  func lateLease(_ record: VMRecord, timeout: Duration) async -> String? {
+    guard let runtime = record.runtime, record.state.isLive, record.network.mode != .disabled
+    else { return nil }
+    // Another process may have recorded it already.
+    if let stored = try? store.load(id: record.id), stored.runtime?.pid == runtime.pid,
+      let ip = stored.runtime?.ip, !ip.isEmpty
+    {
+      return ip
+    }
+    guard let config = try? VZRunnerConfig.read(from: paths(record).config),
+      case .nat(let mac?) = config.network.first,
+      let ip = await DHCPLeases.waitForIP(mac: mac, path: leasePath, timeout: timeout)
+    else { return nil }
+    _ = try? store.update(id: record.id) { current in
+      guard current.state.isLive, var live = current.runtime, live.pid == runtime.pid,
+        live.ip == nil
+      else { return }
+      live.ip = ip
+      current.runtime = live
+    }
+    return ip
+  }
+
   public func stop(_ record: VMRecord) async throws(VMLabError) {
     let (client, pid) = target(record)
     // A paused guest cannot hear the power button; Lifecycle allows stop from paused.

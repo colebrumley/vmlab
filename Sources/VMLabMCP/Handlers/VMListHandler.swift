@@ -18,9 +18,12 @@ struct VMListHandler: ToolHandler {
     }
     let fleet = try arguments.string("fleet")
     let (records, unreadable) = try context.store.list()
-    let rows = records.filter { record in
-      (state == nil || record.state == state) && (fleet == nil || record.fleet == fleet)
-    }.map(Self.row)
+    var rows: [JSONValue] = []
+    for record in records
+    where (state == nil || record.state == state) && (fleet == nil || record.fleet == fleet) {
+      // A VZ guest whose lease came after start: pick it up (one lease-file read, no wait).
+      rows.append(Self.row(await context.manager.refreshingAddress(record)))
+    }
     let warnings = unreadable.keys.sorted().map { id in
       "\(id): vm.json does not load (\(unreadable[id]?.message ?? "unreadable"))"
     }
