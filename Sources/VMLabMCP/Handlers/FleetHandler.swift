@@ -61,6 +61,7 @@ struct FleetHandler: ToolHandler {
       throw VMLabError.invalidRequest(
         field: "count", reason: "create needs count", hint: "Add count: how many members.")
     }
+    try FleetPlanning.checkCount(count)
     guard let raw = arguments["requirements"] else {
       throw VMLabError.invalidRequest(
         field: "requirements", reason: "create needs requirements",

@@ -150,6 +150,23 @@ import VMLabCore
     #expect(FleetStore(home: f.context.home).list().isEmpty)
   }
 
+  /// CX-10: a huge count is refused before any member name is built.
+  @Test func aHugeCountIsRefusedFirst() async throws {
+    let f = try Fixture()
+    defer { f.cleanUp() }
+    for count in [1_000_000_000_000, 0, -3, 65] {
+      let error = await #expect(throws: VMLabError.self) {
+        try await f.call([
+          "action": .string("create"), "name": .string("big"), "count": .number(Double(count)),
+          "requirements": VMCreateHandlerTests.Fixture.requirements,
+          "allowUnverified": .bool(true),
+        ])
+      }
+      #expect(error?.data["field"] == .string("count"), "\(count)")
+    }
+    #expect(FleetPlanning.memberNames("x", count: Int.max).count == FleetPlanning.maxMembers)
+  }
+
   @Test func netSegmentCreateListDestroy() async throws {
     let f = try Fixture()
     defer { f.cleanUp() }
