@@ -272,6 +272,9 @@ public actor ImageStore {
   let runner: any CommandRunning
   let searchPaths: [String]
   let now: @Sendable () -> Date
+  /// The pull of each image under way in this process: a second pull joins it (CX-11), since the
+  /// actor is reentrant across the download and both would write the same `.partial`.
+  var pulls: [String: Task<PullResult, any Error>] = [:]
 
   public init(
     home: URL,
@@ -377,6 +380,14 @@ public actor ImageStore {
   /// catalogue asks, and writes `image.json`. A no-op when the pulled file still matches the
   /// published checksum (or the checksum file cannot be fetched and the image is complete).
   public func pull(_ name: String) async throws -> PullResult {
+    if let running = pulls[name] { return try await running.value }
+    let task = Task { try await self.fetch(name) }
+    pulls[name] = task
+    defer { pulls[name] = nil }
+    return try await task.value
+  }
+
+  func fetch(_ name: String) async throws -> PullResult {
     guard let entry = catalogue.image(named: name) else {
       throw VMLabError(
         code: .imageNotFound, message: "No image named \(name) in the catalogue",

@@ -376,6 +376,33 @@ final class TartRunner: CommandRunning {
     #expect(try await images.remove("tiny-arm64"))
   }
 
+  /// Takes its time over each download, so two pulls overlap.
+  final class SlowDownloader: ImageDownloading {
+    let inner: FileDownloader
+    init(_ inner: FileDownloader) { self.inner = inner }
+    func data(from url: URL) async throws -> Data { try await inner.data(from: url) }
+    func download(from url: URL, to destination: URL) async throws {
+      try await Task.sleep(for: .milliseconds(200))
+      try await inner.download(from: url, to: destination)
+    }
+  }
+
+  /// CX-11: two pulls of one image at once share one download (one `.partial`), both succeed.
+  @Test func concurrentPullsOfOneImageShareOneDownload() async throws {
+    let (home, bin) = try Self.sandbox()
+    defer { try? FileManager.default.removeItem(at: home.deletingLastPathComponent()) }
+    let downloader = Self.downloader()
+    let store = ImageStore(
+      home: home, catalogue: try Self.catalogue(), downloader: SlowDownloader(downloader),
+      runner: ConvertRunner(), searchPaths: [bin.path])
+    async let first = store.pull("tiny-arm64")
+    async let second = store.pull("tiny-arm64")
+    let results = try await [first, second]
+    #expect(results[0].image == results[1].image)
+    #expect(downloader.downloads.withLock { $0 } == 1)
+    #expect(store.pulled("tiny-arm64") != nil)
+  }
+
   @Test func defaultHomeHonoursVMLabHome() {
     #expect(ImageStore.defaultHome(environment: ["VMLAB_HOME": "/tmp/x"]).path == "/tmp/x")
     #expect(ImageStore.defaultHome(environment: [:]).lastPathComponent == ".vmlab")
