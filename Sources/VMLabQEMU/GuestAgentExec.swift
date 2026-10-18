@@ -139,6 +139,7 @@ public struct GuestAgentExecChannel: ExecChannel {
       }
     }
     files.close()
+    _ = RemoteShell.stripMarkers(stderr: files.stderrURL, job: job)
     return ExecOutput.collect(
       stdout: files.stdoutURL, stderr: files.stderrURL,
       log: execDirectory.appending(path: "\(job).log"))

@@ -48,14 +48,61 @@ public enum RemoteShell {
     """#
 
   /// A foreground command: stdin, stdout and stderr pass through ssh; the status is the command's.
+  /// Its stderr opens with `startMarker(job:)` before the command runs and closes with
+  /// `doneMarker(job:)` once it has ended, so the host can tell a command that never started
+  /// (safe to run elsewhere) from one that did (CX-4); the host strips both.
   static let foreground = """
     \(jobDirectory)
     mkdir -p "$d" && chmod 700 "$d" || exit 125
+    printf 'vmlab-run:%s\\n' "$1" >&2
     \(inGroup)
     rc=$?
     rm -rf "$d"
+    printf 'vmlab-done:%s\\n' "$1" >&2
     exit $rc
     """
+
+  /// The stderr line a foreground command's script writes before the command runs.
+  public static func startMarker(job: String) -> Data { Data("vmlab-run:\(job)\n".utf8) }
+  /// The stderr text a foreground command's script writes after the command has ended.
+  public static func doneMarker(job: String) -> Data { Data("vmlab-done:\(job)\n".utf8) }
+
+  /// Removes job `job`'s start and done markers from the stderr file at `url` and says which
+  /// were there. The start marker is looked for in the first 64 KB (only ssh's own messages can
+  /// come before it); the done marker only as the file's last bytes.
+  public static func stripMarkers(stderr url: URL, job: String) -> (started: Bool, finished: Bool) {
+    guard let handle = try? FileHandle(forUpdating: url) else { return (false, false) }
+    defer { try? handle.close() }
+    let start = startMarker(job: job)
+    let done = doneMarker(job: job)
+    var size = (try? handle.seekToEnd()) ?? 0
+    var finished = false
+    if size >= UInt64(done.count) {
+      try? handle.seek(toOffset: size - UInt64(done.count))
+      if (try? handle.readToEnd()) == done {
+        finished = true
+        size -= UInt64(done.count)
+        try? handle.truncate(atOffset: size)
+      }
+    }
+    try? handle.seek(toOffset: 0)
+    let head = (try? handle.read(upToCount: 64 * 1024 + start.count)) ?? Data()
+    guard let range = head.range(of: start) else { return (false, finished) }
+    // Shift everything after the marker down over it, then cut the file to its new length.
+    var readAt = UInt64(range.upperBound)
+    var writeAt = UInt64(range.lowerBound)
+    while readAt < size {
+      try? handle.seek(toOffset: readAt)
+      let chunk = (try? handle.read(upToCount: Int(min(1 << 20, size - readAt)))) ?? Data()
+      if chunk.isEmpty { break }
+      try? handle.seek(toOffset: writeAt)
+      try? handle.write(contentsOf: chunk)
+      readAt += UInt64(chunk.count)
+      writeAt += UInt64(chunk.count)
+    }
+    try? handle.truncate(atOffset: writeAt)
+    return (true, finished)
+  }
 
   /// Ends the job's process group (`TERM`, then `KILL` a second later) and, for a background job,
   /// records `signal` as its status when it has none. A job whose group has not written its id
