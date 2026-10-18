@@ -15,6 +15,8 @@ public struct VZRunnerPaths: Sendable, Hashable {
   public var pidFile: URL { vmDirectory.appending(path: "vz.pid") }
   /// The runner's stdout and stderr, appended to across runs.
   public var log: URL { vmDirectory.appending(path: "vz.log") }
+  /// The guest's virtio console as a unix stream socket (R-602), read by `SerialChannel`.
+  public var serialSocket: URL { vmDirectory.appending(path: "serial.sock") }
   /// The `VZRunnerConfig` the runner builds its machine from.
   public var config: URL { vmDirectory.appending(path: "vz-config.json") }
 
@@ -72,15 +74,18 @@ public struct VZRunnerConfig: Codable, Sendable, Hashable {
   public var disks: [Disk]
   public var network: [Network]
   /// Where the runner appends the guest's virtio console output, which it reads from the console
-  /// pipe; nil attaches no console. R-602 adds the `serial.sock` bridge on the same pipes.
+  /// pipe; nil attaches no console.
   public var consoleLog: String?
+  /// Where the runner serves the same console as a unix stream socket (`SerialBridge`, R-602);
+  /// nil serves none. Only meaningful with `consoleLog`.
+  public var serialSocket: String?
   public var memoryBalloon: Bool
   public var graphics: Graphics?
 
   public init(
     cpus: Int, memoryBytes: UInt64, boot: Boot, disks: [Disk],
     network: [Network] = [.nat(macAddress: nil)], consoleLog: String? = nil,
-    memoryBalloon: Bool = true, graphics: Graphics? = nil
+    serialSocket: String? = nil, memoryBalloon: Bool = true, graphics: Graphics? = nil
   ) {
     self.cpus = cpus
     self.memoryBytes = memoryBytes
@@ -88,6 +93,7 @@ public struct VZRunnerConfig: Codable, Sendable, Hashable {
     self.disks = disks
     self.network = network
     self.consoleLog = consoleLog
+    self.serialSocket = serialSocket
     self.memoryBalloon = memoryBalloon
     self.graphics = graphics
   }
@@ -100,7 +106,7 @@ public struct VZRunnerConfig: Codable, Sendable, Hashable {
   /// for the rest), `.disk` boot (default) through EFI with `<vm>/efi-vars.bin` or `.kernel` boot
   /// through `VZLinuxBootLoader`, `<vm>/disk.raw`, `<vm>/seed.iso` read-only when `seed`, one NAT
   /// NIC with `stableMAC(for:)` unless the network is `none`, the console appended to
-  /// `<vm>/console.log`, the balloon, and graphics only when `gui` was granted.
+  /// `<vm>/console.log` and served on `<vm>/serial.sock`, the balloon, and graphics only when `gui` was granted.
   public static func linux(
     record: VMRecord, vmDirectory: URL, boot: BootSpec? = nil, seed: Bool = true
   ) throws(VMLabError) -> VZRunnerConfig {
@@ -136,6 +142,7 @@ public struct VZRunnerConfig: Codable, Sendable, Hashable {
       network: record.network.mode == .disabled
         ? [] : [.nat(macAddress: stableMAC(for: record.id))],
       consoleLog: vmDirectory.appending(path: "console.log").path,
+      serialSocket: vmDirectory.appending(path: "serial.sock").path,
       memoryBalloon: true,
       graphics: record.features.contains(.gui) ? Graphics() : nil)
   }

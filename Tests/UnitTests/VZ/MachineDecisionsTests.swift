@@ -46,6 +46,7 @@ import VMLabVZ
       ])
     #expect(decisions.network.map(\.mac) == [VZRunnerConfig.stableMAC(for: "vm-test01")])
     #expect(decisions.console?.log == "/vmlab/vms/vm-test01/console.log")
+    #expect(decisions.console?.socket == "/vmlab/vms/vm-test01/serial.sock")
     #expect(decisions.entropy && decisions.memoryBalloon)
     #expect(decisions.graphics == nil)
   }

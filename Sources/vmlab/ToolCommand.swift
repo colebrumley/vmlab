@@ -364,3 +364,50 @@ struct LogsCommand: ToolCommand {
     (result.value["lines"]?.arrayValue ?? []).compactMap(\.stringValue).joined(separator: "\n")
   }
 }
+
+// MARK: serial
+
+struct SerialCommand: ToolCommand {
+  static let configuration = CommandConfiguration(
+    commandName: "serial",
+    abstract: "Read, tail, write or wait on a VM's serial console (the vm_serial tool).",
+    discussion: """
+      Offsets count bytes the channel received; each result prints the offset to pass as \
+      --since next. A CLI process has its own channel, so offsets do not carry over between \
+      invocations; serial.log (vmlab logs --source serial) has the whole run.
+      """)
+  static let toolName = "vm_serial"
+
+  @Argument(help: "The VM's id or name.") var vm: String
+  @Argument(help: "read, tail, write or wait.") var action: String
+  @Argument(help: "write: the text to send (\\n is a newline); wait: the pattern.")
+  var value: String?
+  @Option(help: "read, wait: the byte offset to start from.") var since: Int?
+  @Option(help: "tail: how many lines.") var lines: Int?
+  @Option(help: "wait: the longest to block, in seconds.") var timeout: Int?
+  @Flag(help: "Print the result object as JSON.") var json = false
+
+  func arguments() throws -> JSONValue {
+    var object: [String: JSONValue] = ["vm": .string(vm), "action": .string(action)]
+    if let value {
+      if action == "write" {
+        object["text"] = .string(
+          value.replacingOccurrences(of: "\\n", with: "\n").replacingOccurrences(
+            of: "\\r", with: "\r"))
+      } else {
+        object["pattern"] = .string(value)
+      }
+    }
+    if let since { object["since"] = .number(Double(since)) }
+    if let lines { object["lines"] = .number(Double(lines)) }
+    if let timeout { object["timeoutSeconds"] = .number(Double(timeout)) }
+    return .object(object)
+  }
+
+  func render(_ result: ToolResult) -> String {
+    let v = result.value
+    var text = v["text"]?.stringValue ?? ""
+    if !text.isEmpty, !text.hasSuffix("\n") { text += "\n" }
+    return text + "offset: \(Human.int(v["offset"]))"
+  }
+}

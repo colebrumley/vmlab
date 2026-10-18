@@ -558,7 +558,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   SSH to the leased IP; with `gui` required, a screenshot through the in-guest VNC server (R-504
   provisioning) shows a desktop.
 
-- [ ] **R-602 Serial on VZ Linux**
+- [x] **R-602 Serial on VZ Linux**
   The runner bridges the console pipes to `<vm>/serial.sock` with the same wire behaviour as
   R-303 so `SerialChannel` is shared; cloud-init sets `console=hvc0` and a getty on it.
   **Verify:** integration: `vm_serial wait "login:"`, `write "root\n"`, and the prompt appears.

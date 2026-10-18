@@ -183,10 +183,11 @@ final class Runner: NSObject {
     Task { try? await events.append(.lifecycle, "vz: " + message) }
   }
 
-  /// Removes the socket and pid file, if they are still this process's.
+  /// Removes the sockets and pid file, if they are still this process's.
   nonisolated static func cleanUp(_ paths: VZRunnerPaths) {
     guard paths.recordedPID() == getpid() else { return }
     unlink(paths.controlSocket.path)
+    unlink(paths.serialSocket.path)
     unlink(paths.pidFile.path)
   }
 

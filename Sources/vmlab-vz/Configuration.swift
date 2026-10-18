@@ -4,13 +4,15 @@ import VMLabVZ
 @preconcurrency import Virtualization
 
 /// The guest's virtio console: two pipes the runner owns. Guest output is appended to the console
-/// log; the input pipe's write end stays open for R-602's `serial.sock` bridge.
+/// log and, when a socket is configured, bridged to `serial.sock` (`SerialBridge`, R-602), whose
+/// clients' bytes are written to the guest's input pipe.
 final class ConsolePipes: Sendable {
   let guestInput = Pipe()
   let guestOutput = Pipe()
   let log: FileHandle
+  let bridge: SerialBridge?
 
-  init(log path: String) throws(VMLabError) {
+  init(log path: String, socket: String?) throws(VMLabError) {
     let fd = open(path, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0o644)
     guard fd >= 0 else {
       throw VMLabError(
@@ -19,6 +21,19 @@ final class ConsolePipes: Sendable {
         hint: "Check that the VM directory is writable.")
     }
     log = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+    if let socket {
+      do {
+        bridge = try SerialBridge(
+          path: socket, guestInput: guestInput.fileHandleForWriting.fileDescriptor)
+      } catch {
+        throw VMLabError(
+          code: .internal, message: "Cannot listen on \(socket): \(error)",
+          hint: "Check the VM directory and that the path is under 104 bytes.",
+          data: ["socket": .string(socket)])
+      }
+    } else {
+      bridge = nil
+    }
   }
 
   var attachment: VZFileHandleSerialPortAttachment {
@@ -27,15 +42,18 @@ final class ConsolePipes: Sendable {
       fileHandleForWriting: guestOutput.fileHandleForWriting)
   }
 
-  /// Starts copying guest output to the log.
+  /// Starts copying guest output to the log and the bridge, and accepting bridge clients.
   func start() {
     let log = log
+    let bridge = bridge
+    bridge?.start()
     guestOutput.fileHandleForReading.readabilityHandler = { handle in
       let data = handle.availableData
       if data.isEmpty {
         handle.readabilityHandler = nil
       } else {
         try? log.write(contentsOf: data)
+        bridge?.guestOutput([UInt8](data))
       }
     }
   }
@@ -109,7 +127,7 @@ enum ConfigurationBuilder {
 
     var pipes: ConsolePipes? = nil
     if let console = plan.console {
-      let console = try ConsolePipes(log: console.log)
+      let console = try ConsolePipes(log: console.log, socket: console.socket)
       let port = VZVirtioConsoleDeviceSerialPortConfiguration()
       port.attachment = console.attachment
       machine.serialPorts = [port]

@@ -5,7 +5,8 @@
     }
   },
   "console" : {
-    "log" : "/vmlab/vms/vm-test01/console.log"
+    "log" : "/vmlab/vms/vm-test01/console.log",
+    "socket" : "/vmlab/vms/vm-test01/serial.sock"
   },
   "cpus" : 2,
   "entropy" : true,

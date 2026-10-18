@@ -1,10 +1,12 @@
 import Foundation
+import Synchronization
 import VMLabCore
 
 /// The `vz-linux` backend: each guest is a detached `vmlab-vz` runner driven over its control
 /// socket. Create clones the image and writes the VM's SSH key and cloud-init seed; start launches
-/// the runner with `VZRunnerConfig.linux` and records the address the guest leased. R-602 adds the
-/// serial channel and R-605 the checkpoints, so `attach` offers neither yet.
+/// the runner with `VZRunnerConfig.linux` and records the address the guest leased. A guest granted
+/// `serial` gets one `SerialChannel` on the runner's `serial.sock` (R-602), kept for the life of
+/// this backend so offsets stay stable across calls. Checkpoints are R-605.
 public struct VZBackend: Backend {
   public let profile: Profile = .vzLinux
   public let store: Store
@@ -17,6 +19,8 @@ public struct VZBackend: Backend {
   public var leasePath: String
   /// Runs `ssh-keygen` and `hdiutil`.
   public var commands: any CommandRunning
+  /// The connected serial channel of each guest, shared by every copy of this backend.
+  let serialChannels = VZSerialChannels()
 
   public init(
     store: Store, launcher: VZRunnerLauncher = VZRunnerLauncher(),
@@ -96,8 +100,16 @@ public struct VZBackend: Backend {
     let config = try VZRunnerConfig.linux(
       record: record, vmDirectory: dir,
       seed: FileManager.default.fileExists(atPath: dir.appending(path: "seed.iso").path))
+    await serialChannels.drop(record.id)
     let handle = try await launcher.launch(vmDirectory: dir, config: config)
     var runtime = handle.runtime
+    if let socket = config.serialSocket {
+      runtime.serialSocket = socket
+      // Connect now so serial.log follows the boot; a failure here is retried on attach.
+      if record.features.contains(.serial) {
+        _ = try? await serialChannels.channel(for: record.id, socket: socket, vmDirectory: dir)
+      }
+    }
     if case .nat(let mac?) = config.network.first {
       runtime.ip = await DHCPLeases.waitForIP(mac: mac, path: leasePath, timeout: leaseTimeout)
     }
@@ -110,6 +122,7 @@ public struct VZBackend: Backend {
     if try await client.status().state == .paused { try await client.resume() }
     try await client.stop()
     try await waitForExit(pid, within: stopTimeout, record: record, action: "stop")
+    await serialChannels.drop(record.id)
   }
 
   public func kill(_ record: VMRecord) async throws(VMLabError) {
@@ -120,6 +133,7 @@ public struct VZBackend: Backend {
       if pid > 0 { Foundation.kill(pid, SIGKILL) }
     }
     try await waitForExit(pid, within: .seconds(15), record: record, action: "kill")
+    await serialChannels.drop(record.id)
   }
 
   public func pause(_ record: VMRecord) async throws(VMLabError) {
@@ -136,11 +150,20 @@ public struct VZBackend: Backend {
     if (try? await client.exit()) == nil, pid > 0, LivenessProbe.processExists(pid) {
       Foundation.kill(pid, SIGKILL)
     }
+    await serialChannels.drop(record.id)
   }
 
   public func attach(_ record: VMRecord) async throws(VMLabError) -> any RunningVM {
     let handle = try await VMLabVZ.attach(socketPath: target(record).client.socketPath)
-    return VZRunningVM(id: record.id, profile: profile, features: record.features, handle: handle)
+    var serial: SerialChannel? = nil
+    if record.features.contains(.serial) {
+      let socket = record.runtime?.serialSocket ?? paths(record).serialSocket.path
+      // nil when the socket does not answer: the channel reports guest_unreachable.
+      serial = try? await serialChannels.channel(
+        for: record.id, socket: socket, vmDirectory: store.directory(of: record.id))
+    }
+    return VZRunningVM(
+      id: record.id, profile: profile, features: record.features, handle: handle, serial: serial)
   }
 
   /// The runner's client and pid, from the record's runtime or the VM directory.
@@ -170,14 +193,65 @@ public struct VZBackend: Backend {
   }
 }
 
-/// A running VZ guest. Serial (R-602), display (R-503) and checkpoints (R-605) are not wired yet.
+/// The serial channel of each guest one backend drives, connected once and reused while it stays
+/// connected (the runner serves one client at a time, as QEMU does).
+final class VZSerialChannels: Sendable {
+  private let channels = Mutex<[String: Task<SerialChannel, any Error>]>([:])
+
+  /// The guest's connected channel, connecting (and logging to `<vm>/serial.log`) when there is
+  /// none or the last one lost its socket.
+  func channel(for id: String, socket: String, vmDirectory: URL) async throws -> SerialChannel {
+    while true {
+      let (task, fresh) = channels.withLock { tasks -> (Task<SerialChannel, any Error>, Bool) in
+        if let cached = tasks[id] { return (cached, false) }
+        let task = Task {
+          let channel = SerialChannel(
+            socketPath: socket, logURL: vmDirectory.appending(path: "serial.log"))
+          try await channel.start()
+          return channel
+        }
+        tasks[id] = task
+        return (task, true)
+      }
+      let result = await task.result
+      if case .success(let channel) = result, await channel.isConnected { return channel }
+      // Failed, or connected once and since lost its socket: forget it (unless replaced).
+      channels.withLock { if $0[id] == task { $0[id] = nil } }
+      guard fresh else { continue }
+      if case .failure(let error) = result { throw error }
+      throw VMLabError(
+        code: .guestUnreachable, message: "The serial socket closed as soon as it connected.",
+        hint: "Check that the guest is running; see <vm>/vz.log.", data: ["socket": .string(socket)]
+      )
+    }
+  }
+
+  /// Forgets and stops the guest's channel (the guest stopped or is about to restart).
+  func drop(_ id: String) async {
+    let task = channels.withLock { $0.removeValue(forKey: id) }
+    if let channel = try? await task?.value { await channel.stop() }
+  }
+}
+
+/// A running VZ guest. Display (R-503) and checkpoints (R-605) are not wired yet.
 public struct VZRunningVM: RunningVM {
   public let id: String
   public let profile: Profile
   public let features: [Feature]
   public let handle: VZRunnerHandle
+  public let serial: SerialChannel?
 
-  public var serial: SerialChannel? { nil }
+  public init(
+    id: String, profile: Profile, features: [Feature], handle: VZRunnerHandle,
+    serial: SerialChannel? = nil
+  ) {
+    self.id = id
+    self.profile = profile
+    self.features = features
+    self.handle = handle
+    self.serial = serial
+  }
+
   public var display: DisplayEndpoint? { nil }
   public var gdb: GDBEndpoint? { nil }
   public var introspection: (any Introspection)? { nil }

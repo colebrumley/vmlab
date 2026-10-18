@@ -122,6 +122,9 @@ public enum CloudInit {
   /// The merge policy of the user's part: their keys replace ours, lists are appended.
   public static let mergeType = "list(append)+dict(recurse_array)+str()"
   static let boundary = "==VMLAB-CLOUD-INIT-BOUNDARY=="
+  /// The GRUB drop-in that puts the kernel console on `hvc0` (Debian sources
+  /// `/etc/default/grub.d/*.cfg` in order).
+  public static let hvc0GrubDropIn = "/etc/default/grub.d/99-vmlab-console.cfg"
 
   /// Our `#cloud-config` document, before any user part.
   public static func cloudConfig(_ config: CloudInitConfig) -> String {
@@ -155,6 +158,18 @@ public enum CloudInit {
         .list(["systemctl", "enable", "--now", "lightdm"]),
         .list(["systemctl", "enable", "--now", "vmlab-vnc.service"]),
       ]
+    }
+
+    if config.console == .hvc0 {
+      // The image's kernel command line names consoles VZ does not have; the last console= wins,
+      // so kernel messages reach the virtio console from the next boot on (R-602).
+      writeFiles.append(
+        .map([
+          ("path", .string(hvc0GrubDropIn)),
+          ("permissions", "0644"),
+          ("content", .string("GRUB_CMDLINE_LINUX=\"$GRUB_CMDLINE_LINUX console=hvc0\"\n")),
+        ]))
+      runcmd.append(.list(["update-grub"]))
     }
 
     var entries: [(String, YAML)] = [

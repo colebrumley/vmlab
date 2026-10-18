@@ -48,11 +48,16 @@ public struct VZMachineDecisions: Codable, Sendable, Hashable {
   }
 
   /// A `VZVirtioConsoleDeviceSerialPortConfiguration` on a `VZFileHandleSerialPortAttachment`
-  /// over two pipes the runner owns; it appends guest output to `log`.
+  /// over two pipes the runner owns; it appends guest output to `log` and bridges both pipes to
+  /// the unix socket `socket` when set (`SerialBridge`, R-602).
   public struct Console: Codable, Sendable, Hashable {
     public var log: String
+    public var socket: String?
 
-    public init(log: String) { self.log = log }
+    public init(log: String, socket: String? = nil) {
+      self.log = log
+      self.socket = socket
+    }
   }
 
   /// A `VZVirtioGraphicsDeviceConfiguration` with one scanout, plus a USB keyboard and a USB
@@ -113,7 +118,7 @@ extension VZRunnerConfig {
       bootLoader: loader,
       storage: disks.map { .init(path: $0.path, readOnly: $0.readOnly) },
       network: nics,
-      console: consoleLog.map { .init(log: $0) },
+      console: consoleLog.map { .init(log: $0, socket: serialSocket) },
       entropy: true,
       memoryBalloon: memoryBalloon,
       graphics: graphics.map { .init(width: $0.width, height: $0.height) })
