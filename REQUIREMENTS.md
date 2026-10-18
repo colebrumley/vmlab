@@ -667,7 +667,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   watch_read|watch_access, size)`.
   **Verify:** unit test packets; integration under TCG: a watchpoint on a stack address stops.
 
-- [ ] **R-705 Debug session durability**
+- [x] **R-705 Debug session durability**
   The GDB connection is owned by the server, not the request; it reconnects after a server restart
   if the stub is still listening, and `vm_debug info` reports `attached: false` with the endpoint
   when a human has the stub (QEMU allows one client; the tool says so instead of hanging).

@@ -145,6 +145,8 @@ public actor DebugSession {
   private var saved: Saved
   private var target: (any DebugTarget)?
   private var connecting: Task<any DebugTarget, any Error>?
+  /// When the last connect found the stub held by another client (`debug_busy`), until one works.
+  public private(set) var busySince: Date?
   /// What the last resume was, so a SIGTRAP after a step reads as `step`.
   private var lastResume: Resume = .none
 
@@ -367,7 +369,14 @@ public actor DebugSession {
     }
     connecting = task
     defer { connecting = nil }
-    let target = try await Self.value(of: task)
+    let target: any DebugTarget
+    do {
+      target = try await Self.value(of: task)
+    } catch {
+      if error.code == .debugBusy { busySince = busySince ?? Date() }
+      throw error
+    }
+    busySince = nil
     self.target = target
     lastResume = .none
     return target

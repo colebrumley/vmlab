@@ -157,3 +157,55 @@ import VMLabCore
     #expect(GDBDebugTarget.stop(StopReason(kind: .signal, signal: 11)).reason == .signal)
   }
 }
+
+/// R-705: the connection belongs to a process's `DebugSessions`, not to a call.
+@Suite struct DebugSessionDurabilityTests {
+  static func sessions(_ dir: URL) -> DebugSessions {
+    DebugSessions(connector: GDBDebugConnector(replyTimeout: .milliseconds(500)))
+  }
+
+  /// Verify: with the stub held by one server's session, a second server's session gets
+  /// `debug_busy` (and stays unattached) instead of hanging; once the first lets go (its server
+  /// exits), the second connects and inserts the recorded points again.
+  @Test func secondServerIsBusyThenTakesOver() async throws {
+    let stub = try LoopbackGDBStub(handler: try GDBDebugTargetTests.qemuLike())
+    let endpoint = GDBDebugTargetTests.endpoint(stub)
+    let dir = FileManager.default.temporaryDirectory.appending(path: "vmlab-durable-\(UUID())")
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+
+    let first = try await Self.sessions(dir).session(
+      vm: "vm-a", endpoint: endpoint, arch: .arm64, directory: dir)
+    _ = try await first.halt()
+    try await first.add(DebugPoint(address: 0x4008_0004, kind: .software))
+    #expect(await first.attached)
+
+    let second = try await Self.sessions(dir).session(
+      vm: "vm-a", endpoint: endpoint, arch: .arm64, directory: dir)
+    let started = ContinuousClock.now
+    let error = await #expect(throws: VMLabError.self) { try await second.halt() }
+    #expect(error?.code == .debugBusy)
+    #expect(error?.data["endpoint"] == .string(endpoint.address))
+    #expect(ContinuousClock.now - started < .seconds(4))
+    #expect(await second.attached == false)
+    #expect(await second.busySince != nil)
+    // The first session's connection is untouched.
+    #expect(try await first.registers().contains { $0.name == "pc" })
+
+    // The first server exits; the second reconnects and puts the recorded point back.
+    await first.detach()
+    let deadline = ContinuousClock.now + .seconds(5)
+    var stop: DebugStop?
+    while stop == nil, ContinuousClock.now < deadline {
+      stop = try? await second.halt()
+      if stop == nil { try await Task.sleep(for: .milliseconds(100)) }
+    }
+    #expect(stop?.pc == 0x4008_0000)
+    #expect(await second.attached)
+    #expect(await second.busySince == nil)
+    #expect(await second.points == [DebugPoint(address: 0x4008_0004, kind: .software)])
+    #expect(stub.received.filter { $0 == "Z0,40080004,4" }.count == 2)
+    #expect(stub.received.contains("z0,40080004,4"))
+    await second.detach()
+  }
+}

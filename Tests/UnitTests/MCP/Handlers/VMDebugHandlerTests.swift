@@ -191,6 +191,10 @@ import VMLabCore
     let info = try await f.debug("info")
     #expect(info["attached"] == .bool(false))
     #expect(info["endpoint"] == .string("127.0.0.1:1234"))
+    #expect(info["note"]?.stringValue?.hasPrefix("another debugger") == true)
+    f.connector.setBusy(false)
+    _ = try await f.debug("halt")
+    #expect(try await f.debug("info")["note"]?.stringValue?.hasPrefix("vmlab holds") == true)
   }
 
   @Test func planWithoutGDBIsCapabilityMissing() async throws {

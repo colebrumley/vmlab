@@ -109,6 +109,7 @@ struct VMDebugHandler: ToolHandler {
   static func info(_ session: DebugSession, endpoint: GDBEndpoint) async -> [String: JSONValue] {
     let symbolFile = await session.symbolFile
     let attached = await session.attached
+    let busy = await session.busySince
     let file = symbolFile.map { " " + shellQuote($0) } ?? ""
     var result: [String: JSONValue] = [
       "breakpoints": render(await session.points),
@@ -120,8 +121,11 @@ struct VMDebugHandler: ToolHandler {
         attached
           ? "vmlab holds the stub's only connection; a human debugger can attach once this "
             + "vmlab server exits"
-          : "vmlab is not attached; the next vm_debug action connects (QEMU stops the guest "
-            + "when a debugger connects) unless another debugger holds the stub (debug_busy)"),
+          : busy != nil
+            ? "another debugger (a human's gdb or lldb, or another vmlab server) holds the "
+              + "stub; vm_debug actions answer debug_busy until it detaches"
+            : "vmlab is not attached; the next vm_debug action connects (QEMU stops the guest "
+              + "when a debugger connects) unless another debugger holds the stub (debug_busy)"),
     ]
     result["symbolFile"] = symbolFile.map { .string($0) } ?? .null
     return result

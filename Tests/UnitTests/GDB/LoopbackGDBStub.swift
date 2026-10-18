@@ -1,9 +1,10 @@
 import Foundation
 import VMLabGDB
 
-/// A GDB stub on a loopback TCP port that serves exactly one client, like QEMU's: further
-/// connections stay unanswered in the listen backlog (`.ignore`) or are accepted and closed at
-/// once (`.hangUp`). Packets of the served client go to a `FakeGDBStub.Handler`.
+/// A GDB stub on a loopback TCP port that serves one client at a time, like QEMU's: while one is
+/// served, further connections stay unanswered in the listen backlog (`.ignore`, until the
+/// served client goes) or are accepted and closed at once (`.hangUp`). Packets of the served
+/// client go to a `FakeGDBStub.Handler`.
 final class LoopbackGDBStub: @unchecked Sendable {
   enum Others { case ignore, hangUp }
 
@@ -12,8 +13,11 @@ final class LoopbackGDBStub: @unchecked Sendable {
   private let lock = NSLock()
   private var _received: [String] = []
   private var client: Int32 = -1
+  private var _accepted = 0
 
   var received: [String] { lock.withLock { _received } }
+  /// How many clients the stub has served (or is serving).
+  var accepted: Int { lock.withLock { _accepted } }
 
   init(others: Others = .ignore, handler: @escaping FakeGDBStub.Handler) throws {
     let server = socket(AF_INET, SOCK_STREAM, 0)
@@ -32,19 +36,27 @@ final class LoopbackGDBStub: @unchecked Sendable {
     }
     port = Int(UInt16(bigEndian: address.sin_port))
     Thread { [self] in
-      let fd = accept(server, nil, nil)
-      guard fd >= 0 else { return }
-      lock.withLock { client = fd }
-      if others == .hangUp {
-        Thread {
-          while true {
-            let other = accept(server, nil, nil)
-            guard other >= 0 else { return }
-            close(other)
-          }
-        }.start()
+      var first = true
+      // One client at a time; the next is accepted when it has gone (QEMU's behaviour).
+      while true {
+        let fd = accept(server, nil, nil)
+        guard fd >= 0 else { return }
+        lock.withLock {
+          client = fd
+          _accepted += 1
+        }
+        if first && others == .hangUp {
+          Thread {
+            while true {
+              let other = accept(server, nil, nil)
+              guard other >= 0 else { return }
+              close(other)
+            }
+          }.start()
+        }
+        first = false
+        serve(fd, handler)
       }
-      serve(fd, handler)
     }.start()
   }
 
