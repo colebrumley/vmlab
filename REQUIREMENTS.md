@@ -80,14 +80,15 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
 
 ## Phase 0 — Scaffold and loop infrastructure
 
-- [!] **R-000 Repository and toolchain** — blocked (tart on a fresh host only): `brew install
-  cirruslabs/cli/tart` fails on Homebrew 7.0.9 because the tap's formula (2.32.1) uses the disabled
-  `depends_on :macos => :ventura` form outside `on_macos`, and its `softnet` dependency needs
-  `brew trust` of the cirruslabs tap; the tap must be fixed upstream. The dev host has tart 2.32.1,
-  installed by hand from a local tap holding that formula minus those two lines (the same
-  checksummed release; softnet is only for tart's optional `--net-softnet`). `scripts/bootstrap.sh`
-  does not automate that workaround: the owner decides whether it should. Everything else,
-  including `qemu` (11.1.2), is done.
+- [x] **R-000 Repository and toolchain** — verified 2026-10-18 on the dev host: on a fresh clone
+  `scripts/bootstrap.sh` reports qemu 11.1.2 and tart 2.32.1 and `scripts/check.sh` exits 0.
+  Upstream caveat for other hosts: since Homebrew 7.0.0 (2026-09-13) `brew install
+  cirruslabs/cli/tart` fails, because the tap's formula (2.32.1) uses the disabled
+  `depends_on :macos => :ventura` form outside `on_macos` and its `softnet` dependency needs
+  `brew trust` of the cirruslabs tap. The dev host's tart came from a local tap holding that formula
+  minus those two lines (the same checksummed release; softnet is only for tart's optional
+  `--net-softnet`). `scripts/bootstrap.sh` does not automate that workaround; until the tap is fixed
+  upstream a new host installs tart that way by hand.
   `git init`. `swift package init` as a library-plus-executables package named `vmlab`, platform
   `.macOS(.v15)`, Swift tools 6.0, strict concurrency. Targets as in R-001. `scripts/check.sh`:
   `swift format lint --recursive Sources Tests` (fail on findings), `swift build`, `swift test`
