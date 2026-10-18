@@ -73,7 +73,7 @@ import VMLabVZ
     let begun = clock.now
     // The login prompt is watched while start waits for the lease.
     async let sawLogin = Self.waitFor("login:", in: console, within: .seconds(60))
-    let started = try #require(try await manager.perform(.start, on: created.id))
+    let started = try #require(try await manager.performAdmitted(.start, on: created.id))
     defer {
       if let pid = started.runtime?.pid { kill(pid, SIGKILL) }
     }

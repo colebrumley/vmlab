@@ -47,7 +47,7 @@ import VMLabQEMU
         record.network = NetworkSpec(mode: .disabled)
         record.features = [.serial, .execSSH, .execAgent, .netNone]
       }
-      let restarted = try await guest.manager.run(.start, on: guest.record.id)
+      let restarted = try await guest.manager.runAdmitted(.start, on: guest.record.id)
       #expect(restarted.warnings.isEmpty, "\(restarted.warnings)")
       vm = try await guest.manager.attach(guest.record.id)
       let logURL = guest.manager.store.directory(of: guest.record.id).appending(path: "qemu.log")
@@ -63,7 +63,8 @@ import VMLabQEMU
 
       let registry = BackendRegistry()
       registry.register(guest.backend)
-      let context = ToolContext(home: guest.home, backends: registry)
+      let context = ToolContext(
+        home: guest.home, backends: registry, startGate: IntegrationAdmission.gate)
       for via in ["agent", "auto"] {
         let result = try await ToolHandlers.call(
           "vm_exec",

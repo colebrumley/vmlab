@@ -31,7 +31,7 @@ import VMLabQEMU
       #expect(chain.first?.hasPrefix(guest.home.appending(path: "vms/\(id)/backing/").path) == true)
       #expect(QEMUCommandLine.mac(for: clone.id) != QEMUCommandLine.mac(for: id))
 
-      let started = try #require(try await manager.perform(.start, on: clone.id))
+      let started = try #require(try await manager.performAdmitted(.start, on: clone.id))
       let twin = QEMUGuest(
         home: guest.home, manager: manager, backend: guest.backend, backends: guest.backends,
         record: started,

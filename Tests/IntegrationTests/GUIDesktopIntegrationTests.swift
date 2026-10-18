@@ -83,7 +83,7 @@ import VMLabRFB
 
       // R-504: a second boot shows the desktop within 90 s.
       _ = try await guest.manager.perform(.stop, on: guest.record.id)
-      _ = try await guest.manager.perform(.start, on: guest.record.id)
+      _ = try await guest.manager.performAdmitted(.start, on: guest.record.id)
       let second = try await Self.waitForDesktop(guest, timeout: .seconds(90), tag: "second")
       print("desktop after second boot: \(second)")
       #expect(second < .seconds(90))

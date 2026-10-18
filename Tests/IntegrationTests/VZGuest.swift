@@ -50,7 +50,7 @@ struct VZGuest {
         id: "", profile: .vzLinux, guest: plan.guest, features: [], image: "debian-13-arm64",
         share: share),
       plan: plan)
-    let started = try #require(try await manager.perform(.start, on: created.id))
+    let started = try #require(try await manager.performAdmitted(.start, on: created.id))
     let ip = try #require(started.runtime?.ip, "no DHCP lease for the guest's MAC")
     let guest = VZGuest(
       home: home, store: store, backend: backend, manager: manager, record: started, ip: ip)

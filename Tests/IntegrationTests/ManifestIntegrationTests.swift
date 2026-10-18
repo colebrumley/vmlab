@@ -24,7 +24,8 @@ import VMLabQEMU
     let guest = try await QEMUGuest.boot(features: Self.features)
     let registry = BackendRegistry()
     registry.register(guest.backend)
-    let context = ToolContext(home: guest.home, backends: registry)
+    let context = ToolContext(
+      home: guest.home, backends: registry, startGate: IntegrationAdmission.gate)
     do {
       let hostname = try await Self.call(
         "vm_exec", ["command": .string("cat /etc/hostname")], guest: guest, context: context)
@@ -59,7 +60,8 @@ import VMLabQEMU
     let guest = try await QEMUGuest.boot(features: Self.features)
     let registry = BackendRegistry()
     registry.register(guest.backend)
-    let context = ToolContext(home: guest.home, backends: registry)
+    let context = ToolContext(
+      home: guest.home, backends: registry, startGate: IntegrationAdmission.gate)
     do {
       let base = try await Self.call("vm_manifest", [:], guest: guest, context: context)
       let id = try #require(base["id"]?.stringValue)
@@ -111,8 +113,9 @@ import VMLabQEMU
   func macOSManifestListsTheDockAndDiffShowsAutohide() async throws {
     let mac = try await VZMacGuestIntegrationTests.makeGuest(features: [.execSSH], suffix: "f")
     do {
-      _ = try await mac.manager.perform(.start, on: mac.record.id)
-      let context = ToolContext(home: mac.home, backends: mac.registry)
+      _ = try await mac.manager.performAdmitted(.start, on: mac.record.id)
+      let context = ToolContext(
+        home: mac.home, backends: mac.registry, startGate: IntegrationAdmission.gate)
       let reset = try await Self.call(
         "vm_exec", ["command": .string("defaults write com.apple.dock autohide -bool false")],
         mac: mac, context: context)

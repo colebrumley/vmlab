@@ -17,6 +17,10 @@ public protocol StartGating: Sendable {
 
   /// Frees the slot and the reservation of an admitted start. Releasing twice is a no-op.
   func release(_ permit: StartPermit) async
+
+  /// The host-memory admission (pressure, available memory, guests of other homes), or nil for a
+  /// gate that only applies R-107's budget to this home's records.
+  var hostMemory: HostMemoryGuard? { get }
 }
 
 /// One admitted start, held from `admit` to `release`.
@@ -54,7 +58,8 @@ extension Inventory.Guest {
     self.init(
       id: record.id, profile: record.profile, os: record.guest.os,
       memoryGB: record.resources.memoryGB
-        ?? ResourceLimits.defaultResources(for: record.guest.os).memoryGB ?? 0)
+        ?? ResourceLimits.defaultResources(for: record.guest.os).memoryGB ?? 0,
+      pid: record.state.isLive ? record.runtime?.pid : nil)
   }
 }
 
@@ -64,12 +69,14 @@ public actor StartGate: StartGating {
   public static let shared = StartGate()
 
   public nonisolated let limits: ResourceLimits
+  public nonisolated let hostMemory: HostMemoryGuard?
   private var admitted: [UUID: Inventory.Guest] = [:]
   private var slotsInUse = 0
   private var waiters: [(id: UUID, continuation: CheckedContinuation<Void, any Error>)] = []
 
-  public init(limits: ResourceLimits = .defaults) {
+  public init(limits: ResourceLimits = .defaults, hostMemory: HostMemoryGuard? = nil) {
     self.limits = limits
+    self.hostMemory = hostMemory
   }
 
   /// Starts admitted and not yet released.
@@ -85,9 +92,17 @@ public actor StartGate: StartGating {
     do {
       // A waiter cancelled just as a slot was handed to it gives the slot back.
       try Task.checkCancellation()
-      try limits.check(
-        profile: guest.profile, memoryGB: guest.memoryGB,
-        running: budgeted(running(), excluding: guest), host: host)
+      let live = running()
+      let budget = budgeted(live, excluding: guest)
+      if let hostMemory {
+        let liveIDs = Set(live.guests.compactMap(\.id))
+        let pending = admitted.values.filter { $0.id.map { !liveIDs.contains($0) } ?? true }
+        try hostMemory.check(
+          guest, budget: budget, pending: Array(pending), limits: limits, host: host)
+      } else {
+        try limits.check(
+          profile: guest.profile, memoryGB: guest.memoryGB, running: budget, host: host)
+      }
     } catch {
       releaseSlot()
       throw error

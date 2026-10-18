@@ -64,6 +64,43 @@ public struct ResourceLimits: Sendable, Hashable {
       ])
   }
 
+  /// `limit_memory` when the host is under memory pressure (`warn` or `critical`), or when the
+  /// memory the kernel can hand out now, less `pendingGB` of starts still in flight, is below
+  /// `requestedGB` plus `reserveGB`. `hostGuests` is the number of guests running host-wide.
+  public func checkHostMemory(
+    requestedGB: Int, pendingGB: Int = 0, snapshot: HostMemorySnapshot, hostGuests: Int
+  ) throws(VMLabError) {
+    let availableGB = snapshot.availableGB - Double(pendingGB)
+    let data: [String: JSONValue] = [
+      "pressureLevel": .string(snapshot.pressure.name),
+      "availableGB": .number((availableGB * 10).rounded() / 10),
+      "requestedGB": .number(Double(requestedGB)), "reserveGB": .number(reserveGB),
+      "hostGuests": .number(Double(hostGuests)),
+    ]
+    if snapshot.pressure.isElevated {
+      throw VMLabError(
+        code: .limitMemory,
+        message:
+          "The host is under \(snapshot.pressure.name) memory pressure; starting a "
+          + "\(requestedGB) GB guest now would push it into swap",
+        hint:
+          "Stop or destroy guests you no longer need (vm_list; \(hostGuests) guests run on "
+          + "this host, counting other vmlab servers'), then retry.",
+        data: data)
+    }
+    guard Double(requestedGB) + reserveGB > availableGB else { return }
+    throw VMLabError(
+      code: .limitMemory,
+      message:
+        "A \(requestedGB) GB guest does not fit in the host's available memory: "
+        + "\(Self.format((availableGB * 10).rounded() / 10)) GB is available and "
+        + "\(Self.format(reserveGB)) GB stays free for the host",
+      hint:
+        "Ask for less memory (resources.memoryGB) or stop a running guest (\(hostGuests) run on "
+        + "this host, counting other vmlab servers'), then retry.",
+      data: data)
+  }
+
   /// Both dynamic limits for a guest of `profile` with `memoryGB`, macOS count first.
   public func check(
     profile: Profile, memoryGB: Int, running: Inventory, host: HostFacts
@@ -84,12 +121,22 @@ public struct Inventory: Sendable, Hashable {
     public var profile: Profile
     public var os: GuestSpec.OS
     public var memoryGB: Int
+    /// The engine process, once it runs: matches the guest to a host process (`HostMemory`).
+    public var pid: Int32?
+    /// `<home>/vms/<id>`, when known: matches the guest to a host process before its pid is
+    /// recorded.
+    public var directory: String?
 
-    public init(id: String? = nil, profile: Profile, os: GuestSpec.OS, memoryGB: Int) {
+    public init(
+      id: String? = nil, profile: Profile, os: GuestSpec.OS, memoryGB: Int, pid: Int32? = nil,
+      directory: String? = nil
+    ) {
       self.id = id
       self.profile = profile
       self.os = os
       self.memoryGB = memoryGB
+      self.pid = pid
+      self.directory = directory
     }
   }
 
@@ -116,8 +163,18 @@ public struct Inventory: Sendable, Hashable {
 }
 
 extension Store {
-  /// The live guests of this store as an `Inventory`; unreadable records are skipped.
+  /// The live guests of this store as an `Inventory`, each with its VM directory; unreadable
+  /// records are skipped.
   public func inventory() -> Inventory {
-    Inventory(records: (try? list().records) ?? [])
+    Inventory(
+      guests: ((try? list().records) ?? []).filter(\.state.isLive).map { startingGuest($0) })
+  }
+
+  /// The guest a start of `record` adds, with its VM directory so the gate can tell it from the
+  /// host process it is about to become.
+  public func startingGuest(_ record: VMRecord) -> Inventory.Guest {
+    var guest = Inventory.Guest(record: record)
+    guest.directory = directory(of: record.id).path
+    return guest
   }
 }

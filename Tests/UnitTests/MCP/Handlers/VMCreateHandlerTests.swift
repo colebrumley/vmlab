@@ -14,7 +14,10 @@ import VMLabCore
     let backend: FakeBackend
     let progress = ProgressLog()
 
-    init(heartbeat: Duration = .milliseconds(40), catalogue: ImageCatalogue? = nil) throws {
+    init(
+      heartbeat: Duration = .milliseconds(40), catalogue: ImageCatalogue? = nil,
+      hostMemory: HostMemoryGuard? = nil
+    ) throws {
       let base = try ToolHandlerTests.context()
       let (_, bin) = try ImagesTests.sandbox()
       let images = ImageStore(
@@ -25,7 +28,7 @@ import VMLabCore
       registry.register(backend)
       var context = ToolContext(
         home: base.home, probe: base.probe, backends: registry, images: images,
-        startGate: StartGate())
+        startGate: StartGate(hostMemory: hostMemory))
       let progress = progress
       context.progress = ToolProgress { value, _, message in
         progress.add(value, message ?? "")
@@ -141,6 +144,20 @@ import VMLabCore
     #expect(error?.code == .engineError)
     #expect(f.vmDirectories().isEmpty)
     #expect(f.backend.operations == [.create, .start, .destroy])
+  }
+
+  /// Under host memory pressure the autostart is refused with `limit_memory` before the backend
+  /// starts anything, and the created VM is destroyed.
+  @Test func memoryPressureRefusesTheAutostart() async throws {
+    let f = try Fixture(
+      hostMemory: HostMemoryGuard(
+        reader: FixedHostMemory(HostMemorySnapshot(pressure: .warn, availableGB: 20))))
+    defer { f.cleanUp() }
+    let error = await #expect(throws: VMLabError.self) { try await f.create() }
+    #expect(error?.code == .limitMemory)
+    #expect(error?.data["pressureLevel"] == .string("warn"))
+    #expect(f.vmDirectories().isEmpty)
+    #expect(f.backend.operations == [.create, .destroy])
   }
 
   @Test func unsatisfiableRequestIsItsRefusal() async throws {

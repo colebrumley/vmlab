@@ -132,7 +132,7 @@ import VMLabVZ
     let draft = VMRecord(
       id: "", profile: .vzLinux, guest: plan.guest, features: [], image: "debian-13-arm64")
     let created = try await manager().create(draft, plan: plan)
-    var started = try #require(try await manager().perform(.start, on: created.id))
+    var started = try #require(try await manager().performAdmitted(.start, on: created.id))
     defer { if let pid = started.runtime?.pid { kill(pid, SIGKILL) } }
     #expect(started.state == .running)
 

@@ -13,7 +13,8 @@ import VMLabQEMU
       .serial, .netNAT, .introspection, .memoryDump,
     ])
     do {
-      let context = ToolContext(home: guest.home, backends: guest.manager.backends)
+      let context = ToolContext(
+        home: guest.home, backends: guest.manager.backends, startGate: IntegrationAdmission.gate)
       let pci = try await ToolHandlers.call(
         "vm_introspect",
         arguments: .object(["vm": .string(guest.record.id), "query": .string("pci")]),

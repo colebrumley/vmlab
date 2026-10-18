@@ -58,7 +58,7 @@ struct QEMUGuest {
       plan: plan)
     do {
       try prepare?(store.directory(of: created.id))
-      let outcome = try await manager.run(.start, on: created.id)
+      let outcome = try await manager.runAdmitted(.start, on: created.id)
       guard let running = outcome.record else {
         throw VMLabError(code: .internal, message: "start returned no record", hint: "")
       }

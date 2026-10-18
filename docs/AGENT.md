@@ -158,6 +158,11 @@ unbootable. Restoring a checkpoint takes seconds; rebuilding a guest takes minut
 - The host runs at most two macOS guests, across every session on the Mac, and keeps 4 GB of
   memory free. `host_facts` (`runningMacOSGuests`, `freeMemoryGB`) and `vm_list` show where you
   stand before creating more; `limit_macos_guests` and `limit_memory` say how far over you are.
+- `limit_memory` also comes when the Mac itself is short of memory: the kernel reports memory
+  pressure (`data.pressureLevel` `warn` or `critical`), or `data.availableGB` is below the guest's
+  memory plus the reserve. Guests started by other sessions and servers count too
+  (`data.hostGuests`). Stop or destroy guests you no longer need, or ask for less memory; retrying
+  the same start without freeing memory will be refused again.
 
 ## Errors and hints
 

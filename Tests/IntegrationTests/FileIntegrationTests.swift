@@ -13,7 +13,8 @@ import VMLabVZ
     let guest = try await QEMUGuest.boot(features: [.serial, .execSSH, .netNAT])
     let registry = BackendRegistry()
     registry.register(guest.backend)
-    let context = ToolContext(home: guest.home, backends: registry)
+    let context = ToolContext(
+      home: guest.home, backends: registry, startGate: IntegrationAdmission.gate)
     func file(_ arguments: [String: JSONValue]) async throws(VMLabError) -> JSONValue {
       var arguments = arguments
       arguments["vm"] = .string(guest.record.id)

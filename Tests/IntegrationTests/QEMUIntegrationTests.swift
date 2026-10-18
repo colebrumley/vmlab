@@ -25,7 +25,7 @@ import VMLabQEMU
       #expect(!guest.machine.isRunning)
 
       // Reconnect by path: start again, drop the client, attach a fresh backend to the same home.
-      let restarted = try await guest.manager.perform(.start, on: guest.record.id)
+      let restarted = try await guest.manager.performAdmitted(.start, on: guest.record.id)
       // QEMU serves one QMP client at a time: the old server's connection goes first.
       if let restarted { await (try guest.backend.machine(for: restarted)).disconnect() }
       let fresh = QEMUBackend(profile: .qemuHVF, store: Store(home: guest.home))

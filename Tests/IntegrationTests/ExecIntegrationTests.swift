@@ -37,7 +37,8 @@ import VMLabQEMU
     let guest = try await QEMUGuest.boot(features: Self.features)
     let registry = BackendRegistry()
     registry.register(guest.backend)
-    let context = ToolContext(home: guest.home, backends: registry)
+    let context = ToolContext(
+      home: guest.home, backends: registry, startGate: IntegrationAdmission.gate)
     func exec(_ arguments: [String: JSONValue]) async throws(VMLabError) -> JSONValue {
       var arguments = arguments
       arguments["vm"] = .string(guest.record.id)
@@ -97,7 +98,8 @@ import VMLabQEMU
     let guest = try await QEMUGuest.boot(features: Self.features)
     let registry = BackendRegistry()
     registry.register(guest.backend)
-    let context = ToolContext(home: guest.home, backends: registry)
+    let context = ToolContext(
+      home: guest.home, backends: registry, startGate: IntegrationAdmission.gate)
     func call(_ tool: String, _ arguments: [String: JSONValue]) async throws(VMLabError)
       -> JSONValue
     {

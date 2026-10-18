@@ -95,7 +95,7 @@ struct FleetHandler: ToolHandler {
     }
     try FleetPlanning.checkBudget(
       plan: plan, count: count, running: context.store.inventory(), host: context.hostFacts(),
-      limits: context.limits)
+      limits: context.limits, hostMemory: context.startGate.hostMemory)
     await context.progress.step("planned \(count) × \(plan.profile.rawValue)")
 
     let images = context.images

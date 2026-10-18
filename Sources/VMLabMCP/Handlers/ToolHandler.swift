@@ -155,10 +155,12 @@ public struct ToolContext: Sendable {
 
   /// The context of this process: `VMLAB_HOME`, or `~/.vmlab`.
   /// Starts are admitted by the cross-process `FileStartGate`, so every `vmlab` process on this
-  /// home shares the slots and the budget (R-1100).
+  /// home shares the slots and the budget (R-1100), and by the host's memory: the pressure level,
+  /// the available memory and the guests of every other home and server (`HostMemoryGuard`).
   public static func live() -> ToolContext {
     let home = Store.defaultHome()
-    return ToolContext(home: home, startGate: FileStartGate(home: home))
+    return ToolContext(
+      home: home, startGate: FileStartGate(home: home, hostMemory: .live(home: home)))
   }
 
   /// The fast host facts gathered now, merged with the persisted slow probes.

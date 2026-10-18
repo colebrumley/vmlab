@@ -48,7 +48,7 @@ import VMLabVZ
         id: "", profile: .vzLinux, guest: plan.guest, features: [], image: "debian-13-arm64",
         share: SharedDirSpec(host: shared.path)),
       plan: plan)
-    let started = try #require(try await manager.perform(.start, on: created.id))
+    let started = try #require(try await manager.performAdmitted(.start, on: created.id))
     defer {
       if let pid = try? store.load(id: created.id).runtime?.pid { kill(pid, SIGKILL) }
     }

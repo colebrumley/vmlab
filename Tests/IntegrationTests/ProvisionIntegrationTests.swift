@@ -53,7 +53,8 @@ import VMLabMCP
 
       let registry = BackendRegistry()
       registry.register(guest.backend)
-      let context = ToolContext(home: guest.home, backends: registry)
+      let context = ToolContext(
+        home: guest.home, backends: registry, startGate: IntegrationAdmission.gate)
       let inspected = try await ToolHandlers.call(
         "vm_inspect", arguments: .object(["vm": .string(guest.record.id)]), context: context)
       #expect(inspected.warnings.contains { $0.hasPrefix("provision_failed: \(guest.record.id)") })
@@ -78,7 +79,7 @@ import VMLabMCP
       provision: ProvisionSpec(
         runCommands: ["touch /tmp/vmlab-ran && sw_vers -productVersion", "exit 4", "echo never"]))
     do {
-      let outcome = try await mac.manager.run(.start, on: mac.record.id)
+      let outcome = try await mac.manager.runAdmitted(.start, on: mac.record.id)
       #expect(
         outcome.warnings.contains { $0.contains("step runCommands[1] `exit 4` exited 4") },
         "\(outcome.warnings)")
@@ -93,7 +94,8 @@ import VMLabMCP
       let ran = try await vm.channel(.exec).run(ExecRequest(command: "test -e /tmp/vmlab-ran"))
       #expect(ran.exitCode == 0, "\(ran)")
 
-      let context = ToolContext(home: mac.home, backends: mac.registry)
+      let context = ToolContext(
+        home: mac.home, backends: mac.registry, startGate: IntegrationAdmission.gate)
       let inspected = try await ToolHandlers.call(
         "vm_inspect", arguments: .object(["vm": .string(mac.record.id)]), context: context)
       #expect(inspected.warnings.contains { $0.hasPrefix("provision_failed: \(mac.record.id)") })
