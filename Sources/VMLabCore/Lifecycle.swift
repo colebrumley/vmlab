@@ -224,6 +224,9 @@ extension Store {
     let reason: String
     if let runtime = record.runtime {
       let alive = probe.isAlive(runtime.pid)
+      // A VM marked broken while its engine lives (a hung peer, R-1101) stays broken until killed:
+      // a hung process may still accept connections.
+      if alive, record.state == .broken { return nil }
       if alive, probe.isAnswering(runtime) {
         guard record.state != .running, record.state != .paused else { return nil }
         next.state = .running
@@ -240,10 +243,12 @@ extension Store {
     }
     if !diskExists(record) {
       next.state = .broken
+      next.brokenReason = "the disk image is missing"
       return (next, reason + "; the disk image is missing")
     }
     if record.state != .suspended { next.state = .stopped }
     if record.state == .broken { next.state = .broken }
+    if next.state != .broken { next.brokenReason = nil }
     return (next, reason)
   }
 }

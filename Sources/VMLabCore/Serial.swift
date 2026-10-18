@@ -326,15 +326,25 @@ public actor SerialChannel {
     }
   }
 
+  /// How much of the output a timed-out wait returns.
+  static let timeoutTextBytes: UInt64 = 4096
+
   private func expire(_ id: UInt64, pattern: String, timeout: Duration) {
     guard let waiter = waiters.removeValue(forKey: id) else { return }
+    // Partial data (R-1101): what the guest printed while the wait ran, its last 4 KB at most.
+    let end = ring.end
+    let from = max(
+      waiter.since, ring.start, end >= Self.timeoutTextBytes ? end - Self.timeoutTextBytes : 0)
+    let seen = read(since: from)
     waiter.continuation.resume(
       throwing: VMLabError(
         code: .timeout, message: "The serial output did not match the pattern in time.",
-        hint: "Read the tail to see what the guest printed, or wait longer.",
+        hint: "data.text is what the guest printed meanwhile; wait longer or change the pattern.",
         data: [
           "pattern": .string(pattern), "timeoutSeconds": .number(Self.seconds(timeout)),
-          "offset": .number(Double(ring.end)),
+          "offset": .number(Double(end)), "text": .string(seen.text),
+          "start": .number(Double(seen.start)),
+          "truncated": .bool(from > waiter.since),
         ]))
   }
 

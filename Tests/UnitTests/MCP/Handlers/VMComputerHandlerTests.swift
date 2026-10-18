@@ -22,6 +22,8 @@ final class FakeDisplay: DisplaySession, DisplayConnector {
   private let log = Mutex<[Event]>([])
   private let connects = Mutex<[DisplayEndpoint]>([])
   private let counter = Mutex(0)
+  /// Thrown by the next screenshot, when set.
+  let failure = Mutex<VMLabError?>(nil)
 
   init(width: Int = 2560, height: Int = 1600, scale: Double = 0.5) {
     self.width = width
@@ -47,6 +49,7 @@ final class FakeDisplay: DisplaySession, DisplayConnector {
 
   func screenshot(_ request: ScreenshotRequest) async throws(VMLabError) -> ScreenCapture {
     log.withLock { $0.append(.screenshot(request)) }
+    if let failure = failure.withLock({ $0 }) { throw failure }
     let n = counter.withLock {
       $0 += 1
       return $0
@@ -325,5 +328,31 @@ final class FakeDisplay: DisplaySession, DisplayConnector {
       try await f.call(["action": .string("dance")])
     }
     #expect(error?.code == .invalidRequest)
+  }
+}
+
+@Suite struct DeadDisplayTests {
+  @Test func deadHostSideDisplayMarksTheVMBroken() async throws {
+    let f = try VMComputerHandlerTests.Fixture()
+    defer { f.cleanUp() }
+    f.display.failure.withLock {
+      $0 = DeadPeer.error(
+        channel: "display", endpoint: "unix:/tmp/v.sock",
+        reason: "no answer for 5.0 s while waiting for a forced framebuffer update")
+    }
+    let error = await #expect(throws: VMLabError.self) {
+      try await f.call(["action": .string("screenshot")])
+    }
+    #expect(error.map(DeadPeer.isDeadPeer) == true)
+    let record = try f.context.store.load(id: f.record.id)
+    #expect(record.state == .broken)
+    #expect(record.brokenReason?.hasPrefix("display: no answer for 5.0 s") == true)
+    // The display is gone with it: the next call is refused by state.
+    let next = await #expect(throws: VMLabError.self) {
+      try await f.call(["action": .string("screenshot")])
+    }
+    #expect(next?.code == .wrongState)
+    let list = try await ToolHandlers.call("vm_list", arguments: .object([:]), context: f.context)
+    #expect(list.value["vms"]?.arrayValue?.first?["brokenReason"] != nil)
   }
 }

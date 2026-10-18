@@ -825,7 +825,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   of both. Integration test spawns two servers and creates from both at once.
   **Verify:** the integration test passes; no record corruption.
 
-- [ ] **R-1101 Timeouts and hangs**
+- [x] **R-1101 Timeouts and hangs**
   Every guest-facing call has a timeout from Appendix G and returns `timeout` with partial data;
   the QMP, RFB, GDB and control-socket clients detect a dead peer within 5 s and mark the VM
   `broken` with the reason. `vm_lifecycle kill` always works on a `broken` VM.

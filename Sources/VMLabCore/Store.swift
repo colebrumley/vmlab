@@ -80,6 +80,9 @@ public struct VMRecord: Codable, Sendable, Hashable {
   public var extra: ExtraSpec?
   /// The request's `share` (R-404); nil when it had none. Additive: schema 1 still.
   public var share: SharedDirSpec?
+  /// Why the VM is `broken` (R-1101: a dead engine peer, a missing disk); nil in any other state.
+  /// Additive: schema 1 still.
+  public var brokenReason: String?
 
   public init(
     id: String, name: String? = nil, profile: Profile, guest: GuestSpec, features: [Feature],
@@ -109,7 +112,7 @@ public struct VMRecord: Codable, Sendable, Hashable {
 
   enum CodingKeys: String, CodingKey {
     case schemaVersion, id, name, profile, guest, features, resources, image, network, createdAt
-    case state, runtime, checkpoints, plan, boot, extra, share
+    case state, runtime, checkpoints, plan, boot, extra, share, brokenReason
   }
 
   public init(from decoder: any Decoder) throws {
@@ -131,6 +134,7 @@ public struct VMRecord: Codable, Sendable, Hashable {
     boot = try c.decodeIfPresent(BootSpec.self, forKey: .boot)
     extra = try c.decodeIfPresent(ExtraSpec.self, forKey: .extra)
     share = try c.decodeIfPresent(SharedDirSpec.self, forKey: .share)
+    brokenReason = try c.decodeIfPresent(String.self, forKey: .brokenReason)
   }
 
   /// `vm-` plus six lowercase RFC 4648 base32 characters.

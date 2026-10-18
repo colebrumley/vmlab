@@ -188,7 +188,24 @@ public enum ToolHandlers {
         hint: "Call one of: \(specs.map(\.name).joined(separator: ", ")).")
     }
     let checked = try ToolArguments(arguments, spec: handler.spec)
-    return try await handler.call(checked, context: context)
+    do {
+      return try await handler.call(checked, context: context)
+    } catch {
+      await markBrokenOnDeadPeer(error, arguments: checked, context: context)
+      throw error
+    }
+  }
+
+  /// R-1101: an engine peer (QMP, the host-side display, the GDB stub, the VZ control socket)
+  /// that stopped answering marks the VM the call named `broken`, with the reason.
+  static func markBrokenOnDeadPeer(
+    _ error: VMLabError, arguments: ToolArguments, context: ToolContext
+  ) async {
+    guard DeadPeer.isDeadPeer(error) else { return }
+    let named = error.data["vm"]?.stringValue ?? (try? arguments.string("vm")) ?? nil
+    guard let named, let record = try? context.store.find(named) else { return }
+    await context.store.markBroken(id: record.id, reason: DeadPeer.reason(of: error))
+    await context.displays.forget(vm: record.id)
   }
 }
 

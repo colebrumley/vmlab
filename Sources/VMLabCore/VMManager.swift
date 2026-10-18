@@ -117,6 +117,9 @@ public actor VMManager {
       return Outcome(record: updated, warnings: warnings)
     } catch {
       await log(id, "\(action.rawValue) failed: \(error.message)", kind: .error, level: .error)
+      if DeadPeer.isDeadPeer(error) {
+        await store.markBroken(id: id, reason: DeadPeer.reason(of: error))
+      }
       throw error
     }
   }
@@ -153,6 +156,7 @@ public actor VMManager {
       }
       current.state = state
       current.runtime = runtime
+      if state != .broken { current.brokenReason = nil }
     }
     await log(record.id, "\(action.rawValue): \(record.state.rawValue) -> \(state.rawValue)")
     return updated

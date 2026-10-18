@@ -179,6 +179,9 @@ func eventually(_ condition: () async -> Bool) async -> Bool {
     } catch let error as VMLabError {
       #expect(error.code == .timeout)
       #expect(error.data["pattern"] == .string("login:"))
+      // R-1101: the partial output comes back with the timeout.
+      #expect(error.data["text"] == .string("nothing here\n"))
+      #expect(error.data["truncated"] == .bool(false))
     }
     #expect(ContinuousClock.now - started >= .milliseconds(190))
     await channel.stop()

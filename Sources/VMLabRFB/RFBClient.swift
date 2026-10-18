@@ -1,5 +1,7 @@
 import CoreGraphics
 import Foundation
+import Synchronization
+import VMLabCore
 
 /// An RFB 3.8 client that keeps a `Framebuffer` current with incremental update requests.
 ///
@@ -35,18 +37,42 @@ public actor RFBClient {
 
   private var needsFullUpdate = true
   private var loopTask: Task<Void, Never>?
+  private var watchdog: Task<Void, Never>?
+  /// When the server last sent bytes and whether it owes an update (R-1101).
+  nonisolated let peer = PeerClock()
   private var waiters: [(id: Int, target: Int, cont: CheckedContinuation<Void, Error>)] = []
   private var nextWaiterID = 0
 
   /// Connects to `endpoint` and completes the handshake. Call `start()` to begin receiving updates.
-  public static func connect(_ endpoint: RFBEndpoint, password: String? = nil) async throws
-    -> RFBClient
-  {
+  /// A server that accepts the connection but does not finish the handshake within
+  /// `handshakeTimeout` (the dead-peer window, R-1101) fails with `deadPeer`.
+  public static func connect(
+    _ endpoint: RFBEndpoint, password: String? = nil,
+    handshakeTimeout: Duration = DeadPeer.window
+  ) async throws -> RFBClient {
     let transport = try await SocketTransport.connect(endpoint)
+    return try await handshake(over: transport, password: password, timeout: handshakeTimeout)
+  }
+
+  /// `handshake(over:password:)` bounded by `timeout`: when it passes, the transport is closed
+  /// (failing the pending read) and the error is `deadPeer`.
+  public static func handshake(
+    over transport: any RFBTransport, password: String? = nil, timeout: Duration
+  ) async throws -> RFBClient {
+    let expired = ExpiryFlag()
+    let timer = Task {
+      try await Task.sleep(for: timeout)
+      expired.set()
+      await transport.close()
+    }
+    defer { timer.cancel() }
     do {
       return try await handshake(over: transport, password: password)
     } catch {
       await transport.close()
+      if expired.isSet {
+        throw RFBError.deadPeer(DeadPeer.silence(timeout, waitingFor: "the RFB handshake"))
+      }
       throw error
     }
   }
@@ -135,14 +161,52 @@ public actor RFBClient {
 
   /// Starts the background loop: request, apply the update, request again (incrementally unless
   /// the desktop was resized). Stops on the first error, recorded in `loopError`.
-  public func start() {
+  ///
+  /// With `deadPeerWindow` (R-1101) a watchdog runs too: a server that has sent nothing for
+  /// `probeInterval` is sent a non-incremental request for one pixel, which it must answer even
+  /// when the screen is still; one that then stays silent for `deadPeerWindow` is dead, and the
+  /// loop stops with `deadPeer`.
+  public func start(
+    deadPeerWindow: Duration? = nil, probeInterval: Duration = DeadPeer.probeInterval
+  ) {
     guard loopTask == nil else { return }
+    peer.received()
     loopTask = Task { await self.runLoop() }
+    guard let window = deadPeerWindow else { return }
+    watchdog = Task { [weak self] in
+      while !Task.isCancelled {
+        do { try await Task.sleep(for: probeInterval) } catch { return }
+        guard let self, await self.checkPeer(window: window, interval: probeInterval) else {
+          return
+        }
+      }
+    }
+  }
+
+  /// One watchdog tick; false once the loop is over.
+  private func checkPeer(window: Duration, interval: Duration) async -> Bool {
+    guard loopError == nil else { return false }
+    if let reason = peer.overdue(window: window) {
+      fail(.deadPeer(reason))
+      loopTask?.cancel()
+      await transport.close()
+      return false
+    }
+    if !peer.isOwed, peer.idle() >= interval, framebuffer.width > 0, framebuffer.height > 0 {
+      peer.awaiting("a forced framebuffer update")
+      let probe: [UInt8] = [3, 0] + be16(0) + be16(0) + be16(1) + be16(1)
+      do { try await transport.write(probe) } catch {
+        fail(.connectionClosed)
+        return false
+      }
+    }
+    return true
   }
 
   /// Stops the loop and closes the connection.
   public func close() async {
     loopTask?.cancel()
+    watchdog?.cancel()
     await transport.close()
     fail(.connectionClosed)
   }
@@ -210,7 +274,7 @@ public actor RFBClient {
   /// its rectangles have arrived, so `snapshot()` never sees half of one.
   @discardableResult
   public func processNextMessage() async throws -> ServerMessage {
-    let io = Reader(transport)
+    let io = Reader(transport, peer: peer)
     let type = try await io.u8()
     switch type {
     case 0:
@@ -297,9 +361,17 @@ public actor RFBClient {
 /// Big-endian field reads over a transport.
 private struct Reader {
   let transport: any RFBTransport
-  init(_ transport: any RFBTransport) { self.transport = transport }
+  let peer: PeerClock?
+  init(_ transport: any RFBTransport, peer: PeerClock? = nil) {
+    self.transport = transport
+    self.peer = peer
+  }
 
-  func bytes(_ n: Int) async throws -> [UInt8] { try await transport.read(exactly: n) }
+  func bytes(_ n: Int) async throws -> [UInt8] {
+    let bytes = try await transport.read(exactly: n)
+    peer?.received()
+    return bytes
+  }
   func u8() async throws -> UInt8 { try await bytes(1)[0] }
   func u16() async throws -> UInt16 {
     let b = try await bytes(2)
@@ -319,3 +391,10 @@ private struct Reader {
 
 private func be16(_ v: Int) -> [UInt8] { [UInt8((v >> 8) & 0xff), UInt8(v & 0xff)] }
 private func be32(_ v: UInt32) -> [UInt8] { (0..<4).map { UInt8((v >> (24 - 8 * $0)) & 0xff) } }
+
+/// Set once, read from anywhere: whether a timer fired.
+final class ExpiryFlag: Sendable {
+  private let flag = Mutex(false)
+  func set() { flag.withLock { $0 = true } }
+  var isSet: Bool { flag.withLock { $0 } }
+}
