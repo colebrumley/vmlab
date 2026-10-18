@@ -215,7 +215,11 @@ M3-and-macOS-15 inference is the fallback when the runner is absent).
 `machine-id.bin`, plus the VM's first-boot record (`provisioned`, `provision.json`, `provision.log`)
 and `provisioning.json` naming which of those it holds, so a restore brings back or removes them with
 the disk they describe (CX-26: a pre-provisioning disk has no vmlab key, so the next start must
-provision again; a checkpoint without the manifest leaves them alone); `disk` mode needs the guest not running; `live` pauses, has the runner
+provision again; a checkpoint without the manifest leaves them alone). Files are replaced all or none
+(`VZCheckpoints.replace`: copies to temporaries, then `RENAME_SWAP`s); a restore first writes
+`<vm>/.vmlab-swap-journal.json` (`SwapJournal`: each swap with the destination's old and the copy's
+inode) and removes it when every swap is made, and `VZCheckpoints.recover` swaps back whatever a dead
+process left made, at the next checkpoint create or restore and at every VZ start (`startSuspended`); `disk` mode needs the guest not running; `live` pauses, has the runner
 `saveMachineStateTo` `state.vzvmsave`, clones the files and the `vz-config.json` the machine was
 built from, and resumes; a live restore ends the runner, clones the files back, starts a held
 (`--hold`) runner from that configuration, restores and resumes (unless the VM was paused), then

@@ -54,6 +54,7 @@ public struct VZCheckpoints: CheckpointProvider {
   // MARK: CheckpointProvider
 
   public func create(id: String, mode: CheckpointMode) async throws(VMLabError) {
+    try Self.recover(journal: Self.journal(vmDirectory: vmDirectory))
     let folder = Self.directory(of: id, vmDirectory: vmDirectory)
     guard !FileManager.default.fileExists(atPath: folder.path) else {
       throw VMLabError.invalidRequest(
@@ -80,11 +81,14 @@ public struct VZCheckpoints: CheckpointProvider {
   }
 
   public func restore(id: String, mode: CheckpointMode) async throws(VMLabError) {
+    try Self.recover(journal: Self.journal(vmDirectory: vmDirectory))
     let folder = try existing(id)
     switch mode {
     case .disk:
       try await refuseIfRunning("restore a disk checkpoint")
-      try Self.load(files, provisioning: provisioning, from: folder)
+      try Self.load(
+        files, provisioning: provisioning, from: folder,
+        journal: Self.journal(vmDirectory: vmDirectory))
     case .live:
       try await restoreLive(id: id, from: folder)
     }
@@ -241,7 +245,7 @@ public struct VZCheckpoints: CheckpointProvider {
   /// the VM's first-boot record always matches the disk it has.
   static func load(
     _ files: [(live: URL, name: String)], provisioning: [(live: URL, name: String)] = [],
-    from folder: URL, using ops: FileOps = .system
+    from folder: URL, using ops: FileOps = .system, journal: URL? = nil
   ) throws(VMLabError) {
     var pairs: [(from: URL?, to: URL)] = files.map { (folder.appending(path: $0.name), $0.live) }
       .filter { FileManager.default.fileExists(atPath: $0.0.path) }
@@ -257,7 +261,7 @@ public struct VZCheckpoints: CheckpointProvider {
         }
       }
     }
-    try replace(pairs, using: ops)
+    try replace(pairs, using: ops, journal: journal)
   }
 
   /// Clones one file over another (or into place).
@@ -309,41 +313,131 @@ public struct VZCheckpoints: CheckpointProvider {
   /// file, so a destination is never missing); a removal renames the destination to its
   /// temporary. A failed swap swaps the earlier ones back. The previous files, left in the
   /// temporaries by the swaps, are removed at the end.
-  static func replace(_ pairs: [(from: URL?, to: URL)], using ops: FileOps) throws(VMLabError) {
+  ///
+  /// With a `journal`, the swaps are written there first (`SwapJournal`) and the journal removed
+  /// once they are all done, so a process that dies partway leaves what `recover(journal:)`
+  /// needs to swap the done ones back. A rollback that fails keeps the journal and the
+  /// temporaries (they hold the previous files) for that recovery.
+  static func replace(
+    _ pairs: [(from: URL?, to: URL)], using ops: FileOps, journal: URL? = nil
+  ) throws(VMLabError) {
     let temps = pairs.map { pair in
       pair.to.deletingLastPathComponent().appending(
         path: ".\(pair.to.lastPathComponent).vmlab-new-\(UUID().uuidString)")
     }
-    defer { for temp in temps { try? FileManager.default.removeItem(at: temp) } }
+    var keepTemps = false
+    defer {
+      if !keepTemps { for temp in temps { try? FileManager.default.removeItem(at: temp) } }
+    }
     for (pair, temp) in zip(pairs, temps) {
       guard let from = pair.from else { continue }
       do { try ops.copy(from, temp) } catch {
         throw ioError("clone \(from.path) to \(pair.to.path)", error)
       }
     }
-    // Whether each destination existed: a swap of a new file is a rename, undone by renaming
-    // back; a removal is a rename of the destination to the temporary, undone the same way.
-    var swapped: [(temp: URL, to: URL, existed: Bool, removal: Bool)] = []
+    // Each swap, with the inodes that later tell whether it was made: a swapped destination's
+    // previous file is in the temporary, a new file's copy is at the destination.
+    var entries: [SwapJournal.Entry] = []
     for (pair, temp) in zip(pairs, temps) {
-      let existed = FileManager.default.fileExists(atPath: pair.to.path)
-      let removal = pair.from == nil
-      if removal && !existed { continue }
-      do {
-        if removal { try ops.exchange(pair.to, temp) } else { try ops.exchange(temp, pair.to) }
-      } catch {
-        for done in swapped.reversed() {
-          if done.removal {
-            _ = rename(done.temp.path, done.to.path)
-          } else if done.existed {
-            try? ops.exchange(done.temp, done.to)
-          } else {
-            _ = rename(done.to.path, done.temp.path)
-          }
-        }
-        throw ioError("replace \(pair.to.path)", error)
-      }
-      swapped.append((temp, pair.to, existed, removal))
+      let old = inode(pair.to)
+      if pair.from == nil && old == nil { continue }
+      entries.append(
+        SwapJournal.Entry(
+          temp: temp.path, to: pair.to.path, oldInode: old, newInode: inode(temp),
+          removal: pair.from == nil))
     }
+    if let journal {
+      do {
+        try JSONEncoder().encode(SwapJournal(entries: entries)).write(to: journal, options: .atomic)
+      } catch {
+        throw ioError("write \(journal.path)", error)
+      }
+    }
+    for (index, entry) in entries.enumerated() {
+      let temp = URL(filePath: entry.temp)
+      let to = URL(filePath: entry.to)
+      do {
+        if entry.removal { try ops.exchange(to, temp) } else { try ops.exchange(temp, to) }
+      } catch {
+        // Inodes tell whether the failed swap itself was made, so it is checked too.
+        if rollBack(entries[...index], using: ops) {
+          if let journal { try? FileManager.default.removeItem(at: journal) }
+        } else {
+          keepTemps = journal != nil
+        }
+        throw ioError("replace \(to.path)", error)
+      }
+    }
+    if let journal { try? FileManager.default.removeItem(at: journal) }
+  }
+
+  /// The swaps of one `replace` in flight (P3), written before the first one.
+  struct SwapJournal: Codable {
+    struct Entry: Codable {
+      var temp: String
+      var to: String
+      /// The destination's inode before the swap; nil when it did not exist.
+      var oldInode: UInt64?
+      /// The temporary copy's inode; nil for a removal.
+      var newInode: UInt64?
+      var removal: Bool
+    }
+    var entries: [Entry]
+  }
+
+  /// `<vm>/.vmlab-swap-journal.json`, the journal of a restore into the VM's files.
+  static func journal(vmDirectory: URL) -> URL {
+    vmDirectory.appending(path: ".vmlab-swap-journal.json")
+  }
+
+  /// Finishes a `replace` that a dead process left half done: swaps back every swap the journal
+  /// lists that was made (told apart by inode), removes the temporaries and the journal. The VM's
+  /// files are then as they were before that restore. Nothing to do without a journal.
+  static func recover(journal: URL, using ops: FileOps = .system) throws(VMLabError) {
+    guard let data = try? Data(contentsOf: journal) else { return }
+    guard let read = try? JSONDecoder().decode(SwapJournal.self, from: data) else {
+      try? FileManager.default.removeItem(at: journal)
+      return
+    }
+    guard rollBack(read.entries[...], using: ops) else {
+      throw VMLabError(
+        code: .internal,
+        message: "Cannot undo an interrupted checkpoint restore listed in \(journal.path)",
+        hint: "Check free disk space and permissions under VMLAB_HOME, then try again.")
+    }
+    for entry in read.entries { try? FileManager.default.removeItem(atPath: entry.temp) }
+    try? FileManager.default.removeItem(at: journal)
+  }
+
+  /// Swaps back, last first, each of `entries` that was made; whether every one came back.
+  static func rollBack(_ entries: ArraySlice<SwapJournal.Entry>, using ops: FileOps) -> Bool {
+    var ok = true
+    for entry in entries.reversed() {
+      let temp = URL(filePath: entry.temp)
+      let to = URL(filePath: entry.to)
+      if let old = entry.oldInode {
+        // Made: the previous file is in the temporary.
+        guard inode(temp) == old else { continue }
+        do {
+          if entry.removal || inode(to) == nil {
+            guard rename(temp.path, to.path) == 0 else { throw FileOps.posixError() }
+          } else {
+            try ops.exchange(temp, to)
+          }
+        } catch { ok = false }
+      } else if let new = entry.newInode, inode(to) == new {
+        // A new file renamed into place: rename it back.
+        if rename(to.path, temp.path) != 0 { ok = false }
+      }
+    }
+    return ok
+  }
+
+  /// The inode of the file at `url` (not following a symlink), nil when there is none.
+  static func inode(_ url: URL) -> UInt64? {
+    var info = stat()
+    guard lstat(url.path, &info) == 0 else { return nil }
+    return UInt64(info.st_ino)
   }
 
   static func ioError(_ what: String, _ error: any Error) -> VMLabError {
@@ -368,7 +462,8 @@ extension VZBackend {
     let folder = VZCheckpoints.directory(of: id, vmDirectory: dir)
     try VZCheckpoints.load(
       VZCheckpoints.stateFiles(of: record, vmDirectory: dir),
-      provisioning: VZCheckpoints.provisioningFiles(vmDirectory: dir), from: folder)
+      provisioning: VZCheckpoints.provisioningFiles(vmDirectory: dir), from: folder,
+      journal: VZCheckpoints.journal(vmDirectory: dir))
     let config = try VZRunnerConfig.read(from: folder.appending(path: VZCheckpoints.configFile))
     await serialChannels.drop(record.id)
     let handle = try await launcher.launch(vmDirectory: dir, config: config, hold: true)
@@ -382,7 +477,11 @@ extension VZBackend {
 
   /// A suspended VM's start (R-800's `checkpoint_stop`): a held runner built from the checkpoint
   /// it resumes from; the manager's restore then loads the saved state into it.
+  /// Every start of a VZ guest (both backends) comes here first, so it also finishes a restore
+  /// that a dead process left half done (`VZCheckpoints.recover`) before the disk is used.
   func startSuspended(_ record: VMRecord) async throws(VMLabError) -> VMRuntime? {
+    try VZCheckpoints.recover(
+      journal: VZCheckpoints.journal(vmDirectory: store.directory(of: record.id)))
     guard record.state == .suspended, let resume = try store.checkpoints(of: record.id).resume
     else { return nil }
     let runtime = try await prepareHeld(record, checkpoint: resume)

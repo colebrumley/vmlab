@@ -199,6 +199,73 @@ import VMLabCore
     #expect(try leftovers(in: f.dir).isEmpty)
   }
 
+  /// P3: a restore that dies between its swaps (here: every swap after the first fails, the
+  /// rollback's too, as if the process were gone) leaves a journal; the next checkpoint call or
+  /// start swaps the made ones back, so the VM never runs a checkpoint's disk with its current
+  /// EFI variables.
+  @Test func anInterruptedRestoreIsRolledBackFromItsJournal() async throws {
+    let f = try Fixture()
+    defer { f.cleanUp() }
+    try await f.provider().create(id: "cp-iiiiii", mode: .disk)
+    for name in VZCheckpoints.clonedFiles {
+      try Data("\(name) v2".utf8).write(to: f.dir.appending(path: name))
+    }
+    let failing = FailingOn(0)
+    let ops = VZCheckpoints.FileOps(
+      copy: VZCheckpoints.FileOps.system.copy,
+      exchange: { a, b in
+        failing.calls += 1
+        if failing.calls > 1 { throw POSIXError(.EIO) }
+        try VZCheckpoints.FileOps.system.exchange(a, b)
+      })
+    let folder = VZCheckpoints.directory(of: "cp-iiiiii", vmDirectory: f.dir)
+    let journal = VZCheckpoints.journal(vmDirectory: f.dir)
+    #expect(throws: VMLabError.self) {
+      try VZCheckpoints.load(f.provider().files, from: folder, using: ops, journal: journal)
+    }
+    // Half done: the checkpoint's disk beside the current EFI variables, and the journal.
+    #expect(try f.file("disk.raw") == "disk.raw v1")
+    #expect(try f.file("efi-vars.bin") == "efi-vars.bin v2")
+    #expect(FileManager.default.fileExists(atPath: journal.path))
+
+    // The next checkpoint call recovers before anything else.
+    try await f.provider().create(id: "cp-jjjjjj", mode: .disk)
+    for name in VZCheckpoints.clonedFiles {
+      #expect(try f.file(name) == "\(name) v2")
+    }
+    #expect(!FileManager.default.fileExists(atPath: journal.path))
+    #expect(try leftovers(in: f.dir).isEmpty)
+  }
+
+  /// A journal that outlives its restore (copied back here after the restore succeeded) finds
+  /// no previous file in its temporaries, so recovery changes nothing and removes it.
+  @Test func aStaleJournalChangesNothing() async throws {
+    let f = try Fixture()
+    defer { f.cleanUp() }
+    try await f.provider().create(id: "cp-kkkkkk", mode: .disk)
+    for name in VZCheckpoints.clonedFiles {
+      try Data("\(name) v2".utf8).write(to: f.dir.appending(path: name))
+    }
+    let journal = VZCheckpoints.journal(vmDirectory: f.dir)
+    // Keep a copy of the journal as it was before the swaps.
+    let saved = f.home.appending(path: "journal-copy.json")
+    let ops = VZCheckpoints.FileOps(
+      copy: VZCheckpoints.FileOps.system.copy,
+      exchange: { a, b in
+        if !FileManager.default.fileExists(atPath: saved.path) {
+          try FileManager.default.copyItem(at: journal, to: saved)
+        }
+        try VZCheckpoints.FileOps.system.exchange(a, b)
+      })
+    let folder = VZCheckpoints.directory(of: "cp-kkkkkk", vmDirectory: f.dir)
+    try VZCheckpoints.load(f.provider().files, from: folder, using: ops, journal: journal)
+    #expect(try f.file("disk.raw") == "disk.raw v1")
+    try FileManager.default.copyItem(at: saved, to: journal)
+    try VZCheckpoints.recover(journal: journal)
+    #expect(try f.file("disk.raw") == "disk.raw v1")
+    #expect(!FileManager.default.fileExists(atPath: journal.path))
+  }
+
   func leftovers(in dir: URL) throws -> [String] {
     try FileManager.default.contentsOfDirectory(atPath: dir.path).filter { $0.contains(".vmlab-") }
   }
