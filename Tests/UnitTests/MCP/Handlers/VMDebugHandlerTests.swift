@@ -154,6 +154,33 @@ import VMLabCore
     #expect(f.context.debug.existing(id) == nil)
   }
 
+  /// R-704: the three watchpoint kinds with their sizes, and a watchpoint stop with its address.
+  @Test func watchpointsOfEveryKind() async throws {
+    let f = try Fixture()
+    defer { f.base.cleanUp() }
+    _ = try await f.base.create()
+    for (kind, size) in [("watch_write", 8), ("watch_read", 4), ("watch_access", 1)] {
+      _ = try await f.debug(
+        "breakpoint_add",
+        ["address": .string("0x1000"), "kind": .string(kind), "size": .number(Double(size))])
+    }
+    #expect(
+      f.connector.latest?.inserted == [
+        DebugPoint(address: 0x1000, kind: .watchWrite, size: 8),
+        DebugPoint(address: 0x1000, kind: .watchRead, size: 4),
+        DebugPoint(address: 0x1000, kind: .watchAccess, size: 1),
+      ])
+    _ = try await f.debug("continue")
+    f.connector.latest?.stopNext(
+      DebugStop(reason: .watchpoint, signal: 5, pc: 0x4008_0010, watchAddress: 0x1000))
+    let stop = try await f.debug("wait", ["timeoutSeconds": .number(1)])
+    #expect(stop["reason"] == .string("watchpoint"))
+    #expect(stop["watchAddress"] == .string("0x1000"))
+    _ = try await f.debug(
+      "breakpoint_remove", ["address": .string("0x1000"), "kind": .string("watch_read")])
+    #expect(f.connector.latest?.inserted.count == 2)
+  }
+
   @Test func busyStubIsDebugBusy() async throws {
     let f = try Fixture()
     defer { f.base.cleanUp() }

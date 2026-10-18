@@ -193,4 +193,54 @@ import VMLabQEMU
     await debug.close()
     await guest.shutdown()
   }
+
+  /// R-704 Verify: under `qemu-tcg`, an access watchpoint on the halted CPU's stack (8 bytes at
+  /// `sp`) stops the guest with reason `watchpoint` and the watched address. A frame the CPU does
+  /// not touch again is retried at the next halt.
+  @Test(.enabled(if: integrationEnabled), .timeLimit(.minutes(6)))
+  func stackWatchpointStopsUnderTCG() async throws {
+    let guest = try await QEMUGuest.boot(
+      features: [.serial, .gdb, .netNAT], memoryGB: 1, profile: .qemuTCG)
+    let debug = Debugger(guest)
+    do {
+      _ = try await guest.machine.serial.wait(
+        for: "Linux version|EFI stub", since: 0, timeout: .seconds(120))
+      var hit: JSONValue?
+      for _ in 0..<6 {
+        _ = try await debug("halt")
+        let sp = try #require(try await debug("registers")["registers"]?["sp"]?.stringValue)
+        let address = try #require(UInt64(sp.dropFirst(2), radix: 16))
+        let watch: [String: JSONValue] = [
+          "address": .string("0x" + String(address, radix: 16)), "kind": .string("watch_access"),
+          "size": .number(8),
+        ]
+        let added = try await debug("breakpoint_add", watch)
+        #expect(added["breakpoints"]?.arrayValue?.first?["kind"] == .string("watch_access"))
+        _ = try await debug("continue")
+        do {
+          let stop = try await debug("wait", ["timeoutSeconds": .number(20)])
+          if stop["reason"] == .string("watchpoint") {
+            #expect(
+              stop["watchAddress"]?.stringValue.flatMap { UInt64($0.dropFirst(2), radix: 16) }
+                == address)
+            hit = stop
+          }
+        } catch let error as VMLabError where error.code == .timeout {
+          _ = try await debug("halt")
+        }
+        var remove = watch
+        remove["size"] = nil
+        _ = try await debug("breakpoint_remove", remove)
+        if hit != nil { break }
+      }
+      #expect(hit != nil, "no watchpoint on a halted stack was hit")
+      _ = try await debug("continue")
+    } catch {
+      await debug.close()
+      await guest.shutdown()
+      throw error
+    }
+    await debug.close()
+    await guest.shutdown()
+  }
 }

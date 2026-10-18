@@ -662,7 +662,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   **Verify:** integration: halt at start, `registers` shows the reset `pc`, `continue`, serial shows
   firmware output.
 
-- [ ] **R-704 Watchpoints**
+- [x] **R-704 Watchpoints**
   `Z2`/`Z3`/`Z4` write/read/access watchpoints in the client and `breakpoint_add(kind: watch_write|
   watch_read|watch_access, size)`.
   **Verify:** unit test packets; integration under TCG: a watchpoint on a stack address stops.
