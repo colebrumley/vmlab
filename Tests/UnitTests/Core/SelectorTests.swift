@@ -381,4 +381,50 @@ import Testing
     }
     #expect(plans > 50)
   }
+
+  // MARK: R-504 desktop provisioning
+
+  @Test func guiOnVZLinuxInstallsTheDesktop() throws {
+    let plan = try Self.plan(Self.arm, require: [.gui]).get()
+    #expect(plan.profile == .vzLinux)
+    #expect(plan.provisionsDesktop)
+    #expect(plan.startupTier == Profile.vzLinux.startupTier + 1)
+    #expect(plan.estimatedStartupSeconds == 15 + Plan.desktopInstallSeconds)
+    #expect(plan.notes.contains { $0.contains("desktop") && $0.contains("first boot") })
+  }
+
+  @Test func guiAloneOnQEMUInstallsNothing() throws {
+    let plan = try Self.plan(Self.arm, require: [.gui, .gdb]).get()
+    #expect(plan.profile == .qemuHVF)
+    #expect(!plan.provisionsDesktop)
+    #expect(plan.startupTier == Profile.qemuHVF.startupTier)
+    #expect(plan.estimatedStartupSeconds == 20)
+    #expect(!plan.notes.contains { $0.contains("desktop") })
+  }
+
+  @Test func guiDesktopOnQEMUInstallsTheDesktop() throws {
+    let plan = try Self.plan(Self.arm, require: [.guiDesktop, .gdb]).get()
+    #expect(plan.profile == .qemuHVF)
+    #expect(plan.provisionsDesktop)
+    #expect(plan.startupTier == Profile.qemuHVF.startupTier + 1)
+    #expect(plan.estimatedStartupSeconds == 20 + Plan.desktopInstallSeconds)
+  }
+
+  @Test func macOSNeverInstallsADesktop() throws {
+    let plan = try Self.plan(Self.mac, require: [.gui]).get()
+    #expect(!plan.provisionsDesktop)
+    #expect(plan.startupTier == Profile.vzMacOS.startupTier)
+  }
+
+  @Test func storedPlanWithoutStartupTierDecodes() throws {
+    let plan = try Self.plan(Self.arm, require: [.gui]).get()
+    guard
+      case .object(var object) = try JSONDecoder().decode(
+        JSONValue.self, from: JSONEncoder().encode(plan))
+    else { return }
+    object["startupTier"] = nil
+    let decoded = try JSONDecoder().decode(
+      Plan.self, from: JSONEncoder().encode(JSONValue.object(object)))
+    #expect(decoded == plan)
+  }
 }
