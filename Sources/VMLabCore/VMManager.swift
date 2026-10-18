@@ -18,10 +18,14 @@ public actor VMManager {
   public nonisolated let readiness: any GuestReadiness
   /// Runs `ssh-keygen` for a new VM's key pair.
   public nonisolated let keygen: any CommandRunning
+  /// The segments VMs join (R-901) and their switch processes.
+  public nonisolated let segments: SegmentStore
+  /// Writes the segment's names into members' `/etc/hosts` (R-902).
+  public nonisolated let naming: any SegmentNaming
   /// What a first start does once SSH answers (R-1001: `provision`).
   public nonisolated let provisioner: any GuestProvisioning
 
-  private var busy: Set<String> = []
+  var busy: Set<String> = []
   private var waiters: [String: [CheckedContinuation<Void, Never>]] = [:]
   /// The cross-process operation lock of each VM this manager is acting on (R-1100).
   private var operationLocks: [String: FileLock] = [:]
@@ -30,8 +34,11 @@ public actor VMManager {
     store: Store, backends: BackendRegistry = Backends.shared,
     readiness: any GuestReadiness = SSHReadiness(), keygen: any CommandRunning = ProcessRunner(),
     provisioner: any GuestProvisioning = SSHProvisioner(),
-    manifests: (any GuestManifestTaker)? = nil
+    manifests: (any GuestManifestTaker)? = nil, segments: SegmentStore? = nil,
+    naming: any SegmentNaming = SSHSegmentHosts()
   ) {
+    self.naming = naming
+    self.segments = segments ?? SegmentStore(home: store.home)
     self.store = store
     self.backends = backends
     self.readiness = readiness
@@ -73,8 +80,12 @@ public actor VMManager {
     if let host = new.share?.host {
       new.share?.host = try PathPolicy.load(home: store.home).check(host, field: "share.host").path
     }
-    let stored = try store.create(new)
+    var stored = try store.create(new)
     do throws(VMLabError) {
+      if let name = Self.segmentName(of: stored) {
+        let attachment = try segments.join(name, vm: stored)
+        stored = try store.update(id: stored.id) { $0.segment = attachment }
+      }
       try await SSHKeys.generateDetached(
         in: store.directory(of: stored.id), comment: "vmlab-\(stored.id)", runner: keygen)
       try await backend.create(stored, plan: plan)
@@ -82,9 +93,12 @@ public actor VMManager {
     } catch {
       // In a task of its own, which a cancelled caller does not cancel, so the cleanup runs whole.
       let store = store
+      let segments = segments
+      let failed = stored
       await Task {
-        try? await backend.destroy(stored)
-        try? store.remove(id: stored.id)
+        try? await backend.destroy(failed)
+        if let name = Self.segmentName(of: failed) { try? segments.leave(name, vm: failed.id) }
+        try? store.remove(id: failed.id)
       }.value
       throw error
     }
@@ -117,7 +131,8 @@ public actor VMManager {
   /// (default the engine's, Appendix G: 60 s for QEMU): a guest still up then is killed, the VM
   /// ends `stopped` and a warning says so. Other actions ignore it.
   public func run(
-    _ action: LifecycleAction, on vm: String, force: Bool = false, timeout: Duration? = nil
+    _ action: LifecycleAction, on vm: String, force: Bool = false, timeout: Duration? = nil,
+    sshTimeout: Duration? = nil
   ) async throws(VMLabError) -> Outcome {
     let id = try store.find(vm).id
     await acquire(id)
@@ -149,7 +164,7 @@ public actor VMManager {
         action, target: target, to: record, with: backend, timeout: timeout,
         warnings: &warnings)
       if action == .start, let updated {
-        let ready = await waitForSSH(updated, backend: backend, timeout: timeout)
+        let ready = await waitForSSH(updated, backend: backend, timeout: sshTimeout ?? timeout)
         if let warning = ready.warning {
           warnings.append(warning)
           if warning != Self.noEndpoint(id) { await log(id, warning, level: .warning) }
@@ -158,7 +173,12 @@ public actor VMManager {
             warnings.append(warning)
             await log(id, warning, level: .warning)
           }
+          if let segment = updated.segment {
+            warnings += await publishNames(segment.segment, focus: id)
+          }
         }
+      } else if action == .destroy, let segment = record.segment {
+        _ = await publishNames(segment.segment, focus: id)
       }
       return Outcome(record: updated, warnings: warnings)
     } catch {
@@ -177,6 +197,7 @@ public actor VMManager {
     var runtime = record.runtime
     switch action {
     case .start:
+      if let segment = record.segment { try await segments.startSwitch(segment.segment) }
       runtime = try await backend.start(record)
       if record.state == .suspended, let started = runtime {
         try await resumeSuspended(record, runtime: started, with: backend)
@@ -200,6 +221,7 @@ public actor VMManager {
     case .destroy:
       if record.state.isLive || record.runtime != nil { try await backend.kill(record) }
       try await backend.destroy(record)
+      if let segment = record.segment { try? segments.leave(segment.segment, vm: record.id) }
       try store.remove(id: record.id)
       return nil
     case .checkpointStop:
@@ -222,13 +244,13 @@ public actor VMManager {
   /// The target when the guest answered SSH; neither when it is not one to wait for (no
   /// `exec_ssh`, networking off); otherwise the warning.
   private func waitForSSH(
-    _ record: VMRecord, backend: any Backend, timeout requested: Duration? = nil
+    _ record: VMRecord, backend: any Backend, timeout limit: Duration? = nil
   ) async -> (target: SSHTarget?, warning: String?) {
     guard record.features.contains(.execSSH), record.network.mode != .disabled else {
       return (nil, nil)
     }
     let timeout =
-      requested ?? ResourceLimits.bootTimeout(profile: record.profile, os: record.guest.os)
+      limit ?? ResourceLimits.bootTimeout(profile: record.profile, os: record.guest.os)
     guard let endpoint = await backend.sshEndpoint(record, timeout: timeout) else {
       return (nil, Self.noEndpoint(record.id))
     }
@@ -241,6 +263,12 @@ public actor VMManager {
   static func seconds(_ duration: Duration?) -> String {
     guard let duration else { return "the engine's default" }
     return "\(duration.components.seconds) s"
+  }
+
+  /// The segment a new VM joins: its request's `network.segment`, unless networking is off.
+  static func segmentName(of record: VMRecord) -> String? {
+    guard record.network.mode != .disabled else { return nil }
+    return record.network.segment
   }
 
   static func noEndpoint(_ id: String) -> String {

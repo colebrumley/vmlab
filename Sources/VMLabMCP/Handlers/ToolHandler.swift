@@ -180,7 +180,8 @@ public enum ToolHandlers {
     VMInspectHandler(), VMLifecycleHandler(), VMExecHandler(), VMJobHandler(), VMFileHandler(),
     VMLogsHandler(), VMSerialHandler(),
     ImagesHandler(), VMComputerHandler(), VMDebugHandler(), VMIntrospectHandler(),
-    VMMemoryDumpHandler(), VMCheckpointHandler(), VMManifestHandler(),
+    VMMemoryDumpHandler(), VMCheckpointHandler(), VMManifestHandler(), NetSegmentHandler(),
+    FleetHandler(),
   ]
 
   private static let byName: [String: any ToolHandler] = Dictionary(

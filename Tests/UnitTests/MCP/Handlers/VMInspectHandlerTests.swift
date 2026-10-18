@@ -24,10 +24,43 @@ import VMLabCore
     #expect(
       endpoints["forwards"]
         == .array([
-          .object(["guest": .number(80), "host": .string("127.0.0.1:8080")]),
-          .object(["guest": .number(443), "host": .string("127.0.0.1:49152")]),
+          .object([
+            "guest": .number(80), "host": .string("127.0.0.1:8080"),
+            "hostReachable": .string("127.0.0.1:8080"),
+          ]),
+          .object([
+            "guest": .number(443), "host": .string("127.0.0.1:49152"),
+            "hostReachable": .string("127.0.0.1:49152"),
+          ]),
         ]))
     #expect(Self.endpoints(VMRuntime(pid: 1, controlSocket: "/q"))["forwards"] == nil)
+  }
+
+  /// R-905: a VZ guest's requested forwards are its NAT address, not a mapped port, and
+  /// vm_create says which it gave.
+  @Test func vzForwardsAreHostReachable() {
+    let record = VMRecord(
+      id: "vm-aaaaaa", profile: .vzLinux, guest: GuestSpec(os: .linux, arch: .arm64),
+      features: [.netPortForward],
+      network: NetworkSpec(forwards: [PortForward(guest: 8000), PortForward(guest: 22, host: 2222)]
+      ),
+      state: .running, runtime: VMRuntime(pid: 1, controlSocket: "/c", ip: "192.168.64.7"))
+    #expect(
+      VMInspectHandler.endpoints(record, store: Self.store)["forwards"]
+        == .array([
+          .object([
+            "guest": .number(8000), "host": .null, "hostReachable": .string("192.168.64.7:8000"),
+          ]),
+          .object([
+            "guest": .number(22), "host": .null, "hostReachable": .string("192.168.64.7:22"),
+          ]),
+        ]))
+    #expect(VMCreateHandler.forwarding(record)["mode"] == .string("host_reachable"))
+    #expect(VMCreateHandler.forwardingNote(record)?.hasPrefix("forwards_not_mapped") == true)
+    var qemu = record
+    qemu.profile = .qemuHVF
+    #expect(VMCreateHandler.forwarding(qemu)["mode"] == .string("hostfwd"))
+    #expect(VMCreateHandler.forwardingNote(qemu) == nil)
   }
 
   /// R-1004: a failed first-boot step is a provision_failed warning with the report; a requested

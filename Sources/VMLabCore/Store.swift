@@ -102,6 +102,10 @@ public struct VMRecord: Codable, Sendable, Hashable {
   public var boot: BootSpec?
   /// The request's `extra` (R-306: `qemuArgs`); nil when it had none. Additive: schema 1 still.
   public var extra: ExtraSpec?
+  /// The VM's address and NIC on its segment (R-901); nil off any segment. Additive: schema 1.
+  public var segment: SegmentAttachment?
+  /// The fleet the VM belongs to (R-903); nil for a VM of its own. Additive: schema 1.
+  public var fleet: String?
   /// The request's `provision` (R-1001); nil when it had none. Additive: schema 1 still.
   public var provision: ProvisionSpec?
   /// The request's `share` (R-404); nil when it had none. Additive: schema 1 still.
@@ -120,7 +124,7 @@ public struct VMRecord: Codable, Sendable, Hashable {
     network: NetworkSpec = NetworkSpec(), createdAt: Date = Date(), state: VMState = .created,
     runtime: VMRuntime? = nil, checkpoints: [CheckpointRef] = [], plan: Plan? = nil,
     boot: BootSpec? = nil, extra: ExtraSpec? = nil, provision: ProvisionSpec? = nil,
-    share: SharedDirSpec? = nil,
+    share: SharedDirSpec? = nil, segment: SegmentAttachment? = nil, fleet: String? = nil,
     tartClone: String? = nil
   ) {
     self.schemaVersion = Self.currentSchemaVersion
@@ -139,6 +143,8 @@ public struct VMRecord: Codable, Sendable, Hashable {
     self.plan = plan
     self.boot = boot
     self.extra = extra
+    self.segment = segment
+    self.fleet = fleet
     self.provision = provision
     self.share = share
     self.tartClone = tartClone
@@ -148,6 +154,7 @@ public struct VMRecord: Codable, Sendable, Hashable {
     case schemaVersion, id, name, profile, guest, features, resources, image, network, createdAt
     case state, runtime, checkpoints, plan, boot, extra, provision, share, clonedFrom, backingChain,
       tartClone
+    case segment, fleet
     case brokenReason
   }
 
@@ -171,6 +178,8 @@ public struct VMRecord: Codable, Sendable, Hashable {
     clonedFrom = try c.decodeIfPresent(CloneOrigin.self, forKey: .clonedFrom)
     backingChain = try c.decodeIfPresent([String].self, forKey: .backingChain)
     extra = try c.decodeIfPresent(ExtraSpec.self, forKey: .extra)
+    segment = try c.decodeIfPresent(SegmentAttachment.self, forKey: .segment)
+    fleet = try c.decodeIfPresent(String.self, forKey: .fleet)
     provision = try c.decodeIfPresent(ProvisionSpec.self, forKey: .provision)
     share = try c.decodeIfPresent(SharedDirSpec.self, forKey: .share)
     brokenReason = try c.decodeIfPresent(String.self, forKey: .brokenReason)

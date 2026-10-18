@@ -46,6 +46,12 @@ public final class QEMUBackend: Backend {
       request.sshHostPort = try QEMUMachine.freeLoopbackPort()
       request.forwards = try Self.resolveForwards(record.network.forwards)
     }
+    if let segment = record.segment, record.network.mode != .disabled {
+      let segments = SegmentStore(home: store.home)
+      request.segment = QEMUSegmentNIC(
+        portSocket: segments.portSocket(of: segment.segment, vm: record.id).path,
+        switchSocket: segments.switchSocket(of: segment.segment).path, mac: segment.mac)
+    }
     let machine = try await Self.lift { try await QEMUMachine.launch(request) }
     machines.withLock { $0[record.id] = machine }
     await watch(machine, of: record.id)
@@ -260,6 +266,12 @@ public final class QEMUBackend: Backend {
           [GuestMount(tag: SharedDirSpec.tag, guestPath: $0.guestPath, kind: .ninep)]
         } ?? []
       ).provisioned(record.provision)
+      config?.applyTemplate(images.pulled(image)?.template)
+      if let segment = record.segment, record.network.mode != .disabled {
+        config?.segment = SegmentNIC(
+          primaryMAC: QEMUCommandLine.mac(for: record.id), mac: segment.mac,
+          address: segment.address, prefixLength: segment.prefixLength)
+      }
     }
     return QEMULaunchRequest(
       record: record, plan: plan, layout: layout, baseImage: base, boot: boot, seed: config,

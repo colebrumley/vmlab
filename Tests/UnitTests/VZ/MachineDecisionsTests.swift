@@ -184,3 +184,23 @@ import VMLabVZ
     #expect(try VZRunnerConfig.read(from: file) == config)
   }
 }
+
+extension MachineDecisionsTests {
+  /// R-901: a segment member gets a second NIC after NAT, on the switch's attach socket.
+  @Test func segmentNICFollowsNAT() throws {
+    var record = Self.record()
+    record.segment = SegmentAttachment(
+      segment: "lab", address: "10.1.0.10", mac: SegmentAttachment.mac(for: "vm-test01"))
+    let config = try VZRunnerConfig.linux(
+      record: record, vmDirectory: Self.dir, segmentAttachSocket: "/vmlab/segments/lab/attach.sock")
+    let decisions = try config.decisions(limits: Self.limits)
+    #expect(decisions.network.count == 1)
+    #expect(
+      decisions.segment
+        == .init(
+          mac: SegmentAttachment.mac(for: "vm-test01"),
+          attachSocket: "/vmlab/segments/lab/attach.sock"))
+    let plain = try VZRunnerConfig.linux(record: Self.record(), vmDirectory: Self.dir)
+    #expect(try plain.decisions(limits: Self.limits).segment == nil)
+  }
+}

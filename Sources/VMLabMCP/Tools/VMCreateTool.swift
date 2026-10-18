@@ -9,6 +9,8 @@ extension ToolSpec {
       + "require for every channel you will use (serial, gdb, gui, checkpoint_live, ...): tools "
       + "for channels the plan did not grant fail later with capability_missing. Returns the "
       + "resolved plan, so read it to know what you got, plus the VM, its state and endpoints. "
+      + "Requested port forwards are QEMU loopback ports or, on VZ, the guest's own NAT address; "
+      + "forwarding says which, and endpoints.forwards[].hostReachable is where to connect. "
       + "Slow (tens of seconds to minutes); sends progress.",
     inputSchema: Schema.input(
       [
@@ -21,7 +23,8 @@ extension ToolSpec {
     outputShape: """
       { plan: Plan, vm: { id, name }, state,
         endpoints: { ssh?: "host:port", ip?, serial?, display?, gdb?,
-          forwards?: [ { guest, host: "127.0.0.1:port" } ] } }
+          forwards?: [ { guest, host: "127.0.0.1:port" | null, hostReachable: "addr:port" } ] },
+        forwarding: { mode: hostfwd | host_reachable, note } | null }
       """,
     errors: [
       .invalidRequest, .unsatisfiable, .unverifiedCapability, .limitMacOSGuests, .limitMemory,

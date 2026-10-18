@@ -1,5 +1,6 @@
 import Foundation
 import VMLabCore
+import VMLabSwitch
 import VMLabVZ
 @preconcurrency import Virtualization
 
@@ -144,6 +145,13 @@ enum ConfigurationBuilder {
       return device
     }
 
+    if let segment = plan.segment {
+      let device = VZVirtioNetworkDeviceConfiguration()
+      device.attachment = try segmentAttachment(segment)
+      device.macAddress = VZMACAddress(string: segment.mac) ?? .randomLocallyAdministered()
+      machine.networkDevices.append(device)
+    }
+
     var pipes: ConsolePipes? = nil
     if let console = plan.console {
       let console = try ConsolePipes(log: console.log, socket: console.socket)
@@ -201,6 +209,52 @@ enum ConfigurationBuilder {
       throw validationError(error)
     }
     return BuiltMachine(configuration: machine, console: pipes)
+  }
+
+  /// A datagram `socketpair`: one end for the guest's NIC, the other handed to the segment's
+  /// switch over its `attach.sock` (`SCM_RIGHTS`), which answers `ok` once the port exists.
+  static func segmentAttachment(
+    _ segment: VZMachineDecisions.SegmentDevice
+  ) throws(VMLabError) -> VZFileHandleNetworkDeviceAttachment {
+    var pair: [Int32] = [0, 0]
+    guard socketpair(AF_UNIX, SOCK_DGRAM, 0, &pair) == 0 else {
+      throw segmentError(segment, "socketpair: \(String(cString: strerror(errno)))")
+    }
+    defer { close(pair[1]) }
+    for fd in pair {
+      _ = fcntl(fd, F_SETFD, FD_CLOEXEC)
+      UnixSocket.setBuffer(fd, option: SO_SNDBUF, bytes: 1 << 20)
+      UnixSocket.setBuffer(fd, option: SO_RCVBUF, bytes: 4 << 20)
+    }
+    do {
+      let control = try UnixSocket.make(SOCK_STREAM)
+      defer { close(control) }
+      try UnixSocket.connect(control, path: segment.attachSocket)
+      var timeout = timeval(tv_sec: 5, tv_usec: 0)
+      setsockopt(
+        control, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+      try UnixSocket.sendDescriptor(pair[1], over: control)
+      var answer = [UInt8](repeating: 0, count: 8)
+      let count = read(control, &answer, answer.count)
+      guard count >= 2, answer[0] == UInt8(ascii: "o"), answer[1] == UInt8(ascii: "k") else {
+        throw SwitchError.system(call: "attach (no ok from the switch)", errno: errno)
+      }
+    } catch {
+      close(pair[0])
+      throw segmentError(segment, "\(error)")
+    }
+    let attachment = VZFileHandleNetworkDeviceAttachment(
+      fileHandle: FileHandle(fileDescriptor: pair[0], closeOnDealloc: true))
+    return attachment
+  }
+
+  static func segmentError(_ segment: VZMachineDecisions.SegmentDevice, _ why: String)
+    -> VMLabError
+  {
+    VMLabError(
+      code: .engineError, message: "Cannot attach to the segment switch: \(why)",
+      hint: "Check that the segment's vmlab-switch runs (net_segment list).",
+      data: ["engine": .string("vmlab-switch"), "raw": .string(segment.attachSocket)])
   }
 
   /// The identifier stored at `url`, or a new one written there.

@@ -13,6 +13,7 @@ public final class SwitchServer: @unchecked Sendable {
   public let paths: SegmentPaths
   private let dataFD: Int32
   private let statsFD: Int32
+  private let attachFD: Int32
   private let wakeRead: Int32
   private let wakeWrite: Int32
 
@@ -40,6 +41,7 @@ public final class SwitchServer: @unchecked Sendable {
     let fm = FileManager.default
     _ = try UnixSocket.address(paths.switchSocket.path)
     _ = try UnixSocket.address(paths.statsSocket.path)
+    _ = try UnixSocket.address(paths.attachSocket.path)
     try fm.createDirectory(at: paths.portsDirectory, withIntermediateDirectories: true)
     if let text = try? String(contentsOf: paths.pidFile, encoding: .utf8),
       let pid = Int32(text.trimmingCharacters(in: .whitespacesAndNewlines)), pid > 0,
@@ -49,6 +51,7 @@ public final class SwitchServer: @unchecked Sendable {
     }
     unlink(paths.switchSocket.path)
     unlink(paths.statsSocket.path)
+    unlink(paths.attachSocket.path)
 
     var fds: [Int32] = []
     do {
@@ -64,6 +67,12 @@ public final class SwitchServer: @unchecked Sendable {
       guard listen(stats, 16) == 0 else { throw SwitchError.system(call: "listen", errno: errno) }
       UnixSocket.setNonBlocking(stats)
 
+      let attach = try UnixSocket.make(SOCK_STREAM)
+      fds.append(attach)
+      try UnixSocket.bind(attach, path: paths.attachSocket.path)
+      guard listen(attach, 16) == 0 else { throw SwitchError.system(call: "listen", errno: errno) }
+      UnixSocket.setNonBlocking(attach)
+
       var pipeFDs: [Int32] = [0, 0]
       guard pipe(&pipeFDs) == 0 else { throw SwitchError.system(call: "pipe", errno: errno) }
       fds += pipeFDs
@@ -71,11 +80,14 @@ public final class SwitchServer: @unchecked Sendable {
       UnixSocket.setNonBlocking(pipeFDs[1])
 
       try "\(getpid())\n".write(to: paths.pidFile, atomically: true, encoding: .utf8)
-      (dataFD, statsFD, wakeRead, wakeWrite) = (data, stats, pipeFDs[0], pipeFDs[1])
+      (dataFD, statsFD, attachFD, wakeRead, wakeWrite) = (
+        data, stats, attach, pipeFDs[0], pipeFDs[1]
+      )
     } catch {
       for fd in fds { close(fd) }
       unlink(paths.switchSocket.path)
       unlink(paths.statsSocket.path)
+      unlink(paths.attachSocket.path)
       throw error
     }
   }
@@ -116,7 +128,7 @@ public final class SwitchServer: @unchecked Sendable {
       }
 
       let readable = ports.filter { $0.value.peer == nil }.map { ($0.key, $0.value.fd) }
-      var fds = [wakeRead, dataFD, statsFD].map {
+      var fds = [wakeRead, dataFD, statsFD, attachFD].map {
         pollfd(fd: $0, events: Int16(POLLIN), revents: 0)
       }
       fds += readable.map { pollfd(fd: $0.1, events: Int16(POLLIN), revents: 0) }
@@ -130,11 +142,12 @@ public final class SwitchServer: @unchecked Sendable {
       }
       if fds[1].revents & Int16(POLLIN) != 0 { receiveOnSwitchSocket() }
       if fds[2].revents & Int16(POLLIN) != 0 { serveStats() }
+      if fds[3].revents & Int16(POLLIN) != 0 { acceptAttachments() }
       for (index, (port, fd)) in readable.enumerated() {
         // A delivery earlier in this pass may have removed the port and closed its fd, and another
         // thread may since have been given that number: never touch an fd the port no longer owns.
         guard ports[port]?.fd == fd else { continue }
-        let events = fds[3 + index].revents
+        let events = fds[4 + index].revents
         if events & Int16(POLLIN) != 0 {
           receive(on: fd, port: port)
         } else if events & Int16(POLLHUP | POLLERR | POLLNVAL) != 0 {
@@ -239,6 +252,29 @@ public final class SwitchServer: @unchecked Sendable {
     }
   }
 
+  /// Each connection to `attach.sock` carries one datagram socket (`SCM_RIGHTS`) that becomes a
+  /// port, answered with `ok`; a connection that sends none within a second is dropped.
+  private func acceptAttachments() {
+    while true {
+      let client = accept(attachFD, nil, nil)
+      guard client >= 0 else { return }
+      var on: Int32 = 1
+      setsockopt(client, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
+      let flags = fcntl(client, F_GETFL)
+      _ = fcntl(client, F_SETFL, flags & ~O_NONBLOCK)
+      var timeout = timeval(tv_sec: 1, tv_usec: 0)
+      setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+      if let fd = try? UnixSocket.receiveDescriptor(from: client), fd >= 0 {
+        UnixSocket.setNonBlocking(fd)
+        UnixSocket.setBuffer(fd, option: SO_RCVBUF, bytes: Self.socketBuffer)
+        UnixSocket.setBuffer(fd, option: SO_SNDBUF, bytes: Self.socketBuffer)
+        addPort(Port(fd: fd, peer: nil))
+        _ = "ok\n".withCString { write(client, $0, 3) }
+      }
+      close(client)
+    }
+  }
+
   private func serveStats() {
     while true {
       let client = accept(statsFD, nil, nil)
@@ -270,9 +306,10 @@ public final class SwitchServer: @unchecked Sendable {
     for fd in attached { close(fd) }
     for port in ports.values { close(port.fd) }
     ports = [:]
-    for fd in [dataFD, statsFD, wakeRead] { close(fd) }
+    for fd in [dataFD, statsFD, attachFD, wakeRead] { close(fd) }
     unlink(paths.switchSocket.path)
     unlink(paths.statsSocket.path)
+    unlink(paths.attachSocket.path)
     unlink(paths.pidFile.path)
   }
 }

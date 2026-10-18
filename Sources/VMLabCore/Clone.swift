@@ -38,9 +38,16 @@ extension VMManager {
     draft.createdAt = Date()
     draft.clonedFrom = CloneOrigin(vm: sourceID, checkpoint: node?.id, checkpointName: node?.name)
     draft.backingChain = nil
-    let stored = try store.create(draft)
+    // A clone is not in the source's fleet, and gets its own address on the source's segment.
+    draft.segment = nil
+    draft.fleet = nil
+    var stored = try store.create(draft)
     let cloned: VMRecord
     do throws(VMLabError) {
+      if let name = Self.segmentName(of: stored) {
+        let attachment = try segments.join(name, vm: stored)
+        stored = try store.update(id: stored.id) { $0.segment = attachment }
+      }
       try await SSHKeys.generateDetached(
         in: store.directory(of: stored.id), comment: "vmlab-\(stored.id)", runner: keygen)
       let chain = try await backend.clone(source, checkpoint: node, into: stored)
@@ -48,9 +55,12 @@ extension VMManager {
       cloned = try store.update(id: stored.id) { $0.backingChain = chain.map(\.path) }
     } catch {
       let store = store
+      let segments = segments
+      let failed = stored
       await Task {
-        try? await backend.destroy(stored)
-        try? store.remove(id: stored.id)
+        try? await backend.destroy(failed)
+        if let name = Self.segmentName(of: failed) { try? segments.leave(name, vm: failed.id) }
+        try? store.remove(id: failed.id)
       }.value
       throw error
     }

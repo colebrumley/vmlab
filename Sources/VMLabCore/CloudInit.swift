@@ -139,6 +139,12 @@ public struct CloudInitConfig: Codable, Sendable, Hashable {
   /// User-supplied `user-data`, merged after ours (cloud-config, shell script, boothook or
   /// include). Its cloud-config keys win; lists are appended.
   public var extraUserData: String?
+  /// `authorized_keys` lines removed at every boot before sshd starts: a template's parent key
+  /// (R-804, `TemplateInfo.revokedKeys`).
+  public var revokedKeys: [String] = []
+  /// Whether first boot runs `apt-get update`; false for a template child, whose packages are
+  /// already installed (R-804).
+  public var packageUpdate: Bool = true
   /// The request's `provision.runCommands` (R-1001), run as root in order after vmlab's own
   /// `runcmd` entries.
   public var runCommands: [String]
@@ -278,8 +284,12 @@ public enum CloudInit {
     // The image's kernel command line names consoles VZ does not have; the last console= wins,
     // so kernel messages reach the virtio console from the next boot on (R-602). bootcmd runs
     // early in the first boot, before the package install, so a slow first boot cannot delay it.
-    let bootcmd: [YAML] =
+    var bootcmd: [YAML] =
       config.console == .hvc0 ? [.string(hvc0BootCommand)] : []
+    // R-804: a template's parent key goes before sshd starts.
+    if let revoke = revokeCommand(user: config.user, keys: config.revokedKeys) {
+      bootcmd.insert(revoke, at: 0)
+    }
 
     var entries: [(String, YAML)] = [
       ("hostname", .string(config.hostname)),
@@ -300,7 +310,7 @@ public enum CloudInit {
           ])
         ])
       ),
-      ("package_update", true),
+      ("package_update", .bool(config.packageUpdate)),
       ("packages", .list(packages.map(YAML.string))),
     ]
     if !mounts.isEmpty {
@@ -565,5 +575,28 @@ enum YAML: ExpressibleByStringInterpolation, ExpressibleByBooleanLiteral,
       }
     }
     return out + "\""
+  }
+}
+
+extension CloudInit {
+  /// The `bootcmd` that removes `keys` (whole `authorized_keys` lines; matched by their base64
+  /// blob) from the login user's and root's `authorized_keys` before sshd starts (R-804).
+  static func revokeCommand(user: String, keys: [String]) -> YAML? {
+    let blobs = keys.compactMap { line -> String? in
+      let fields = line.split(separator: " ")
+      return fields.first(where: { $0.hasPrefix("AAAA") }).map(String.init)
+    }
+    guard !blobs.isEmpty else { return nil }
+    // A string entry, which cloud-init runs with its own shell; every value single-quoted.
+    let keys = blobs.map(RemoteShell.quote).joined(separator: " ")
+    let script = """
+      h=$(getent passwd \(RemoteShell.quote(user)) | cut -d: -f6)
+      for f in "$h/.ssh/authorized_keys" /root/.ssh/authorized_keys; do
+        [ -f "$f" ] || continue
+        for k in \(keys); do grep -v -F -- "$k" "$f" > "$f.vmlab" || true; cat "$f.vmlab" > "$f"; done
+        rm -f "$f.vmlab"
+      done
+      """
+    return .string(script)
   }
 }

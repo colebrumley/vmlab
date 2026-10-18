@@ -64,9 +64,7 @@ enum LongOperation {
   /// the start's warnings (`ssh_unreachable`).
   static func start(
     _ record: VMRecord, context: ToolContext, sshTimeout: Duration? = nil
-  ) async throws(VMLabError)
-    -> (record: VMRecord, warnings: [String])
-  {
+  ) async throws(VMLabError) -> (record: VMRecord, warnings: [String]) {
     _ = try Lifecycle.transition(.start, from: record.state, vm: record.id)
     let store = context.store
     let manager = context.manager
@@ -78,7 +76,7 @@ enum LongOperation {
       try await typed("start", vm: record.id) {
         try await gate.withStart(
           Inventory.Guest(record: record), running: { store.inventory() }, host: host
-        ) { try await manager.run(.start, on: record.id, timeout: sshTimeout) }
+        ) { try await manager.run(.start, on: record.id, sshTimeout: sshTimeout) }
       }
     }
     if let after = started.record { return (after, started.warnings) }

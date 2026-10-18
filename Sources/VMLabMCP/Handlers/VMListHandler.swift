@@ -16,11 +16,10 @@ struct VMListHandler: ToolHandler {
       }
       state = parsed
     }
-    // Records carry no fleet until Phase 9; a fleet filter matches nothing before then.
     let fleet = try arguments.string("fleet")
     let (records, unreadable) = try context.store.list()
     let rows = records.filter { record in
-      (state == nil || record.state == state) && fleet == nil
+      (state == nil || record.state == state) && (fleet == nil || record.fleet == fleet)
     }.map(Self.row)
     let warnings = unreadable.keys.sorted().map { id in
       "\(id): vm.json does not load (\(unreadable[id]?.message ?? "unreadable"))"
@@ -40,6 +39,8 @@ struct VMListHandler: ToolHandler {
     ]
     if let ip = record.runtime?.ip { row["ip"] = .string(ip) }
     if let port = record.runtime?.sshPort { row["sshPort"] = .number(Double(port)) }
+    if let fleet = record.fleet { row["fleet"] = .string(fleet) }
+    if let segment = record.segment { row["segmentIP"] = .string(segment.address) }
     if let reason = record.brokenReason { row["brokenReason"] = .string(reason) }
     return .object(row)
   }

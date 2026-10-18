@@ -129,7 +129,7 @@ or Unsatisfiable { satisfiable: false, code, message, hint, guest,
 
 ## `vm_create`
 
-Create a VM from requirements: plans it (as vm_plan), pulls the image if needed, provisions it (SSH key, cloud-init) and by default starts it and waits for SSH. Ask in require for every channel you will use (serial, gdb, gui, checkpoint_live, ...): tools for channels the plan did not grant fail later with capability_missing. Returns the resolved plan, so read it to know what you got, plus the VM, its state and endpoints. Slow (tens of seconds to minutes); sends progress.
+Create a VM from requirements: plans it (as vm_plan), pulls the image if needed, provisions it (SSH key, cloud-init) and by default starts it and waits for SSH. Ask in require for every channel you will use (serial, gdb, gui, checkpoint_live, ...): tools for channels the plan did not grant fail later with capability_missing. Returns the resolved plan, so read it to know what you got, plus the VM, its state and endpoints. Requested port forwards are QEMU loopback ports or, on VZ, the guest's own NAT address; forwarding says which, and endpoints.forwards[].hostReachable is where to connect. Slow (tens of seconds to minutes); sends progress.
 
 **Errors:** `invalid_request`, `unsatisfiable`, `unverified_capability`, `limit_macos_guests`, `limit_memory`, `host_missing_tool`, `image_not_found`, `confirm_required`, `provision_failed`, `timeout`, `engine_error`
 
@@ -148,7 +148,8 @@ Create a VM from requirements: plans it (as vm_plan), pulls the image if needed,
 ```
 { plan: Plan, vm: { id, name }, state,
   endpoints: { ssh?: "host:port", ip?, serial?, display?, gdb?,
-    forwards?: [ { guest, host: "127.0.0.1:port" } ] } }
+    forwards?: [ { guest, host: "127.0.0.1:port" | null, hostReachable: "addr:port" } ] },
+  forwarding: { mode: hostfwd | host_reachable, note } | null }
 ```
 
 ## `vm_list`
@@ -188,8 +189,8 @@ Everything about one VM: its record, the plan and resolved features (what channe
 { vm: { id, name }, record: VMRecord, plan: Plan, features: [feature],
   endpoints: { ssh?, ip?, serial?, gdb?,
     display?: { kind, address, auth, passwordFile?, hostSide },
-    forwards?: [ { guest, host: "127.0.0.1:port" } ] },
-  segments: [ { name, ip } ], events: [ Event ], panic?: { line, offset, at },
+    forwards?: [ { guest, host: "127.0.0.1:port" | null, hostReachable: "addr:port" } ] },
+  segments: [ { segment, subnet, ip, prefixLength, mac, names } ], events: [ Event ], panic?: { line, offset, at },
   provision?: { vm, finishedAt, steps: [ { name, command, status, exitCode?, durationMs?,
     error? } ] }, warnings }
 ```
@@ -508,9 +509,9 @@ list: { segments: [ { name, subnet, members } ] }
 
 ## `fleet`
 
-Run several identical VMs as a group. create makes count members named <name>-1 to <name>-n from one plan of requirements (or image, a template), joins them to segment (auto makes one) and waits for SSH on each; some members may fail and are listed with their error. status reports each member; list shows fleets; exec runs command on every member, or on members, in parallel; destroy removes the fleet and its VMs.
+Run several identical VMs as a group. create makes count members named <name>-1 to <name>-n from one plan of requirements (or image, a template), joins them to segment (auto makes one) and waits for SSH on each; some members may fail and are listed with their error. status reports each member; list shows fleets; exec runs command on every member, or on members, in parallel, with vm_exec's options, and returns each member's result and allSucceeded; destroy removes the fleet and its VMs.
 
-**Errors:** `invalid_request`, `unsatisfiable`, `unverified_capability`, `limit_macos_guests`, `limit_memory`, `image_not_found`, `vm_not_found`, `timeout`
+**Errors:** `invalid_request`, `unsatisfiable`, `unverified_capability`, `limit_macos_guests`, `limit_memory`, `image_not_found`, `vm_not_found`, `timeout`, `wrong_state`
 
 **Input**
 
@@ -520,17 +521,23 @@ Run several identical VMs as a group. create makes count members named <name>-1 
 | `allowUnverified` | boolean, default `false` |  | Treat features whose slow probe has not run on this host as available, instead of failing with unverified_capability. |
 | `command` | string |  | exec: the command, as for vm_exec. |
 | `count` | integer, ≥ 1 |  | create: how many members. |
+| `cwd` | string |  | exec: working directory in each guest. |
+| `env` | object |  | exec: extra environment variables. |
 | `image` | string |  | create: image or template; overrides requirements.image. |
 | `members` | array of string |  | exec: only these members. |
 | `name` | string |  | The fleet's name (every action but list). |
 | `requirements` | [requirements](#requirements) |  | What the VM must be. Only guest is required; every other field has a default. |
 | `segment` | string |  | create: segment to join, or auto to make one for the fleet. |
+| `stdin` | string |  | exec: text fed to each member's command. |
 | `timeoutSeconds` | integer, ≥ 1 |  | create: per-member wait for SSH; exec: per-member command timeout. |
+| `user` | string |  | exec: run as this guest user (sudo) instead of the login user. |
+| `via` | `auto` \| `ssh` \| `agent`, default `auto` |  | exec: transport, as for vm_exec. |
 
 **Result**
 
 ```
-create, status: { name, members: [ { vm, state, ip?, error? } ] }
+create, status: { name, segment, subnet, members: [ { vm, id, state, ip?, natIP?,
+  forwards?: [ { guest, host, hostReachable } ], error? } ] }
 list: { fleets: [ { name, members } ] }
 exec: { results: { <member>: ExecResult }, allSucceeded }; destroy: { destroyed: [vm] }
 ```

@@ -65,7 +65,7 @@ public struct VZBackend: Backend {
     let share = SharedDirSpec.of(record)
     try share?.checkHostDirectory(vmDirectory: dir)
     let key = try SSHKeys.generate(in: dir, comment: "vmlab-\(record.id)", runner: commands)
-    let seed = CloudInitConfig(
+    var seed = CloudInitConfig(
       instanceID: record.id, hostname: Self.hostname(for: record), user: pulled.login.user,
       sshPublicKey: key, gui: try Self.guiStack(plan: plan, vmDirectory: dir),
       mounts: share.map {
@@ -76,6 +76,12 @@ public struct VZBackend: Backend {
         ? nil : VZRunnerConfig.stableMAC(for: record.id),
       rosetta: VZRunnerConfig.wantsRosetta(record)
     ).provisioned(record.provision)
+    seed.applyTemplate(pulled.template)
+    if let segment = record.segment, record.network.mode != .disabled {
+      seed.segment = SegmentNIC(
+        primaryMAC: VZRunnerConfig.stableMAC(for: record.id), mac: segment.mac,
+        address: segment.address, prefixLength: segment.prefixLength)
+    }
     do {
       try CloudInit.makeSeed(
         seed, directory: dir.appending(path: "seed"), iso: dir.appending(path: "seed.iso"),
@@ -129,7 +135,10 @@ public struct VZBackend: Backend {
       ? nil : try await ImageStore(home: store.home).resolvingBoot(record.boot, image: record.image)
     let config = try VZRunnerConfig.linux(
       record: record, vmDirectory: dir, boot: boot,
-      seed: FileManager.default.fileExists(atPath: dir.appending(path: "seed.iso").path))
+      seed: FileManager.default.fileExists(atPath: dir.appending(path: "seed.iso").path),
+      segmentAttachSocket: record.segment.map {
+        SegmentStore(home: store.home).attachSocket(of: $0.segment).path
+      })
     await serialChannels.drop(record.id)
     let handle = try await launcher.launch(vmDirectory: dir, config: config)
     var runtime = handle.runtime

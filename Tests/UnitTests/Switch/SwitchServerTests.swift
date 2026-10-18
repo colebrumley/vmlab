@@ -205,3 +205,35 @@ import VMLabSwitch
     #expect(!FileManager.default.fileExists(atPath: paths.pidFile.path))
   }
 }
+
+extension SwitchServerTests {
+  /// R-901: a VZ guest's port arrives as one end of a `socketpair` over `attach.sock`.
+  @Test func socketpairHandedOverAttachSocketBecomesAPort() throws {
+    let h = try Harness()
+    defer { h.stop() }
+    let pa = try h.port("a")
+    var pair: [Int32] = [0, 0]
+    #expect(socketpair(AF_UNIX, SOCK_DGRAM, 0, &pair) == 0)
+    defer { close(pair[0]) }
+    let control = try UnixSocket.make(SOCK_STREAM)
+    try UnixSocket.connect(control, path: h.paths.attachSocket.path)
+    try UnixSocket.sendDescriptor(pair[1], over: control)
+    var answer = [UInt8](repeating: 0, count: 8)
+    let count = read(control, &answer, answer.count)
+    close(control)
+    // As the VZ runner does: its copy is closed once the switch has answered (closing a
+    // descriptor still in flight lets the kernel's unix-socket GC discard it).
+    close(pair[1])
+    #expect(Array(answer[..<max(0, count)]) == Array("ok\n".utf8))
+
+    // The attached end hears a broadcast from the dgram port, and its reply reaches that port.
+    Self.send(pa, SwitchCoreTests.frame(to: SwitchCoreTests.broadcast, from: a))
+    let heard = Self.receive(pair[0])
+    #expect(heard == SwitchCoreTests.frame(to: SwitchCoreTests.broadcast, from: a))
+    let reply = SwitchCoreTests.frame(to: a, from: b, payload: 64)
+    let sent = reply.withUnsafeBytes { Darwin.send(pair[0], $0.baseAddress, $0.count, 0) }
+    #expect(sent == reply.count, "errno \(errno)")
+    #expect(Self.receive(pa) == reply)
+    #expect(try h.stats(afterReceiving: 2).ports == 2)
+  }
+}

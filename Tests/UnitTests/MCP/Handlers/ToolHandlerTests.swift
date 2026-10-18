@@ -55,12 +55,13 @@ import VMLabMCP
         "host_facts", "host_doctor", "images", "vm_plan", "vm_create", "vm_list", "vm_inspect",
         "vm_lifecycle", "vm_exec", "vm_job", "vm_file", "vm_computer", "vm_serial", "vm_debug",
         "vm_introspect", "vm_memory_dump", "vm_checkpoint", "vm_manifest", "vm_logs",
+        "net_segment", "fleet",
       ])
     for handler in ToolHandlers.all {
       #expect(ToolCatalog.spec(named: handler.spec.name) == handler.spec)
       #expect(ToolHandlers.handler(named: handler.spec.name) != nil)
     }
-    #expect(ToolHandlers.handler(named: "fleet") == nil)
+    #expect(ToolHandlers.handler(named: "no_such_tool") == nil)
   }
 
   @Test func argumentsAreCheckedAgainstTheSchema() async throws {

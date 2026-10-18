@@ -20,6 +20,8 @@ public struct MacProvisioner: Sendable {
   /// Overridable for tests.
   public var ssh: @Sendable (PasswordSSH, String, Data) async -> CommandOutput?
   public var rfbProbe: @Sendable (String, Int, Duration) async -> Bool
+  /// The segment NIC to give its static address (R-901), or nil off any segment.
+  public var segment: SegmentAttachment?
 
   public init(
     vmDirectory: URL, login: ImageLogin, hostname: String, publicKey: String,
@@ -69,6 +71,21 @@ public struct MacProvisioner: Sendable {
         sudoInput
       ),
     ]
+    if let segment {
+      // The script goes to a file first (stdin carries the sudo password in the next step).
+      steps.append(
+        (
+          "segment_script", "umask 022 && cat > /tmp/vmlab-segment.sh",
+          Data(Self.segmentScript.utf8)
+        ))
+      steps.append(
+        (
+          "segment_address",
+          "sudo -S -p '' /bin/sh /tmp/vmlab-segment.sh \(segment.mac) \(segment.address) "
+            + Self.netmask(segment.prefixLength),
+          sudoInput
+        ))
+    }
     if let vncPassword {
       steps.append(
         (
@@ -84,6 +101,48 @@ public struct MacProvisioner: Sendable {
         ))
     }
     return steps
+  }
+
+  /// Sets a static IPv4 address on the network service of the interface with MAC `$1`: the
+  /// interface by `ifconfig`, its service by `networksetup -listnetworkserviceorder` (made with
+  /// `-createnetworkservice` when macOS has none for it yet), then `networksetup -setmanual`.
+  /// The MAC, address and mask are vmlab's own values (hex, dotted quads).
+  static let segmentScript = #"""
+    #!/bin/sh
+    set -e
+    mac="$1"; ip="$2"; mask="$3"
+    dev=""
+    for i in 1 2 3 4 5 6 7 8 9 10; do
+      dev=$(ifconfig -a | awk -v m="$mac" '/^[a-z]/ {d=$1; sub(":$", "", d)} $1 == "ether" && tolower($2) == m {print d}')
+      [ -n "$dev" ] && break
+      sleep 2
+    done
+    [ -n "$dev" ] || { echo "no interface has MAC $mac" >&2; exit 3; }
+    service() {
+      networksetup -listnetworkserviceorder | awk -v d="$dev" '/^\([0-9*]+\) / {s=$0; sub(/^\([0-9*]+\) /, "", s)} index($0, "Device: " d ")") {print s}'
+    }
+    svc=$(service)
+    if [ -z "$svc" ]; then
+      networksetup -detectnewhardware || true
+      svc=$(service)
+    fi
+    if [ -z "$svc" ]; then
+      svc="vmlab segment"
+      networksetup -createnetworkservice "$svc" "$dev"
+    fi
+    networksetup -setmanual "$svc" "$ip" "$mask"
+    for i in 1 2 3 4 5 6 7 8 9 10; do
+      ifconfig "$dev" | grep -q "inet $ip " && exit 0
+      sleep 1
+    done
+    echo "$dev ($svc) did not take $ip" >&2
+    exit 4
+    """#
+
+  /// `24` → `255.255.255.0`.
+  static func netmask(_ prefix: Int) -> String {
+    let bits = UInt32.max << UInt32(32 - max(0, min(32, prefix)))
+    return (0..<4).map { String((bits >> UInt32(24 - 8 * $0)) & 0xff) }.joined(separator: ".")
   }
 
   /// The name of the first step: waiting for sshd to take the image password.

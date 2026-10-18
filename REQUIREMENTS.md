@@ -719,7 +719,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   **Verify:** integration: clone, boot, the clone has the checkpoint's file; the original is
   untouched.
 
-- [ ] **R-804 Templates**
+- [x] **R-804 Templates**
   `images template create <vm> <name>`: a stopped VM becomes a template (its disk copied into
   `~/.vmlab/images/<name>/` with `image.json` carrying the guest and the provisioning already done,
   the SSH key removed from `authorized_keys` so each child gets its own). `vm_create image:
@@ -746,24 +746,24 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   **Verify:** unit test with three in-process ports: unicast is delivered to the learned port only,
   broadcast to all others; a malformed frame is counted and dropped.
 
-- [ ] **R-901 Segment attachment per engine**
+- [x] **R-901 Segment attachment per engine**
   `net_segment` adds a second NIC: QEMU via `-netdev dgram,local.type=unix,local.path=<port>,
-  remote.type=unix,remote.path=<switch>` [VERIFY on the Homebrew QEMU; fallback: `-netdev
-  socket,mcast=230.0.0.<n>:<port>` for QEMU-only segments with the switch absent, recorded in
-  `docs/FEATURES.md`]; VZ via `VZFileHandleNetworkDeviceAttachment` on a `socketpair` whose other
+  remote.type=unix,remote.path=<switch>` [VERIFY on the Homebrew QEMU: **yes** on QEMU 11.1.2,
+  2026-10-18, two guests pinged through `vmlab-switch`, so the `-netdev socket,mcast` fallback was
+  not built; recorded in `docs/FEATURES.md`]; VZ via `VZFileHandleNetworkDeviceAttachment` on a `socketpair` whose other
   end the runner hands to the switch over `control.sock`. Addresses: segment `n` is `10.n.0.0/24`,
   guests get `.10` upward by join order, set by cloud-init on Linux; macOS guests get a static
   address via `networksetup` in provisioning. `net_segment create|list|destroy`.
   **Verify:** integration: two QEMU guests ping each other over the segment and not over NAT (the
   NAT addresses differ in subnet); a VZ Linux guest and a QEMU guest on one segment ping.
 
-- [ ] **R-902 Names on a segment**
+- [x] **R-902 Names on a segment**
   Each join appends `<ip> <vm-name> <vm-name>.<segment>` to every member's `/etc/hosts` over SSH
   (idempotent, marker-delimited block) and removes it on leave. `vm_inspect` lists segment
   addresses.
   **Verify:** integration: `ping node-2.cluster` resolves on node-1.
 
-- [ ] **R-903 `fleet create`**
+- [x] **R-903 `fleet create`**
   `fleet(action: create, name, count, requirements, image|template, segment: name|auto)`: runs the
   selector once (one plan for the fleet), checks the memory budget for all members at once and
   the macOS limit, creates `<name>-1..n` from the template in parallel under the start gate,
@@ -774,12 +774,12 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   `qemu-hvf` is up with `fleet status` all `running` within 5 minutes, then destroyed with no
   directories left.
 
-- [ ] **R-904 `fleet exec`**
+- [x] **R-904 `fleet exec`**
   Runs a command on every member (or a `members` subset) in parallel with the same options as
   `vm_exec`, returning a map of member → result and an `allSucceeded` flag.
   **Verify:** integration: `fleet exec "hostname"` returns each member's name.
 
-- [ ] **R-905 Port forwarding and segment reachability from the host**
+- [x] **R-905 Port forwarding and segment reachability from the host**
   For QEMU guests `net_port_forward` already works (R-308). For VZ guests the NAT address is
   directly reachable from the host, so `vm_inspect` reports `hostReachable: <ip>:<port>` for
   requested forwards instead of a mapped port, and the result of `vm_create` explains which it
@@ -950,7 +950,7 @@ answered is listed under the table. `Capabilities.swift` is the authority (C7) a
 | `pause` | Y | Y | Y | Y |
 | `net_nat` | Y | Y | Y | Y |
 | `net_fast` | Y | Y | C `root` or `qemu_vmnet` | C same |
-| `net_segment` | Y (static, R-901) | Y | Y | Y |
+| `net_segment` | Y (static, R-901) | Y (socketpair to vmlab-switch) | Y (-netdev dgram unix, verified on QEMU 11.1) | Y (same) |
 | `net_port_forward` | Y (host-reachable address) | Y (same) | Y (hostfwd) | Y (hostfwd) |
 | `net_none` | Y | Y | Y | Y |
 | `rosetta` | N | C `rosetta_installed` | N | N |
@@ -982,7 +982,7 @@ result also carries `vm` (id and name) where a VM is involved and `warnings: [St
 | `host_doctor` | `probe: bool` | `[ { check, status: ok|missing|unknown, fix } ]`, probe results |
 | `images` | **`action`**: list, pull, remove, register, template_create, prune, extract_kernel; `name`, `confirm`, `path`, `guest`, `arch`, `format` | list: `[Image]`; pull: `{ name, path, bytes, cached }` |
 | `vm_plan` | **`requirements`** (below) | `Plan { profile, features, unverified, preferredDenied, estimatedStartupSeconds, notes }` or `Unsatisfiable { eliminated: { feature: [profile] }, suggestions: [ { drop: [feature], profile } ] }` |
-| `vm_create` | **`requirements`**, `name`, `autostart` (default true), `confirm` | `{ plan, vm, state, endpoints }` |
+| `vm_create` | **`requirements`**, `name`, `autostart` (default true), `confirm` | `{ plan, vm, state, endpoints, forwarding }` (R-905: `hostfwd` or `host_reachable`; `endpoints.forwards[].hostReachable` is where to connect) |
 | `vm_list` | `state?`, `fleet?` | `[ { id, name, profile, state, guest, fleet?, ip?, sshPort? } ]` |
 | `vm_inspect` | **`vm`** | record, plan, endpoints, segment addresses, last 20 events, warnings, latest panic |
 | `vm_lifecycle` | **`vm`**, **`action`**: start, stop, kill, pause, resume, reset, destroy, clone; `name`, `from`, `force`, `timeoutSeconds` | `{ state, durationMs }`; clone: the new VM |
@@ -998,7 +998,7 @@ result also carries `vm` (id and name) where a VM is involved and `warnings: [St
 | `vm_manifest` | **`vm`**, `profile`: linux|macos|custom, `paths` | `{ id, path, counts }` |
 | `vm_logs` | **`vm`**, `source`: events|serial|provision|all, `tail` | `{ lines }` |
 | `net_segment` | **`action`**: create, list, destroy; `name` | `{ name, subnet, members }` |
-| `fleet` | **`action`**: create, list, status, exec, destroy; `name`, `count`, `requirements`, `image`, `segment`, `command`, `members`, `timeoutSeconds` | create/status: `{ members: [ { vm, state, ip, error? } ] }`; exec: `{ results: { name: ExecResult }, allSucceeded }` |
+| `fleet` | **`action`**: create, list, status, exec, destroy; `name`, `count`, `requirements`, `image`, `segment`, `command`, `members`, `timeoutSeconds`, and for exec `vm_exec`'s `cwd`, `env`, `stdin`, `user`, `via` | create/status: `{ members: [ { vm, state, ip, error? } ] }`; exec: `{ results: { name: ExecResult }, allSucceeded }` |
 
 `requirements` (shared by `vm_plan`, `vm_create`, `fleet create`):
 
@@ -1086,7 +1086,7 @@ six 4 GB guests with the default reserve; macOS 26.6 → VZ save/restore APIs pr
     checkpoints.json, checkpoints/<id>/ (VZ state files and disk clones)
     backing/<key>.qcow2        frozen layers that clones' disks are backed by (R-803)
     manifests/<id>.json, exec/<job>.log, dumps/, pulled/, screenshots/
-  segments/<name>/             switch.sock, stats.sock, switch.pid, ports/
+  segments/<name>/             segment.json, switch.sock, stats.sock, attach.sock, switch.pid, switch.log, ports/
   fleets/<name>.json
   locks/
 ```

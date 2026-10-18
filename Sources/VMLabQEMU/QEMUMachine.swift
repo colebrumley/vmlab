@@ -23,6 +23,8 @@ public struct QEMULaunchRequest: Sendable {
   public var forwards: [PortForward]?
   /// The NIC is `vmnet-shared` rather than user-mode networking (`net_fast`, R-309).
   public var vmnet: Bool
+  /// The segment NIC (R-901).
+  public var segment: QEMUSegmentNIC?
   /// The host directory shared into the guest (R-404).
   public var sharedDirectory: URL?
 
@@ -30,7 +32,7 @@ public struct QEMULaunchRequest: Sendable {
     record: VMRecord, plan: Plan, layout: QEMULayout, baseImage: URL?,
     boot: BootSpec = BootSpec(), seed: CloudInitConfig? = nil, installation: QEMUInstallation,
     gdbPort: Int? = nil, sshHostPort: Int? = nil, forwards: [PortForward]? = nil,
-    vmnet: Bool = false, sharedDirectory: URL? = nil
+    vmnet: Bool = false, sharedDirectory: URL? = nil, segment: QEMUSegmentNIC? = nil
   ) {
     self.record = record
     self.plan = plan
@@ -43,6 +45,7 @@ public struct QEMULaunchRequest: Sendable {
     self.sshHostPort = sshHostPort
     self.forwards = forwards
     self.vmnet = vmnet
+    self.segment = segment
     self.sharedDirectory = sharedDirectory
   }
 }
@@ -155,7 +158,8 @@ public actor QEMUMachine {
     var options = QEMULaunchOptions(
       boot: request.boot, disk: request.baseImage != nil, seed: request.seed != nil,
       gdbPort: request.gdbPort, sshHostPort: request.sshHostPort, forwards: request.forwards,
-      vmnet: request.vmnet, sharedDirectory: request.sharedDirectory?.path)
+      vmnet: request.vmnet, sharedDirectory: request.sharedDirectory?.path,
+      segment: request.segment)
     if request.boot.mode == .disk {
       options.firmware = try request.installation.firmware(for: request.plan.guest.arch)
     }
@@ -164,7 +168,9 @@ public actor QEMUMachine {
     }
     let arguments = try QEMUCommandLine.arguments(
       record: request.record, plan: request.plan, layout: layout, options: options)
-    for stale in layout.sockets + [layout.pidFile] {
+    // A port socket left by an earlier run would make QEMU's bind fail.
+    let ports = request.segment.map { [URL(filePath: $0.portSocket)] } ?? []
+    for stale in layout.sockets + [layout.pidFile] + ports {
       try? FileManager.default.removeItem(at: stale)
     }
     let binary = request.installation.systemBinary(for: request.plan.guest.arch)

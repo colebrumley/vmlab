@@ -212,7 +212,10 @@ public enum Capabilities {
     case (.netFast, _): c(.anyOf([.root, .probe(.qemuVmnet)]))
 
     case (.netSegment, .vzMacOS): y("static, R-901")
-    case (.netSegment, _): y()
+    case (.netSegment, .vzLinux): y("socketpair to vmlab-switch")
+    // R-901 [VERIFY]: Homebrew QEMU 11.1.2 attaches `-netdev dgram` unix paths to vmlab-switch
+    // (two guests pinged), so the mcast fallback was not built.
+    case (.netSegment, _): y("-netdev dgram unix, verified on QEMU 11.1")
 
     case (.netPortForward, .vzMacOS), (.netPortForward, .vzLinux): y("host-reachable address")
     case (.netPortForward, _): y("hostfwd")
