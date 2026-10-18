@@ -167,3 +167,73 @@ final class HeldMonitor: Sendable {
     }
   }
 }
+
+/// CX-23: a QEMU whose foreground parent never returns (a chardev socket waiting for a client)
+/// held the start, and its slot, forever. At the deadline or on cancellation it is killed and the
+/// start is `timeout`.
+@Suite struct QEMUDaemonizeDeadlineTests {
+  /// A stand-in QEMU that records its pid and never exits.
+  static func hangingBinary() throws -> (binary: URL, pidFile: URL, dir: URL) {
+    let dir = FileManager.default.temporaryDirectory.appending(path: "vmlab-dz-\(UUID())")
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    let pidFile = dir.appending(path: "parent.pid")
+    let binary = dir.appending(path: "qemu-hang")
+    try "#!/bin/bash\necho $$ > '\(pidFile.path)'\nexec /bin/sleep 60\n".write(
+      to: binary, atomically: true, encoding: .utf8)
+    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: binary.path)
+    return (binary, pidFile, dir)
+  }
+
+  static func readPID(_ pidFile: URL) -> Int32? {
+    (try? String(contentsOf: pidFile, encoding: .utf8)).flatMap {
+      Int32($0.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+  }
+
+  /// Whether the stand-in is gone; one killed before it wrote its pid never ran on.
+  static func waitGone(_ pidFile: URL) async throws -> Bool {
+    guard let pid = readPID(pidFile) else { return true }
+    let deadline = ContinuousClock.now + .seconds(10)
+    while LivenessProbe.processExists(pid), ContinuousClock.now < deadline {
+      try await Task.sleep(for: .milliseconds(20))
+    }
+    return !LivenessProbe.processExists(pid)
+  }
+
+  @Test(.timeLimit(.minutes(1))) func aStartPastTheDeadlineIsKilledAndTimesOut() async throws {
+    let (binary, pidFile, dir) = try Self.hangingBinary()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let started = ContinuousClock.now
+    await #expect {
+      try await QEMUMachine.daemonize(
+        binary, [], log: dir.appending(path: "qemu.log"), deadline: .seconds(1))
+    } throws: { ($0 as? VMLabError)?.code == .timeout }
+    #expect(ContinuousClock.now - started < .seconds(20))
+    #expect(try await Self.waitGone(pidFile))
+  }
+
+  @Test(.timeLimit(.minutes(1))) func aCancelledStartIsKilled() async throws {
+    let (binary, pidFile, dir) = try Self.hangingBinary()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let start = Task {
+      try await QEMUMachine.daemonize(
+        binary, [], log: dir.appending(path: "qemu.log"), deadline: .seconds(600))
+    }
+    let deadline = ContinuousClock.now + .seconds(20)
+    while Self.readPID(pidFile) == nil, ContinuousClock.now < deadline {
+      try await Task.sleep(for: .milliseconds(20))
+    }
+    #expect(Self.readPID(pidFile) != nil)
+    start.cancel()
+    let result = await start.result
+    #expect((result.error as? VMLabError)?.data["cancelled"] == .bool(true))
+    #expect(try await Self.waitGone(pidFile))
+  }
+}
+
+extension Result {
+  var error: Failure? {
+    if case .failure(let error) = self { return error }
+    return nil
+  }
+}

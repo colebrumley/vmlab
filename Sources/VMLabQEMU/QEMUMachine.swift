@@ -181,7 +181,8 @@ public actor QEMUMachine {
       try? FileManager.default.removeItem(at: stale)
     }
     let binary = request.installation.systemBinary(for: request.plan.guest.arch)
-    try await daemonize(binary, arguments, log: layout.log)
+    try await daemonize(
+      binary, arguments, log: layout.log, pidFile: layout.pidFile, vmDirectory: layout.directory)
     guard let pid = readPID(layout) else {
       throw VMLabError(
         code: .engineError, message: "QEMU started but wrote no pid file.",
@@ -371,9 +372,18 @@ public actor QEMUMachine {
     EngineProcess.isRunning(pid, vmDirectory: layout?.directory)
   }
 
+  /// How long QEMU's foreground parent may take to report the daemon initialised (CX-23).
+  public static let daemonizeDeadline: Duration = .seconds(60)
+
   /// Runs QEMU, whose foreground parent exits once the daemon is initialised (or has failed).
-  /// Its output goes to `log`.
-  static func daemonize(_ binary: URL, _ arguments: [String], log: URL) async throws {
+  /// Its output goes to `log`. CX-23: a QEMU that never finishes starting (a chardev socket that
+  /// waits for a client, `server=on` with QEMU's default `wait=on`) held the start forever; at
+  /// `deadline`, or when the task is cancelled, the parent and the daemon `pidFile` names (when it
+  /// is this VM's QEMU) are killed and the start fails with `timeout`.
+  static func daemonize(
+    _ binary: URL, _ arguments: [String], log: URL, pidFile: URL? = nil,
+    vmDirectory: URL? = nil, deadline: Duration = daemonizeDeadline
+  ) async throws {
     guard FileManager.default.isExecutableFile(atPath: binary.path) else {
       throw QEMUInstallation.missingTool(binary.lastPathComponent, path: binary.path)
     }
@@ -396,12 +406,15 @@ public actor QEMUMachine {
     process.standardInput = FileHandle.nullDevice
     process.standardOutput = handle
     process.standardError = handle
-    let status: Int32 = try await withCheckedThrowingContinuation { continuation in
-      process.terminationHandler = { continuation.resume(returning: $0.terminationStatus) }
-      do { try process.run() } catch {
-        process.terminationHandler = nil
-        continuation.resume(throwing: ioError("run \(binary.path)", error))
-      }
+    let start = DaemonStart(pidFile: pidFile, vmDirectory: vmDirectory)
+    let status: Int32
+    do {
+      status = try await launchDaemon(
+        process, start: start, binary: binary, log: log, deadline: deadline)
+    } catch {
+      // Keep `process` until it has reaped the killed parent, or it stays a zombie.
+      for _ in 0..<100 where process.isRunning { try? await Task.sleep(for: .milliseconds(20)) }
+      throw error
     }
     guard status == 0 else {
       throw VMLabError(
@@ -411,6 +424,43 @@ public actor QEMUMachine {
           "engine": .string("qemu"), "raw": .string(tail(of: log)),
           "status": .number(Double(status)),
         ])
+    }
+  }
+
+  /// Runs `process` and waits for its exit status, or for `start` to be abandoned.
+  private static func launchDaemon(
+    _ process: Process, start: DaemonStart, binary: URL, log: URL, deadline: Duration
+  ) async throws -> Int32 {
+    try await withTaskCancellationHandler {
+      try await withCheckedThrowingContinuation { continuation in
+        guard start.begin(continuation) else { return }
+        process.terminationHandler = { start.finish(.success($0.terminationStatus)) }
+        do { try process.run() } catch {
+          process.terminationHandler = nil
+          start.finish(.failure(ioError("run \(binary.path)", error)))
+          return
+        }
+        start.started(process.processIdentifier)
+        Task {
+          try? await Task.sleep(for: deadline)
+          start.abandon(
+            VMLabError(
+              code: .timeout,
+              message: "QEMU did not finish starting within \(QMPClient.seconds(deadline)) s.",
+              hint:
+                "A chardev socket with server=on waits for a client unless it says wait=off; "
+                + "see data.raw (the end of qemu.log).",
+              data: [
+                "engine": .string("qemu"), "raw": .string(tail(of: log)),
+                "timeoutSeconds": .number(QMPClient.seconds(deadline)),
+              ]))
+        }
+      }
+    } onCancel: {
+      start.abandon(
+        VMLabError(
+          code: .timeout, message: "The QEMU start was cancelled.",
+          hint: "Nothing was kept; start the VM again.", data: ["cancelled": .bool(true)]))
     }
   }
 
@@ -494,5 +544,81 @@ final class QMPRace: Sendable {
       return (continuation, s.errors[0] ?? error)
     }
     if let (continuation, error) = finished { continuation.resume(throwing: error) }
+  }
+}
+
+/// One `daemonize`: the continuation resumed once, by the parent's exit, the deadline or a
+/// cancellation; the last two kill the parent and the daemon its pid file names.
+final class DaemonStart: Sendable {
+  private struct State {
+    var continuation: CheckedContinuation<Int32, any Error>?
+    var abandoned: VMLabError?
+    var parent: Int32 = 0
+    var done = false
+  }
+  private let state = Mutex(State())
+  let pidFile: URL?
+  let vmDirectory: URL?
+
+  init(pidFile: URL?, vmDirectory: URL?) {
+    self.pidFile = pidFile
+    self.vmDirectory = vmDirectory
+  }
+
+  /// Takes the continuation; false (and it resumed) when the start was already abandoned.
+  func begin(_ continuation: CheckedContinuation<Int32, any Error>) -> Bool {
+    let abandoned = state.withLock { state -> VMLabError? in
+      if let error = state.abandoned {
+        state.done = true
+        return error
+      }
+      state.continuation = continuation
+      return nil
+    }
+    if let abandoned { continuation.resume(throwing: abandoned) }
+    return abandoned == nil
+  }
+
+  func started(_ pid: Int32) {
+    let abandoned = state.withLock { state -> Bool in
+      state.parent = pid
+      return state.abandoned != nil
+    }
+    if abandoned { kill(parent: pid) }
+  }
+
+  func finish(_ result: Result<Int32, any Error>) {
+    let continuation = state.withLock { state -> CheckedContinuation<Int32, any Error>? in
+      guard !state.done else { return nil }
+      state.done = true
+      defer { state.continuation = nil }
+      return state.continuation
+    }
+    continuation?.resume(with: result)
+  }
+
+  func abandon(_ error: VMLabError) {
+    let (continuation, parent) = state.withLock {
+      state -> (CheckedContinuation<Int32, any Error>?, Int32) in
+      guard !state.done else { return (nil, 0) }
+      state.abandoned = error
+      guard let continuation = state.continuation else { return (nil, state.parent) }
+      state.done = true
+      state.continuation = nil
+      return (continuation, state.parent)
+    }
+    guard state.withLock({ $0.abandoned != nil }) else { return }
+    if parent > 0 { kill(parent: parent) }
+    continuation?.resume(throwing: error)
+  }
+
+  /// SIGKILLs the foreground parent and the daemon in the pid file, if it is this VM's QEMU.
+  private func kill(parent: Int32) {
+    Darwin.kill(parent, SIGKILL)
+    guard let pidFile,
+      let text = try? String(contentsOf: pidFile, encoding: .utf8),
+      let daemon = Int32(text.trimmingCharacters(in: .whitespacesAndNewlines))
+    else { return }
+    EngineProcess.kill(daemon, vmDirectory: vmDirectory)
   }
 }
