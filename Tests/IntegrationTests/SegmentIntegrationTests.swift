@@ -16,12 +16,12 @@ import VMLabQEMU
   }
 
   /// R-901 Verify (integration): two QEMU guests ping each other over the segment, not over NAT
-  /// (the segment route is the second NIC, on a subnet the NAT address is not in).
+  /// (the segment route is the second NIC, on a subnet the NAT address is not in). R-902: by name.
   @Test(.enabled(if: integrationEnabled), .timeLimit(.minutes(10)))
   func twoQEMUGuestsPingOverTheSegment() async throws {
     let lab = try LabHome(tag: "s")
     do {
-      let network = NetworkSpec(mode: .nat, segment: "lab")
+      let network = NetworkSpec(mode: .nat, segment: "cluster")
       let plan = LabHome.plan(features: [.serial, .execSSH, .netNAT, .netSegment])
       async let first = lab.boot(name: "node-1", plan: plan, network: network)
       async let second = lab.boot(name: "node-2", plan: plan, network: network)
@@ -43,6 +43,18 @@ import VMLabQEMU
       ).stdout.trimmingCharacters(in: .whitespacesAndNewlines)
       #expect(!segmentNIC.isEmpty)
       #expect(route.contains("dev \(segmentNIC) "), "\(route) (segment NIC \(segmentNIC))")
+
+      // R-902 Verify (integration): `ping node-2.cluster` resolves on node-1, and a leave
+      // removes the name.
+      let named = try await lab.exec("node-1", "ping -c 1 -W 2 node-2.cluster")
+      #expect(named.exitCode == 0, "\(named.stdout)\(named.stderr)")
+      #expect(named.stdout.contains(b.address), "\(named.stdout)")
+      let plain = try await lab.exec("node-2", "getent hosts node-1")
+      #expect(plain.stdout.hasPrefix(a.address), "\(plain.stdout)")
+      try await lab.manager.perform(.destroy, on: "node-2")
+      let gone = try await lab.exec("node-1", "getent hosts node-2.cluster; cat /etc/hosts")
+      #expect(!gone.stdout.contains(b.address), "\(gone.stdout)")
+      #expect(gone.stdout.contains("\(a.address) node-1 node-1.cluster"), "\(gone.stdout)")
     } catch {
       await lab.shutdown()
       throw error

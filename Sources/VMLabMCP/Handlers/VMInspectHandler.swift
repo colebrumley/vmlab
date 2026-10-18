@@ -5,7 +5,7 @@ import VMLabCore
 /// (R-304; null when none), so a model can rediscover a VM after a context reset, and its
 /// first-boot report (R-1004): a failed step is a `provision_failed` warning, and a requested
 /// provisioning that was never collected (SSH never answered) says so instead of leaving only
-/// `ssh_unreachable`. Segments join when Phase 9 records them.
+/// `ssh_unreachable`. `segments` lists the VM's segment addresses (R-902).
 struct VMInspectHandler: ToolHandler {
   static let eventCount = 20
 
@@ -52,11 +52,25 @@ struct VMInspectHandler: ToolHandler {
           ?? .null,
         "features": .array(record.features.map { .string($0.rawValue) }),
         "endpoints": .object(Self.endpoints(record, store: context.store)),
-        "segments": .array([]),
+        "segments": .array(Self.segments(record, context: context)),
         "events": try JSONValue(encoding: events),
         "panic": panicValue,
         "provision": provisionValue,
       ], warnings: warnings)
+  }
+
+  /// The VM's place on its segment: name, subnet, address, MAC and the names it answers to.
+  static func segments(_ record: VMRecord, context: ToolContext) -> [JSONValue] {
+    guard let segment = record.segment else { return [] }
+    var object: [String: JSONValue] = [
+      "segment": .string(segment.segment), "ip": .string(segment.address),
+      "prefixLength": .number(Double(segment.prefixLength)), "mac": .string(segment.mac),
+      "names": .array([.string(record.name), .string("\(record.name).\(segment.segment)")]),
+    ]
+    if let subnet = try? context.manager.segments.load(segment.segment).subnet {
+      object["subnet"] = .string(subnet)
+    }
+    return [.object(object)]
   }
 
   /// The runtime endpoints; `display` is the profile's endpoint (R-503), absent when it has none.

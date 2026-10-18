@@ -752,7 +752,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   **Verify:** integration: two QEMU guests ping each other over the segment and not over NAT (the
   NAT addresses differ in subnet); a VZ Linux guest and a QEMU guest on one segment ping.
 
-- [ ] **R-902 Names on a segment**
+- [x] **R-902 Names on a segment**
   Each join appends `<ip> <vm-name> <vm-name>.<segment>` to every member's `/etc/hosts` over SSH
   (idempotent, marker-delimited block) and removes it on leave. `vm_inspect` lists segment
   addresses.

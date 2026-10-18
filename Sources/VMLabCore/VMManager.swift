@@ -20,6 +20,8 @@ public actor VMManager {
   public nonisolated let keygen: any CommandRunning
   /// The segments VMs join (R-901) and their switch processes.
   public nonisolated let segments: SegmentStore
+  /// Writes the segment's names into members' `/etc/hosts` (R-902).
+  public nonisolated let naming: any SegmentNaming
   /// What a first start does once SSH answers (R-1001: `provision`).
   public nonisolated let provisioner: any GuestProvisioning
 
@@ -30,8 +32,10 @@ public actor VMManager {
     store: Store, backends: BackendRegistry = Backends.shared,
     readiness: any GuestReadiness = SSHReadiness(), keygen: any CommandRunning = ProcessRunner(),
     provisioner: any GuestProvisioning = SSHProvisioner(),
-    manifests: (any GuestManifestTaker)? = nil, segments: SegmentStore? = nil
+    manifests: (any GuestManifestTaker)? = nil, segments: SegmentStore? = nil,
+    naming: any SegmentNaming = SSHSegmentHosts()
   ) {
+    self.naming = naming
     self.segments = segments ?? SegmentStore(home: store.home)
     self.store = store
     self.backends = backends
@@ -154,7 +158,12 @@ public actor VMManager {
             warnings.append(warning)
             await log(id, warning, level: .warning)
           }
+          if let segment = updated.segment {
+            warnings += await publishNames(segment.segment, focus: id)
+          }
         }
+      } else if action == .destroy, let segment = record.segment {
+        _ = await publishNames(segment.segment, focus: id)
       }
       return Outcome(record: updated, warnings: warnings)
     } catch {
