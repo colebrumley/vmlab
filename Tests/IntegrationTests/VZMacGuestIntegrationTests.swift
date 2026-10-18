@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 import VMLabCore
+import VMLabRFB
 import VMLabVZ
 
 /// R-605 to R-607 Verify (integration): a `tart clone` of the pulled `macos-base` image boots in
@@ -98,6 +99,65 @@ import VMLabVZ
       }
       #expect(output?.status == 0, "ssh failed: \(output?.output ?? "nothing")")
       print("ssh ok after \(clock.now - begun): \(output?.output ?? "")")
+    } catch {
+      await guest.teardown()
+      throw error
+    }
+    await guest.teardown()
+  }
+
+  static func keySSH(_ guest: Guest, host: String, command: String) -> CommandOutput? {
+    ProcessRunner().run(
+      "/usr/bin/ssh",
+      [
+        "-i", guest.directory.appending(path: "id_ed25519").path, "-o", "IdentitiesOnly=yes",
+        "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=no",
+        "-o", "UserKnownHostsFile=/dev/null", "-o", "ConnectTimeout=5", "-o", "LogLevel=ERROR",
+        "admin@\(host)", command,
+      ])
+  }
+
+  /// A framebuffer is blank when every pixel is the same colour.
+  static func distinctColours(_ framebuffer: Framebuffer) -> Int {
+    var seen = Set<UInt32>()
+    let pixels = framebuffer.pixels
+    var index = 0
+    while index + 3 < pixels.count, seen.count < 64 {
+      seen.insert(
+        UInt32(pixels[index]) | UInt32(pixels[index + 1]) << 8 | UInt32(pixels[index + 2]) << 16)
+      index += 4 * 97
+    }
+    return seen.count
+  }
+
+  /// R-606: after create (with `gui`), the first start provisions the guest: `sw_vers` runs with
+  /// the VM's own key, and a screenshot through Screen Sharing with `<vm>/vnc.pass` is non-blank.
+  @Test(.enabled(if: ready && hostHasRoom()), .timeLimit(.minutes(12)))
+  func provisionedGuestTakesTheKeyAndShowsItsScreen() async throws {
+    let clock = ContinuousClock()
+    let begun = clock.now
+    let guest = try await Self.makeGuest(features: [.execSSH, .gui, .guiDesktop], suffix: "p")
+    do {
+      let started = try #require(try await guest.manager.perform(.start, on: guest.record.id))
+      print("started and provisioned after \(clock.now - begun)")
+      #expect(MacProvisioner.isProvisioned(guest.directory))
+      let ip = try #require(started.runtime?.ip)
+      let version = Self.keySSH(guest, host: ip, command: "sw_vers")
+      #expect(version?.status == 0, "key ssh failed: \(version?.output ?? "nothing")")
+      #expect(version?.output.contains("ProductVersion") == true)
+
+      let password = try String(
+        contentsOf: guest.directory.appending(path: "vnc.pass"), encoding: .utf8)
+      let client = try await RFBClient.connect(.tcp(host: ip, port: 5900), password: password)
+      await client.start()
+      try await client.waitForUpdate(timeout: .seconds(30))
+      try await Task.sleep(for: .seconds(2))
+      let colours = Self.distinctColours(await client.framebuffer)
+      let png = try await client.framebuffer.pngData()
+      try png.write(
+        to: URL(filePath: NSTemporaryDirectory()).appending(path: "vmlab-macos-r606.png"))
+      await client.close()
+      #expect(colours > 4, "the Screen Sharing frame is blank (\(colours) colours)")
     } catch {
       await guest.teardown()
       throw error

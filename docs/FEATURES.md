@@ -15,7 +15,7 @@ column is what `host-facts.json` on the development host recorded; `unknown` cou
 | `gui_desktop` | Y (built in) | Y (R-504) | Y (R-504) | Y |  |
 | `gui_accel` | Y | Y | N | N |  |
 | `serial` | N | Y | Y | Y |  |
-| `gdb` | N | N | ? `qemu_hvf_gdb` (R-702) | Y | `qemu_hvf_gdb`: unknown |
+| `gdb` | N | N | ? `qemu_hvf_gdb` (R-702) | Y | `qemu_hvf_gdb`: yes, 2026-10-18 |
 | `introspection` | N | N | Y | Y |  |
 | `memory_dump` | N | N | Y | Y |  |
 | `direct_kernel_boot` | N | Y | Y | Y |  |
@@ -26,7 +26,7 @@ column is what `host-facts.json` on the development host recorded; `unknown` cou
 | `checkpoint_live` | ? `vz_macos_live_snapshot` (R-608) | ? `vz_linux_live_snapshot` (R-608) | ? `qemu_hvf_live_snapshot` (R-307) | Y | `vz_macos_live_snapshot`: unknown; `vz_linux_live_snapshot`: unknown; `qemu_hvf_live_snapshot`: yes, 2026-10-18 |
 | `pause` | Y | Y | Y | Y |  |
 | `net_nat` | Y | Y | Y | Y |  |
-| `net_fast` | Y | Y | C `root` or `qemu_vmnet` | C `root` or `qemu_vmnet` | `qemu_vmnet`: unknown |
+| `net_fast` | Y | Y | C `root` or `qemu_vmnet` | C `root` or `qemu_vmnet` | `qemu_vmnet`: no, 2026-10-18 |
 | `net_segment` | Y (static, R-901) | Y | Y | Y |  |
 | `net_port_forward` | Y (host-reachable address) | Y (host-reachable address) | Y (hostfwd) | Y (hostfwd) |  |
 | `net_none` | Y | Y | Y | Y |  |
@@ -70,3 +70,7 @@ column is what `host-facts.json` on the development host recorded; `unknown` cou
 - `nested_virt` on `qemu-hvf`: HVF does not expose nested virtualization to QEMU guests.
 - `cloud_init` on `vz-macos`: cloud-init is for Linux guests.
 - `many_guests` on `vz-macos`: macOS allows at most two macOS guests at once.
+
+## Engine notes
+
+- `vz-macos` boots `tart clone`s of `macos-base` (`ghcr.io/cirruslabs/macos-tahoe-base:latest`, which boots on the development host, R-605) in vmlab's own `vmlab-vz` runner, built from the clone's `config.json`, `nvram.bin` and `disk.img` (Tart 2.x layout); the `tart run --no-graphics` fallback is not used, so pause and checkpoints are the runner's, as on `vz-linux`.

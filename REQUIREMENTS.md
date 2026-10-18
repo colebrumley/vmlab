@@ -577,7 +577,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   the reason "Virtualization.framework boots only Apple EFI or a Linux kernel".
   **Verify:** integration: the extracted Debian kernel boots to `login:` on serial.
 
-- [ ] **R-605 Tart images for macOS**
+- [x] **R-605 Tart images for macOS**
   `images pull macos-base` runs `tart pull <ref>` for the catalogue ref (Appendix H) and records the
   Tart VM name. `vm_create` for `vz-macos` runs `tart clone <base> <vm-id>` (an APFS clone, seconds)
   and reads the clone's directory (`~/.tart/vms/<id>/`: `config.json`, `disk.img`, `nvram.bin`) to

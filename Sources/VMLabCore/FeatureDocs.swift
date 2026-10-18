@@ -73,6 +73,21 @@ public enum FeatureDocs {
       }
     }
     lines.append("")
+    lines.append("## Engine notes")
+    lines.append("")
+    lines.append(contentsOf: engineNotes.map { "- " + $0 })
+    lines.append("")
     return lines.joined(separator: "\n")
+  }
+
+  /// How each profile is realised where the matrix alone does not say.
+  public static var engineNotes: [String] {
+    let mac = ImageCatalogue.builtin.image(named: "macos-base")?.url ?? "macos-base"
+    return [
+      "`vz-macos` boots `tart clone`s of `macos-base` (`\(mac)`, which boots on the development "
+        + "host, R-605) in vmlab's own `vmlab-vz` runner, built from the clone's `config.json`, "
+        + "`nvram.bin` and `disk.img` (Tart 2.x layout); the `tart run --no-graphics` fallback is "
+        + "not used, so pause and checkpoints are the runner's, as on `vz-linux`."
+    ]
   }
 }
