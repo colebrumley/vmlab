@@ -10,7 +10,18 @@ struct VZRunnerCommand: ParsableCommand {
   static let configuration = CommandConfiguration(
     commandName: "vmlab-vz",
     abstract: "Run one Virtualization.framework guest.",
-    subcommands: [Run.self])
+    subcommands: [Run.self, Capabilities.self])
+
+  /// What Virtualization.framework supports on this host, for `HostProbe` (Core cannot ask it).
+  struct Capabilities: ParsableCommand {
+    static let configuration = CommandConfiguration(
+      abstract: "Print the host's Virtualization.framework capabilities as JSON.")
+
+    func run() throws {
+      let supported = VZGenericPlatformConfiguration.isNestedVirtualizationSupported
+      print("{\"\(HostProbe.nestedKey)\":\(supported)}")
+    }
+  }
 
   struct Run: ParsableCommand {
     static let configuration = CommandConfiguration(

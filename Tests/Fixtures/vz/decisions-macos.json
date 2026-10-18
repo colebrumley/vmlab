@@ -8,6 +8,9 @@
   },
   "cpus" : 4,
   "entropy" : true,
+  "fileSystems" : [
+
+  ],
   "graphics" : {
     "height" : 768,
     "pixelsPerInch" : 72,
@@ -15,6 +18,7 @@
   },
   "memoryBalloon" : true,
   "memoryBytes" : 8589934592,
+  "nestedVirtualization" : false,
   "network" : [
     {
       "mac" : "72:76:f4:5e:d8:14"

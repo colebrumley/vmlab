@@ -13,18 +13,8 @@ import VMLabVZ
     integrationEnabled && FileManager.default.fileExists(atPath: image.path)
     && FileManager.default.isExecutableFile(atPath: runner)
 
-  /// `swift test` relinks the runner without its entitlement; sign it as scripts/sign.sh does.
-  static func signRunner() throws {
-    let process = Process()
-    process.executableURL = URL(filePath: "/usr/bin/codesign")
-    process.arguments = [
-      "--force", "--sign", "-", "--entitlements",
-      root.appending(path: "Sources/vmlab-vz/vmlab-vz.entitlements").path, runner,
-    ]
-    try process.run()
-    process.waitUntilExit()
-    #expect(process.terminationStatus == 0)
-  }
+  /// Signs the runner once per process (see `VZRunnerSigning`).
+  static func signRunner() { VZRunnerSigning.ensureSigned() }
 
   /// R-600 Verify (integration): a Linux guest started through a detached runner keeps running
   /// when its launcher lets go; a fresh server (reconcile, then attach by socket path) sees it
@@ -35,7 +25,7 @@ import VMLabVZ
     let home = URL(filePath: "/tmp/vmlab-test-\(getpid())")
     try? FileManager.default.removeItem(at: home)
     defer { try? FileManager.default.removeItem(at: home) }
-    try Self.signRunner()
+    Self.signRunner()
 
     let store = Store(home: home)
     let record = try store.create(
@@ -99,6 +89,7 @@ import VMLabVZ
     let copy = URL(filePath: "/tmp/vmlab-test-\(getpid())-unsigned")
     try? FileManager.default.removeItem(at: copy)
     defer { try? FileManager.default.removeItem(at: copy) }
+    Self.signRunner()  // never copy while another suite's codesign rewrites the file
     try FileManager.default.copyItem(at: URL(filePath: Self.runner), to: copy)
     let strip = Process()
     strip.executableURL = URL(filePath: "/usr/bin/codesign")
@@ -125,7 +116,7 @@ import VMLabVZ
       at: home.appending(path: "images"),
       withDestinationURL: Self.image.deletingLastPathComponent()
         .deletingLastPathComponent())
-    try Self.signRunner()
+    Self.signRunner()
 
     let store = Store(home: home)
     func manager() -> VMManager {

@@ -270,36 +270,7 @@ public final class QEMUBackend: Backend {
   /// The record's boot spec with host paths checked; a kernel boot without a kernel path takes
   /// the image's kernel files, extracting them from the pulled image the first time.
   func resolveBoot(_ record: VMRecord) async throws(VMLabError) -> BootSpec {
-    var boot = record.boot ?? BootSpec()
-    if boot.mode == .kernel, boot.kernel == nil {
-      guard let image = record.image else {
-        throw VMLabError.invalidRequest(
-          field: "boot.kernel", reason: "kernel boot needs a kernel path or an image",
-          hint: "Set boot.kernel, or name an image whose kernel vmlab can extract.")
-      }
-      var files = images.kernel(of: image)
-      if files == nil {
-        let store = images
-        files = try await Self.lift { try await store.extractKernel(image) }
-      }
-      guard let files else { throw VMLabError(code: .internal, message: "no kernel", hint: "") }
-      boot.kernel = files.kernel.path
-      if boot.initrd == nil { boot.initrd = files.initrd?.path }
-    }
-    let paths: [(String, String?)] = [
-      ("boot.kernel", boot.mode == .kernel ? boot.kernel : nil),
-      ("boot.initrd", boot.mode == .kernel ? boot.initrd : nil),
-      ("boot.dtb", boot.mode == .kernel ? boot.dtb : nil),
-      ("boot.firmware", boot.mode == .firmware ? boot.firmware : nil),
-      ("boot.binary", boot.mode == .binary ? boot.binary : nil),
-    ]
-    for case (let field, let path?) in paths
-    where !FileManager.default.isReadableFile(atPath: path) {
-      throw VMLabError.invalidRequest(
-        field: field, reason: "\(path) is not a readable file",
-        hint: "Give the absolute host path of an existing file.")
-    }
-    return boot
+    try await images.resolvingBoot(record.boot, image: record.image)
   }
 
   static func lift<T>(_ body: () async throws -> T) async throws(VMLabError) -> T {

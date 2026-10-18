@@ -59,6 +59,18 @@ import VMLabCore
       try String(contentsOf: dir.appending(path: "id_ed25519.pub"), encoding: .utf8) == publicKey)
   }
 
+  /// Rosetta is shared only when the request asked for it, not whenever the profile grants it.
+  @Test func rosettaOnlyWhenRequested() {
+    var record = VMRecord(
+      id: "vm-abc234", profile: .vzLinux, guest: GuestSpec(os: .linux, arch: .arm64),
+      features: [.execSSH, .rosetta])
+    #expect(!VZRunnerConfig.wantsRosetta(record))
+    record.plan = Plan(
+      profile: .vzLinux, guest: record.guest, resources: ResourceSpec(),
+      features: record.features, requested: [.rosetta], estimatedStartupSeconds: 30)
+    #expect(VZRunnerConfig.wantsRosetta(record))
+  }
+
   @Test func hostnameIsADNSLabel() {
     func record(_ name: String) -> VMRecord {
       VMRecord(

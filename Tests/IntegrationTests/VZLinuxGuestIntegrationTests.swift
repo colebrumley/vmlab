@@ -44,7 +44,7 @@ import VMLabVZ
       at: home.appending(path: "images"),
       withDestinationURL: VZRunnerIntegrationTests.image.deletingLastPathComponent()
         .deletingLastPathComponent())
-    try VZRunnerIntegrationTests.signRunner()
+    VZRunnerIntegrationTests.signRunner()
 
     let store = Store(home: home)
     let registry = BackendRegistry()

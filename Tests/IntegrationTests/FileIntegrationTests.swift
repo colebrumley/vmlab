@@ -3,6 +3,7 @@ import Testing
 import VMLabCore
 import VMLabMCP
 import VMLabQEMU
+import VMLabVZ
 
 @Suite struct FileIntegrationTests {
   /// R-404 Verify (integration): push a 5 MB file, pull it back, bytes equal; a directory goes
@@ -120,10 +121,32 @@ import VMLabQEMU
     await guest.shutdown()
   }
 
-  /// R-404 Verify (integration), VZ half: the virtiofs share is R-603's.
-  // TODO(R-603): boot a vz-linux guest with share and check the host file appears via virtiofs.
-  @Test(.disabled("TODO(R-603): virtiofs shares on VZ are built by R-603"))
-  func sharedDirectoryOverVirtiofsOnVZ() async throws {}
+  /// R-404 Verify (integration), VZ half: R-603's virtiofs share shows a host-written file in the
+  /// guest within 2 s, and a guest write reaches the host.
+  @Test(.enabled(if: VZRunnerIntegrationTests.ready), .timeLimit(.minutes(8)))
+  func sharedDirectoryOverVirtiofsOnVZ() async throws {
+    let host = URL(filePath: "/tmp/vmlab-test-\(getpid())-vzshare")
+    try? FileManager.default.removeItem(at: host)
+    try FileManager.default.createDirectory(at: host, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: host) }
+    let guest = try await VZGuest.boot(
+      features: [.execSSH, .sharedDir], tag: "v", share: SharedDirSpec(host: host.path))
+    defer { guest.cleanUp() }
+    // cloud-init mounts it shortly after SSH comes up.
+    #expect(await guest.ssh("mountpoint -q /mnt/host", within: .seconds(300))?.status == 0)
+    try "from the host\n".write(
+      to: host.appending(path: "hello.txt"), atomically: true, encoding: .utf8)
+    let written = ContinuousClock.now
+    let seen = await guest.ssh("cat /mnt/host/hello.txt", within: .seconds(10))
+    #expect(seen?.output == "from the host\n")
+    print("host file seen in the VZ guest after \(ContinuousClock.now - written)")
+    #expect(ContinuousClock.now - written < .seconds(2))
+    let back = await guest.ssh("echo from the guest | sudo tee /mnt/host/back.txt >/dev/null")
+    #expect(back?.status == 0)
+    #expect(
+      try String(contentsOf: host.appending(path: "back.txt"), encoding: .utf8)
+        == "from the guest\n")
+  }
 }
 
 /// Whether `name` is pulled into `~/.vmlab/images`.

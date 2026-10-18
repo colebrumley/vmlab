@@ -2,21 +2,31 @@
   "probes" : {
     "qemu_hvf_gdb" : {
       "osVersion" : "26.6.2",
-      "probedAt" : "2026-10-18T15:39:48Z",
+      "probedAt" : "2026-10-18T16:45:22Z",
       "qemuVersion" : "11.1.2",
       "result" : "yes"
     },
     "qemu_hvf_live_snapshot" : {
       "osVersion" : "26.6.2",
-      "probedAt" : "2026-10-18T15:20:57Z",
+      "probedAt" : "2026-10-18T16:45:22Z",
       "qemuVersion" : "11.1.2",
       "result" : "yes"
     },
     "qemu_vmnet" : {
       "osVersion" : "26.6.2",
-      "probedAt" : "2026-10-18T15:20:57Z",
+      "probedAt" : "2026-10-18T16:45:22Z",
       "qemuVersion" : "11.1.2",
       "result" : "no"
+    },
+    "vz_linux_live_snapshot" : {
+      "osVersion" : "26.6.2",
+      "probedAt" : "2026-10-18T16:45:22Z",
+      "result" : "yes"
+    },
+    "vz_macos_live_snapshot" : {
+      "osVersion" : "26.6.2",
+      "probedAt" : "2026-10-18T16:45:22Z",
+      "result" : "yes"
     }
   },
   "schemaVersion" : 1

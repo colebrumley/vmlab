@@ -63,7 +63,7 @@ public indirect enum Condition: Sendable, Hashable {
     case .rosettaInstalled:
       "Rosetta for Linux is not installed on the host (softwareupdate --install-rosetta)"
     case .nestedSupported:
-      "nested virtualization needs an M3 or newer chip and macOS 15 or newer (host: \(host.chip.model), macOS \(host.osVersion))"
+      "nested virtualization needs an M3 or newer and macOS 15 (host: \(host.chip.model), macOS \(host.osVersion))"
     case .probe(let probe):
       switch host.probe(probe) {
       case .unknown: "probe \(probe.rawValue) has not been verified on this host"
@@ -135,10 +135,11 @@ public enum Capabilities {
 
   private static let vzNoQEMU = "Virtualization.framework has no public API for it"
   private static let noVZGDB = "Virtualization.framework exposes no public GDB stub"
-  private static let vzNoFirmware =
-    "Virtualization.framework boots its own firmware; no public API replaces it"
-  private static let vzFixedDevices =
-    "Virtualization.framework offers a fixed set of public device types"
+  /// R-604: the reason for both `custom_firmware` and `custom_devices` under VZ.
+  private static let vzBootsOnlyEFIOrKernel =
+    "Virtualization.framework boots only Apple EFI or a Linux kernel"
+  private static let vzNoFirmware = vzBootsOnlyEFIOrKernel
+  private static let vzFixedDevices = vzBootsOnlyEFIOrKernel
 
   /// The unresolved matrix entry for `feature` on `profile`.
   public static func entry(_ feature: Feature, on profile: Profile) -> Entry {

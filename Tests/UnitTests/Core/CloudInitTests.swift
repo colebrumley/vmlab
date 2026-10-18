@@ -46,6 +46,7 @@ enum RubyYAML {
     let runcmd = try #require(doc["runcmd"] as? [[String]])
     #expect(runcmd.contains(["systemctl", "enable", "--now", "qemu-guest-agent"]))
     #expect(runcmd.contains(["systemctl", "enable", "--now", "serial-getty@ttyAMA0.service"]))
+    #expect(doc["bootcmd"] == nil)
     #expect(doc["mounts"] == nil)
     #expect(doc["write_files"] == nil)
     #expect(CloudInit.networkConfig(Self.base()) == nil)
@@ -77,11 +78,42 @@ enum RubyYAML {
       ])
     let runcmd = try #require(doc["runcmd"] as? [[String]])
     #expect(runcmd.contains(["systemctl", "enable", "--now", "serial-getty@hvc0.service"]))
+    #expect(doc["bootcmd"] as? [String] == [CloudInit.hvc0BootCommand])
+    #expect(
+      CloudInit.hvc0BootCommand
+        == "test -e /etc/default/grub.d/99-vmlab-console.cfg || { mkdir -p /etc/default/grub.d && "
+        + "printf '%s\\n' 'GRUB_CMDLINE_LINUX=\"$GRUB_CMDLINE_LINUX console=hvc0\"' "
+        + "> /etc/default/grub.d/99-vmlab-console.cfg && update-grub; }")
     #expect(runcmd.contains(["x11vnc", "-storepasswd", "s3cret\"x", "/etc/x11vnc.pass"]))
     let files = try #require(doc["write_files"] as? [[String: String]])
     #expect(files.map { $0["path"] }.contains("/etc/systemd/system/vmlab-vnc.service"))
     let autologin = try #require(files.first { $0["path"]?.contains("lightdm") == true })
     #expect(autologin["content"]?.contains("autologin-user=debian") == true)
+  }
+
+  /// R-603: Rosetta is mounted over virtiofs and registered with binfmt_misc after the mount.
+  @Test(.enabled(if: RubyYAML.available)) func rosettaIsMountedAndRegistered() throws {
+    var config = Self.base()
+    config.rosetta = true
+    config.mounts = [GuestMount(tag: "share0", guestPath: "/mnt/share0", kind: .virtiofs)]
+    let doc = try #require(try RubyYAML.parse(CloudInit.userData(config)) as? [String: Any])
+    #expect(
+      doc["mounts"] as? [[String]] == [
+        ["share0", "/mnt/share0", "virtiofs", "rw,nofail", "0", "0"],
+        ["rosetta", "/mnt/rosetta", "virtiofs", "ro,nofail", "0", "0"],
+      ])
+    let files = try #require(doc["write_files"] as? [[String: String]])
+    let binfmt = try #require(files.first { $0["path"] == RosettaGuest.binfmtFile })
+    #expect(
+      binfmt["content"]
+        == ":rosetta:M::\\x7fELF\\x02\\x01\\x01\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x02\\x00\\x3e\\x00:"
+        + "\\xff\\xff\\xff\\xff\\xff\\xfe\\xfe\\x00\\xff\\xff\\xff\\xff\\xff\\xff\\xff\\xff\\xfe\\xff\\xff\\xff:"
+        + "/mnt/rosetta/rosetta:CF\n")
+    let dropIn = try #require(files.first { $0["path"] == RosettaGuest.binfmtDropIn })
+    #expect(dropIn["content"] == "[Unit]\nRequiresMountsFor=/mnt/rosetta\n")
+    let runcmd = try #require(doc["runcmd"] as? [[String]])
+    #expect(runcmd.contains(["systemctl", "restart", "systemd-binfmt.service"]))
+    #expect(!CloudInit.cloudConfig(Self.base()).contains("rosetta"))
   }
 
   /// R-504 on QEMU: the desktop without a VNC server, which QEMU's own VNC replaces.

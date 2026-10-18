@@ -69,6 +69,7 @@ extension ImageStore {
       let target = folder.appending(path: Self.kernelFileNames[key]!)
       try? FileManager.default.removeItem(at: target)
       try FileManager.default.copyItem(at: source.resolvingSymlinksInPath(), to: target)
+      if key == "kernel" { try Gzip.decompressInPlace(target) }
       files[key] = "kernel/\(target.lastPathComponent)"
     }
     var record =
@@ -127,6 +128,7 @@ extension ImageStore {
     for (key, source) in found.files {
       let target = out.appending(path: Self.kernelFileNames[key]!)
       try found.volume.copy(source, to: target)
+      if key == "kernel" { try Gzip.decompressInPlace(target) }
       record.files[key] = "kernel/\(target.lastPathComponent)"
     }
     record.kernelVersion = found.version
@@ -135,6 +137,46 @@ extension ImageStore {
       throw VMLabError(code: .internal, message: "The extracted kernel did not record.", hint: "")
     }
     return result
+  }
+
+  /// `boot` ready to start: a kernel boot without a kernel path takes `image`'s kernel files (and
+  /// initrd, unless one was given), extracting them from the pulled image the first time; every
+  /// host path the mode uses must be a readable file. Both engines start from this (R-305, R-604).
+  public func resolvingBoot(_ boot: BootSpec?, image: String?) throws(VMLabError) -> BootSpec {
+    var boot = boot ?? BootSpec()
+    if boot.mode == .kernel, boot.kernel == nil {
+      guard let image else {
+        throw VMLabError.invalidRequest(
+          field: "boot.kernel", reason: "kernel boot needs a kernel path or an image",
+          hint: "Set boot.kernel, or name an image whose kernel vmlab can extract.")
+      }
+      let files: KernelFiles
+      do {
+        files = try kernel(of: image) ?? extractKernel(image)
+      } catch let error as VMLabError {
+        throw error
+      } catch {
+        throw VMLabError(
+          code: .internal, message: "Cannot extract the kernel of \(image): \(error)",
+          hint: "Register a kernel with images register.", data: ["image": .string(image)])
+      }
+      boot.kernel = files.kernel.path
+      if boot.initrd == nil { boot.initrd = files.initrd?.path }
+    }
+    let paths: [(String, String?)] = [
+      ("boot.kernel", boot.mode == .kernel ? boot.kernel : nil),
+      ("boot.initrd", boot.mode == .kernel ? boot.initrd : nil),
+      ("boot.dtb", boot.mode == .kernel ? boot.dtb : nil),
+      ("boot.firmware", boot.mode == .firmware ? boot.firmware : nil),
+      ("boot.binary", boot.mode == .binary ? boot.binary : nil),
+    ]
+    for case (let field, let path?) in paths
+    where !FileManager.default.isReadableFile(atPath: path) {
+      throw VMLabError.invalidRequest(
+        field: field, reason: "\(path) is not a readable file",
+        hint: "Give the absolute host path of an existing file.")
+    }
+    return boot
   }
 
   public nonisolated func kernelDirectory(_ name: String) -> URL {

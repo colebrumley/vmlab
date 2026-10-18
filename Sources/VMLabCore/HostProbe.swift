@@ -113,7 +113,8 @@ public struct HostProbe: Sendable {
       qemu: qemu,
       tart: probeTart(),
       rosettaInstalled: fileExists(Self.rosettaRuntimePath),
-      nestedSupported: Self.nestedSupported(chip: chip, osVersion: osVersion),
+      nestedSupported: runnerNestedSupported()
+        ?? Self.nestedSupported(chip: chip, osVersion: osVersion),
       runnerSigned: runnerSigned(),
       runningMacOSGuests: guests.macOS,
       runningGuests: guests.total,
@@ -225,9 +226,27 @@ public struct HostProbe: Sendable {
     return pages.reduce(0, +) * pageSize
   }
 
-  /// Nested virtualization needs an M3 or newer and macOS 15 or newer. The runner's
-  /// `VZGenericPlatformConfiguration.isNestedVirtualizationSupported` replaces this inference
-  /// once the VZ backend exists.
+  /// The key of `vmlab-vz capabilities`' JSON answer.
+  public static let nestedKey = "nestedVirtualizationSupported"
+
+  /// `VZGenericPlatformConfiguration.isNestedVirtualizationSupported`, as `vmlab-vz
+  /// capabilities` reports it (R-609); nil when the runner is absent or does not answer.
+  private func runnerNestedSupported() -> Bool? {
+    guard let runnerPath, fileExists(runnerPath), let text = run(runnerPath, ["capabilities"])
+    else { return nil }
+    return Self.parseNestedSupported(text)
+  }
+
+  /// The answer in `vmlab-vz capabilities` output.
+  public static func parseNestedSupported(_ output: String) -> Bool? {
+    guard
+      let object = try? JSONSerialization.jsonObject(with: Data(output.utf8)) as? [String: Any]
+    else { return nil }
+    return object[nestedKey] as? Bool
+  }
+
+  /// Nested virtualization needs an M3 or newer and macOS 15 or newer: the inference used when
+  /// the runner cannot be asked.
   public static func nestedSupported(chip: HostFacts.Chip, osVersion: String) -> Bool {
     let major = Int(osVersion.split(separator: ".").first ?? "") ?? 0
     return (chip.generation ?? 0) >= 3 && major >= 15
