@@ -142,8 +142,16 @@ public struct RegisterMap: Sendable, Equatable {
     }
   }
 
+  /// The `bitsize` a description may give a register: the widest real registers (SVE/SME) are
+  /// 2048 bits, so 4096 leaves room while keeping byte arithmetic far from overflow.
+  public static let bitSizeLimit = 1...4096
+  /// The register numbers a description may use (`p`/`P` take any hex number; real targets use
+  /// a few hundred).
+  public static let registerNumberLimit = 0...65535
+
   /// Builds the map from the main description and the annexes it includes (by name). Registers
-  /// without `regnum` are numbered one after the previous register, starting at 0.
+  /// without `regnum` are numbered one after the previous register, starting at 0. A `bitsize`
+  /// outside `bitSizeLimit` or a number outside `registerNumberLimit` is `badTargetDescription`.
   public static func build(targetXML xml: String, annexes: [String: String] = [:]) throws
     -> RegisterMap
   {
@@ -163,6 +171,12 @@ public struct RegisterMap: Sendable, Equatable {
           try walk(included, depth: depth + 1)
         case .register(let name, let bitSize, let regnum, let type, let group):
           let number = regnum ?? next
+          guard bitSizeLimit.contains(bitSize) else {
+            throw GDBError.badTargetDescription("register \(name) has bitsize \(bitSize)")
+          }
+          guard registerNumberLimit.contains(number) else {
+            throw GDBError.badTargetDescription("register \(name) has number \(number)")
+          }
           registers.append(
             GDBRegister(name: name, number: number, bitSize: bitSize, type: type, group: group))
           next = number + 1
@@ -203,6 +217,7 @@ enum TargetXMLParser {
     parser.shouldResolveExternalEntities = false
     parser.delegate = delegate
     guard parser.parse() else {
+      if let error = delegate.error { throw error }
       throw GDBError.badTargetDescription(
         parser.parserError.map { "\($0.localizedDescription)" } ?? "unparseable XML")
     }
