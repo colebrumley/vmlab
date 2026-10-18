@@ -7,7 +7,9 @@ import VMLabCore
 /// (`VNCAlwaysStartOnConsole`; otherwise macOS 26 shows a password-only viewer a lock screen of its
 /// own), and check that port 5900 answers RFB. Every step is logged
 /// to `<vm>/provision.log`; success writes `<vm>/provisioned`, so later starts skip it. Password
-/// authentication stays on (the images are disposable).
+/// authentication stays on (the images are disposable). A share at a `share.guest` other than
+/// `/Volumes/My Shared Files` is mounted by a LaunchDaemon (`io.vmlab.share`) that runs
+/// `mount_virtiofs` at every boot, installed with sudo.
 public struct MacProvisioner: Sendable {
   public var vmDirectory: URL
   public var login: ImageLogin
@@ -22,6 +24,12 @@ public struct MacProvisioner: Sendable {
   public var rfbProbe: @Sendable (String, Int, Duration) async -> Bool
   /// The segment NIC to give its static address (R-901), or nil off any segment.
   public var segment: SegmentAttachment?
+  /// The password `sudo -S` reads on stdin when it is not the login password: the request's
+  /// `provision.sudoPassword` (`<vm>/sudo.pass`), redacted from `provision.json`.
+  public var sudoPassword: String?
+  /// The guest path to mount the share at with the `io.vmlab.share` LaunchDaemon, or nil when
+  /// there is no share or macOS automounts it (`SharedDirSpec.usesMacOSAutomount`).
+  public var sharePath: String?
 
   public init(
     vmDirectory: URL, login: ImageLogin, hostname: String, publicKey: String,
@@ -57,7 +65,7 @@ public struct MacProvisioner: Sendable {
   /// The steps, in order: a name, the remote command and its stdin. The hostname and VNC password
   /// are vmlab's own (a DNS label, `[A-Za-z0-9]{8}`), so they are safe inside the commands.
   public func steps() -> [(name: String, command: String, input: Data)] {
-    let sudoInput = Data("\(login.password ?? "")\n".utf8)
+    let sudoInput = Data("\(sudoPassword ?? login.password ?? "")\n".utf8)
     var steps: [(String, String, Data)] = [
       (
         "authorized_keys",
@@ -84,6 +92,32 @@ public struct MacProvisioner: Sendable {
           "sudo -S -p '' /bin/sh /tmp/vmlab-segment.sh \(segment.mac) \(segment.address) "
             + Self.netmask(segment.prefixLength),
           sudoInput
+        ))
+    }
+    if let sharePath {
+      steps.append((Self.shareCheckStep, "test -x \(Self.mountVirtiofs)", Data()))
+      steps.append(
+        (
+          "share_plist", "umask 022 && cat > \(Self.shareStaging)",
+          Data(Self.sharePlist(path: sharePath).utf8)
+        ))
+      steps.append(
+        (
+          "share_daemon",
+          "sudo -S -p '' /bin/sh -c 'install -m 644 -o root -g wheel \(Self.shareStaging) "
+            + "\(Self.shareDaemonPath) && rm -f \(Self.shareStaging) && "
+            + "(launchctl bootout system/\(Self.shareLabel) 2>/dev/null; true) && "
+            + "launchctl bootstrap system \(Self.shareDaemonPath)'",
+          sudoInput
+        ))
+      steps.append(
+        (
+          "share_mount",
+          "/bin/sh -c 'for i in $(seq 1 60); do p=$(cd \"$0\" 2>/dev/null && pwd -P) && "
+            + "/sbin/mount | grep -qF \" on $p (\" && exit 0; sleep 1; done; "
+            + "echo \"$0 is not mounted\" >&2; exit 1' "
+            + Self.shellQuote(sharePath),
+          Data()
         ))
     }
     if let vncPassword {
@@ -139,6 +173,71 @@ public struct MacProvisioner: Sendable {
     exit 4
     """#
 
+  /// The virtiofs tag of a share `io.vmlab.share` mounts (a share at the automount path uses
+  /// `VZRunnerConfig.macOSAutomountTag` instead).
+  public static let shareTag = "vmlab-share0"
+  public static let shareLabel = "io.vmlab.share"
+  public static let shareDaemonPath = "/Library/LaunchDaemons/io.vmlab.share.plist"
+  static let shareStaging = "/tmp/io.vmlab.share.plist"
+  static let mountVirtiofs = "/sbin/mount_virtiofs"
+  static let shareCheckStep = "share_check"
+
+  /// What `io.vmlab.share` runs at every boot, with the guest path as `$0` and the tag as `$1`
+  /// (arguments, so no path is ever parsed as shell): already mounted is done; otherwise make the
+  /// mount point and mount, retried while the virtiofs device appears. `mount` lists the mount
+  /// point resolved (`/tmp/x` as `/private/tmp/x`), so the test resolves it first.
+  static let shareScript =
+    "for i in $(seq 1 60); do mkdir -p \"$0\" && p=$(cd \"$0\" && pwd -P) && "
+    + "{ /sbin/mount | grep -qF \" on $p (\" && exit 0; \(mountVirtiofs) \"$1\" \"$0\" && exit 0; }; "
+    + "sleep 2; done; exit 1"
+
+  /// The LaunchDaemon that mounts the share at `path` at load and at every boot.
+  static func sharePlist(path: String) -> String {
+    let arguments = ["/bin/sh", "-c", shareScript, path, shareTag]
+      .map { "    <string>\(xmlEscape($0))</string>" }.joined(separator: "\n")
+    return """
+      <?xml version="1.0" encoding="UTF-8"?>
+      <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" \
+      "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+      <plist version="1.0">
+      <dict>
+        <key>Label</key>
+        <string>\(shareLabel)</string>
+        <key>ProgramArguments</key>
+        <array>
+      \(arguments)
+        </array>
+        <key>RunAtLoad</key>
+        <true/>
+        <key>StandardErrorPath</key>
+        <string>/var/log/vmlab-share.log</string>
+      </dict>
+      </plist>
+
+      """
+  }
+
+  /// `text` as XML character data.
+  static func xmlEscape(_ text: String) -> String {
+    text.replacingOccurrences(of: "&", with: "&amp;").replacingOccurrences(of: "<", with: "&lt;")
+      .replacingOccurrences(of: ">", with: "&gt;").replacingOccurrences(of: "\"", with: "&quot;")
+      .replacingOccurrences(of: "'", with: "&apos;")
+  }
+
+  /// `text` as one POSIX shell word.
+  static func shellQuote(_ text: String) -> String {
+    "'" + text.replacingOccurrences(of: "'", with: "'\\''") + "'"
+  }
+
+  /// Why `step` failed, for the error; most steps just failed.
+  static func reason(for step: String) -> String {
+    step == shareCheckStep
+      ? "the guest has no \(mountVirtiofs), so the share cannot be mounted at share.guest "
+        + "(macOS 13 or later has it; leave share.guest out to use "
+        + "\(SharedDirSpec.macOSAutomountPath))"
+      : "the step failed"
+  }
+
   /// `24` → `255.255.255.0`.
   static func netmask(_ prefix: Int) -> String {
     let bits = UInt32.max << UInt32(32 - max(0, min(32, prefix)))
@@ -148,10 +247,17 @@ public struct MacProvisioner: Sendable {
   /// The name of the first step: waiting for sshd to take the image password.
   public static let sshStep = "ssh"
 
-  /// `command` as `provision.json` records it: the VNC password replaced by where it is kept.
+  /// `command` as `provision.json` records it: the VNC and sudo passwords replaced by where they
+  /// are kept (the sudo password goes on stdin, so this is a second line of defence).
   func recorded(_ command: String) -> String {
-    guard let vncPassword else { return command }
-    return command.replacingOccurrences(of: vncPassword, with: "<vnc.pass>")
+    var command = command
+    if let vncPassword {
+      command = command.replacingOccurrences(of: vncPassword, with: "<vnc.pass>")
+    }
+    if let sudoPassword, !sudoPassword.isEmpty {
+      command = command.replacingOccurrences(of: sudoPassword, with: "<sudo.pass>")
+    }
+    return command
   }
 
   /// Runs the steps against the guest at `ip`; `provision_failed` names the step that failed.
@@ -210,7 +316,9 @@ public struct MacProvisioner: Sendable {
       let ms = Self.ms(clock.now - started)
       append("\(step.name): exit \(output.map { String($0.status) } ?? "none")")
       if let text = output?.output, !text.isEmpty { append(text) }
-      guard output?.status == 0 else { throw fail(step.name, "the step failed", output, ms: ms) }
+      guard output?.status == 0 else {
+        throw fail(step.name, Self.reason(for: step.name), output, ms: ms)
+      }
       if step.name == "screen_sharing" {
         guard await rfbProbe(ip, 5900, .seconds(60)) else {
           done.append(

@@ -258,7 +258,11 @@ base64 hardware model and machine identifier and `nvram.bin` as auxiliary storag
 clone's MAC, no console, always a Mac display, and the record's share as a virtiofs device with the
 automount tag `com.apple.virtio-fs.automount` (`VZRunnerConfig.macOSAutomountTag`), which macOS
 mounts at `/Volumes/My Shared Files` by itself (`SharedDirSpec.macOSAutomountPath`, what
-`vm_inspect` reports; create refuses any other `share.guest`, CX-27)) and waits for that MAC's lease; stop, kill, pause and
+`vm_inspect` reports, CX-27); a `share.guest` elsewhere uses the tag `vmlab-share0`
+(`MacProvisioner.shareTag`) and first boot installs the `io.vmlab.share` LaunchDaemon that runs
+`mount_virtiofs` there at every boot, with sudo, so create refuses it before cloning unless the
+image records the login password or the request gave `provision.sudoPassword`, which
+`VMManager.create` moves out of the record into `<vm>/sudo.pass` (0600, Core `SudoPassword`)) and waits for that MAC's lease; stop, kill, pause and
 resume are `VZBackend`'s; destroy also `tart delete`s the clone. The runner turns boot `.macOS` into
 a `VZMacPlatformConfiguration`, `VZMacOSBootLoader` and `VZMacGraphicsDeviceConfiguration`.
 `PasswordSSH` runs `ssh` with the image password through an askpass script
@@ -267,7 +271,10 @@ installed yet; `HostCommand` is its subprocess with stdin and a deadline.
 `MacProvisioner` (R-606) is a macOS guest's first boot, run by `VZMacBackend.start` once the lease
 is known and `<vm>/provisioned` is absent: over `PasswordSSH` with the image login it waits for
 sshd, appends `<vm>/id_ed25519.pub` (made at create by `VMManager`, R-400) to `~/.ssh/authorized_keys`,
-sets the hostname with `scutil` (through `sudo -S`, the password on stdin), and when a GUI feature was
+sets the hostname with `scutil` (through `sudo -S`, the password on stdin), for a share off the
+automount path checks `/sbin/mount_virtiofs` (`share_check`), installs and bootstraps the
+LaunchDaemon (`share_plist`, `share_daemon`; the guest path is an argument of its `/bin/sh -c`, never
+shell text) and waits for the mount (`share_mount`), and when a GUI feature was
 granted sets the legacy VNC password from `<vm>/vnc.pass` (eight letters and digits, made at
 create) with ARD's `kickstart`, sets `VNCAlwaysStartOnConsole` (without it macOS 26 shows a
 password-only VNC viewer a lock screen of its own instead of the logged-in console), enables and

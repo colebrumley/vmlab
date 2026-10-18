@@ -283,13 +283,17 @@ public struct SharedDirSpec: Codable, Sendable, Hashable {
 
   public var guestPath: String { guest ?? Self.defaultGuestPath }
 
-  /// Where a macOS guest mounts the share by itself (CX-27: the automount virtiofs tag); a
-  /// `vz-macos` share is always there.
+  /// Where a macOS guest mounts the share by itself (CX-27: the automount virtiofs tag): a
+  /// `vz-macos` share without `guest`, or with this one, is there.
   public static let macOSAutomountPath = "/Volumes/My Shared Files"
+
+  /// Whether a macOS guest finds the share at `macOSAutomountPath` by itself; otherwise first-boot
+  /// provisioning mounts it at `guest` with a LaunchDaemon, which needs sudo in the guest.
+  public var usesMacOSAutomount: Bool { guest == nil || guest == Self.macOSAutomountPath }
 
   /// The guest path the share is mounted at under `profile`.
   public func guestPath(for profile: Profile) -> String {
-    profile == .vzMacOS ? Self.macOSAutomountPath : guestPath
+    profile == .vzMacOS ? (guest ?? Self.macOSAutomountPath) : guestPath
   }
 
   /// The host directory of a VM whose directory is `vmDirectory`.
@@ -308,8 +312,9 @@ public struct SharedDirSpec: Codable, Sendable, Hashable {
     return SharedDirSpec()
   }
 
-  /// Throws `invalid_request` for a relative path or a guest path an fstab line cannot hold.
-  public func validate() throws(VMLabError) {
+  /// Throws `invalid_request` for a relative path, or a guest path an fstab line cannot hold
+  /// (Linux) or a control character (macOS, where the LaunchDaemon takes any other path).
+  public func validate(guest os: GuestSpec.OS? = nil) throws(VMLabError) {
     if let host {
       guard host.hasPrefix("/"), !host.contains("\n"), !host.contains("\0") else {
         throw .invalidRequest(
@@ -318,6 +323,16 @@ public struct SharedDirSpec: Codable, Sendable, Hashable {
       }
     }
     if let guest {
+      if os == .macos {
+        let bad = guest.unicodeScalars.contains { $0.value < 0x20 || $0.value == 0x7f }
+        guard guest.hasPrefix("/"), guest != "/", !bad else {
+          throw .invalidRequest(
+            field: "share.guest",
+            reason: "\(guest) is not an absolute guest path without control characters",
+            hint: "Use a path such as /Users/admin/project.")
+        }
+        return
+      }
       let bad = guest.unicodeScalars.contains {
         $0.properties.isWhitespace || $0.value < 0x20 || $0 == "\\" || $0 == "\""
       }
@@ -857,7 +872,7 @@ public struct Requirements: Codable, Sendable, Hashable {
     }
     try extra?.validate()
     try provision?.validate(guest: guest)
-    try share?.validate()
+    try share?.validate(guest: guest.os)
     try checkContradictions()
   }
 

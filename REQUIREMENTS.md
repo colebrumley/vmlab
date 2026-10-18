@@ -1030,12 +1030,18 @@ result also carries `vm` (id and name) where a VM is involved and `warnings: [St
   "network": { "mode": "nat", "segment": "cluster-a", "forwards": [{ "guest": 22 }, { "guest": 8080, "host": 18080 }] },
   "image": "debian-13-arm64",
   "boot": { "mode": "kernel", "kernel": "…", "initrd": "…", "cmdline": "console=ttyAMA0", "haltAtStart": false },
-  "provision": { "packages": ["jq"], "runCommands": ["…"], "userData": null },
+  "provision": { "packages": ["jq"], "runCommands": ["…"], "userData": null, "sudoPassword": null },
+  "share": { "host": "/Users/me/project", "guest": "/mnt/host" },
   "extra": { "qemuArgs": [] }
 }
 ```
 
-Every field but `guest` has a default (Appendix G); `resources` values are capped there too. `require` defaults to `[]`, which lands on a VZ
+Every field but `guest` has a default (Appendix G); `resources` values are capped there too.
+On a macOS guest `share.guest` defaults to `/Volumes/My Shared Files` (Apple's automount tag); any
+other path is mounted at every boot by the `io.vmlab.share` LaunchDaemon that first boot installs
+with sudo, so the image must record the login password or `provision.sudoPassword` must give it
+(else `invalid_request` before cloning). `sudoPassword` is macOS only, kept in `<vm>/sudo.pass`
+(0600), and never written to `vm.json` or `provision.json`. `require` defaults to `[]`, which lands on a VZ
 profile. The result of `vm_create` repeats the resolved plan so the model knows what it has.
 
 ## Appendix D — Error codes
