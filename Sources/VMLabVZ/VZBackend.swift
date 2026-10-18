@@ -2,30 +2,42 @@ import Foundation
 import VMLabCore
 
 /// The `vz-linux` backend: each guest is a detached `vmlab-vz` runner driven over its control
-/// socket. R-600 boots an EFI Linux disk with the minimal `VZRunnerConfig.linuxEFI`; R-601 makes
-/// the full configuration (seed, stable MAC, leased IP), R-602 the serial channel and R-605 the
-/// checkpoints, so `attach` offers none of those channels yet.
+/// socket. Create clones the image and writes the VM's SSH key and cloud-init seed; start launches
+/// the runner with `VZRunnerConfig.linux` and records the address the guest leased. R-602 adds the
+/// serial channel and R-605 the checkpoints, so `attach` offers neither yet.
 public struct VZBackend: Backend {
   public let profile: Profile = .vzLinux
   public let store: Store
   public let launcher: VZRunnerLauncher
   /// How long `stop` waits for the guest to power off.
   public var stopTimeout: Duration
+  /// How long `start` waits for the guest's DHCP lease before recording no `runtime.ip`.
+  public var leaseTimeout: Duration
+  /// The vmnet lease file (`DHCPLeases.defaultPath`).
+  public var leasePath: String
+  /// Runs `ssh-keygen` and `hdiutil`.
+  public var commands: any CommandRunning
 
   public init(
     store: Store, launcher: VZRunnerLauncher = VZRunnerLauncher(),
-    stopTimeout: Duration = .seconds(120)
+    stopTimeout: Duration = .seconds(120), leaseTimeout: Duration = .seconds(60),
+    leasePath: String = DHCPLeases.defaultPath, commands: any CommandRunning = ProcessRunner()
   ) {
     self.store = store
     self.launcher = launcher
     self.stopTimeout = stopTimeout
+    self.leaseTimeout = leaseTimeout
+    self.leasePath = leasePath
+    self.commands = commands
   }
 
   func paths(_ record: VMRecord) -> VZRunnerPaths {
     VZRunnerPaths(vmDirectory: store.directory(of: record.id))
   }
 
-  /// Clones the pulled image's raw disk to `<vm>/disk.raw` (an APFS clone, so instant).
+  /// Clones the pulled image's raw disk to `<vm>/disk.raw` (an APFS clone, so instant), generates
+  /// `<vm>/id_ed25519` and writes `<vm>/seed.iso` for the image's login user with the console on
+  /// `hvc0`.
   public func create(_ record: VMRecord, plan: Plan) async throws(VMLabError) {
     guard let name = record.image else { return }
     let images = ImageStore(home: store.home)
@@ -34,23 +46,62 @@ public struct VZBackend: Backend {
         code: .imageNotFound, message: "Image \(name) has no pulled raw disk",
         hint: "Run vmlab images pull \(name).", data: ["image": .string(name)])
     }
-    let disk = store.directory(of: record.id).appending(path: "disk.raw")
-    guard !FileManager.default.fileExists(atPath: disk.path) else { return }
+    let dir = store.directory(of: record.id)
+    let disk = dir.appending(path: "disk.raw")
+    if !FileManager.default.fileExists(atPath: disk.path) {
+      do {
+        try FileManager.default.copyItem(
+          at: images.imageDirectory(name).appending(path: raw), to: disk)
+      } catch {
+        throw VMLabError(
+          code: .internal, message: "Cannot clone \(name) to \(disk.path): \(error)",
+          hint: "Check free disk space and permissions under VMLAB_HOME.")
+      }
+    }
+    let key = try SSHKey.ensure(
+      at: dir.appending(path: "id_ed25519"), comment: "vmlab-\(record.id)", commands: commands)
+    let seed = CloudInitConfig(
+      instanceID: record.id, hostname: Self.hostname(for: record), user: pulled.login.user,
+      sshPublicKey: key, console: .hvc0,
+      dhcpIdentifierMAC: record.network.mode == .disabled
+        ? nil : VZRunnerConfig.stableMAC(for: record.id))
     do {
-      try FileManager.default.copyItem(
-        at: images.imageDirectory(name).appending(path: raw), to: disk)
+      try CloudInit.makeSeed(
+        seed, directory: dir.appending(path: "seed"), iso: dir.appending(path: "seed.iso"),
+        runner: commands)
+    } catch let error as VMLabError {
+      throw error
     } catch {
       throw VMLabError(
-        code: .internal, message: "Cannot clone \(name) to \(disk.path): \(error)",
-        hint: "Check free disk space and permissions under VMLAB_HOME.")
+        code: .internal, message: "Cannot write the cloud-init seed: \(error)",
+        hint: "Check that the VM directory is writable.")
     }
   }
 
+  /// A DNS label from the VM's name (lowercase letters, digits and hyphens), else its id.
+  static func hostname(for record: VMRecord) -> String {
+    let mapped = String(
+      record.name.lowercased().map {
+        ("a"..."z").contains($0) || ("0"..."9").contains($0) ? $0 : "-"
+      }
+    )
+    let label = String(mapped.trimmingCharacters(in: CharacterSet(charactersIn: "-")).prefix(63))
+    return label.isEmpty ? record.id : label
+  }
+
+  /// Launches the runner, then waits up to `leaseTimeout` for the NIC's DHCP lease and records
+  /// it as `runtime.ip` (nil when none appeared; the guest still runs).
   public func start(_ record: VMRecord) async throws(VMLabError) -> VMRuntime {
     let dir = store.directory(of: record.id)
-    let handle = try await launcher.launch(
-      vmDirectory: dir, config: .linuxEFI(record: record, vmDirectory: dir))
-    return handle.runtime
+    let config = try VZRunnerConfig.linux(
+      record: record, vmDirectory: dir,
+      seed: FileManager.default.fileExists(atPath: dir.appending(path: "seed.iso").path))
+    let handle = try await launcher.launch(vmDirectory: dir, config: config)
+    var runtime = handle.runtime
+    if case .nat(let mac?) = config.network.first {
+      runtime.ip = await DHCPLeases.waitForIP(mac: mac, path: leasePath, timeout: leaseTimeout)
+    }
+    return runtime
   }
 
   public func stop(_ record: VMRecord) async throws(VMLabError) {

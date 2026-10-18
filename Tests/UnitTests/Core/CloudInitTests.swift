@@ -99,6 +99,20 @@ enum RubyYAML {
     #expect(ethernets["seg0"]?["dhcp4"] as? Bool == false)
   }
 
+  /// VZ finds the guest by MAC in vmnet's lease file, so the NAT NIC identifies itself by MAC.
+  @Test(.enabled(if: RubyYAML.available)) func dhcpIdentifierMACGetsNetworkConfig() throws {
+    var config = Self.base()
+    config.dhcpIdentifierMAC = "02:AB:00:00:00:01"
+    let text = try #require(CloudInit.networkConfig(config))
+    let doc = try #require(try RubyYAML.parse(text) as? [String: Any])
+    let ethernets = try #require(doc["ethernets"] as? [String: [String: Any]])
+    #expect(ethernets.keys.sorted() == ["nat0"])
+    #expect(
+      (ethernets["nat0"]?["match"] as? [String: String])?["macaddress"] == "02:ab:00:00:00:01")
+    #expect(ethernets["nat0"]?["dhcp4"] as? Bool == true)
+    #expect(ethernets["nat0"]?["dhcp-identifier"] as? String == "mac")
+  }
+
   @Test(.enabled(if: RubyYAML.available)) func hostileStringsRoundTrip() throws {
     let values = [
       "yes", "no", "null", "~", "123", "0o17", "- a", ": b", "#c", "a: b", "'q'", "\"dq\"",

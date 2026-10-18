@@ -1,0 +1,34 @@
+{
+  "bootLoader" : {
+    "efi" : {
+      "variableStore" : "/vmlab/vms/vm-test01/efi-vars.bin"
+    }
+  },
+  "console" : {
+    "log" : "/vmlab/vms/vm-test01/console.log"
+  },
+  "cpus" : 2,
+  "entropy" : true,
+  "graphics" : {
+    "height" : 800,
+    "width" : 1280
+  },
+  "memoryBalloon" : true,
+  "memoryBytes" : 4294967296,
+  "network" : [
+    {
+      "mac" : "ce:15:5d:70:83:a6"
+    }
+  ],
+  "platform" : "generic",
+  "storage" : [
+    {
+      "path" : "/vmlab/vms/vm-test01/disk.raw",
+      "readOnly" : false
+    },
+    {
+      "path" : "/vmlab/vms/vm-test01/seed.iso",
+      "readOnly" : true
+    }
+  ]
+}
