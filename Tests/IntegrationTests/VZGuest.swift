@@ -22,7 +22,9 @@ struct VZGuest {
   /// Creates and starts a guest planned with `features` (all of them requested) and waits until
   /// SSH answers.
   static func boot(
-    features: [Feature], tag: String, share: SharedDirSpec? = nil
+    features: [Feature], tag: String, share: SharedDirSpec? = nil,
+    resources: ResourceSpec = ResourceSpec(cpus: 2, memoryGB: 2),
+    leaseTimeout: Duration = .seconds(90)
   ) async throws -> VZGuest {
     let home = URL(filePath: "/tmp/vmlab-test-\(getpid())-\(tag)")
     try? FileManager.default.removeItem(at: home)
@@ -35,13 +37,13 @@ struct VZGuest {
     let store = Store(home: home)
     let backend = VZBackend(
       store: store, launcher: VZRunnerLauncher(runnerPath: VZRunnerIntegrationTests.runner),
-      leaseTimeout: .seconds(90))
+      leaseTimeout: leaseTimeout)
     let registry = BackendRegistry()
     registry.register(backend)
     let manager = VMManager(store: store, backends: registry)
     let plan = Plan(
       profile: .vzLinux, guest: GuestSpec(os: .linux, arch: .arm64),
-      resources: ResourceSpec(cpus: 2, memoryGB: 2), features: features, requested: features,
+      resources: resources, features: features, requested: features,
       estimatedStartupSeconds: 30)
     let created = try await manager.create(
       VMRecord(

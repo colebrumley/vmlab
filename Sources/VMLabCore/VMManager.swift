@@ -172,7 +172,10 @@ public actor VMManager {
       } else if action == .destroy, let segment = record.segment {
         _ = await publishNames(segment.segment, focus: id)
       }
-      return Outcome(record: updated, warnings: warnings)
+      // A start's SSH wait may have recorded an address the backend learned late (a lease).
+      let final =
+        action == .start && updated != nil ? (try? store.load(id: id)) ?? updated : updated
+      return Outcome(record: final, warnings: warnings)
     } catch {
       await log(id, "\(action.rawValue) failed: \(error.message)", kind: .error, level: .error)
       if DeadPeer.isDeadPeer(error) {
