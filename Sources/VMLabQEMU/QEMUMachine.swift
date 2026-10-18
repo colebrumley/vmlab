@@ -74,7 +74,14 @@ public actor QEMUMachine {
   /// qemu-guest-agent on `qga.sock` (R-403); it connects per command, so it needs no setup here.
   public nonisolated let agent: GuestAgent
 
-  init(layout: QEMULayout, pid: Int32, qmp: QMPClient, serial: SerialChannel, runtime: VMRuntime) {
+  /// Panic detection over this guest's console (R-304); its position is saved on disconnect.
+  let panics: ConsolePanicWatch?
+
+  init(
+    layout: QEMULayout, pid: Int32, qmp: QMPClient, serial: SerialChannel, runtime: VMRuntime,
+    panics: ConsolePanicWatch? = nil
+  ) {
+    self.panics = panics
     self.layout = layout
     self.pid = pid
     self.qmp = qmp
@@ -259,8 +266,10 @@ public actor QEMUMachine {
     let qmp = try await connectFirst(
       monitors ?? [layout.qmpSocket.path], connectTimeout: timeout)
     let serial = SerialChannel(socketPath: layout.serialSocket.path, logURL: layout.serialLog)
-    // R-304: panic lines go to the event log from this channel's first line on.
-    await serial.watchForPanics(vmDirectory: layout.directory)
+    // R-304: panic lines go to the event log, both those QEMU logged to console.log while no
+    // vmlab process held the socket and this channel's live lines.
+    let panics = ConsolePanicWatch(vmDirectory: layout.directory, console: layout.consoleLog)
+    await panics.attach(to: serial)
     do {
       try await serial.start(connectTimeout: timeout)
     } catch {
@@ -272,7 +281,8 @@ public actor QEMUMachine {
       serialSocket: layout.serialSocket.path, vncSocket: layout.vncSocket.path,
       gdbEndpoint: gdbPort.map { "tcp:127.0.0.1:\($0)" }, sshPort: sshPort,
       forwards: forwards.flatMap { $0.isEmpty ? nil : $0 })
-    return QEMUMachine(layout: layout, pid: pid, qmp: qmp, serial: serial, runtime: runtime)
+    return QEMUMachine(
+      layout: layout, pid: pid, qmp: qmp, serial: serial, runtime: runtime, panics: panics)
   }
 
   // MARK: Control
@@ -324,6 +334,7 @@ public actor QEMUMachine {
   /// Closes the QMP connection and the serial channel without touching the process.
   public func disconnect() async {
     await qmp.close()
+    panics?.checkpoint(channelOffset: await serial.endOffset)
     await serial.stop()
   }
 

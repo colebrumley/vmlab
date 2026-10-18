@@ -110,4 +110,59 @@ struct PanicIntegrationTests {
     #expect(lines.contains { $0.contains("running -> stopped: the guest powered off") }, "\(lines)")
     _ = try await server.call("vm_lifecycle", ["vm": "off", "action": "destroy"])
   }
+
+  /// A panic while no vmlab process holds the serial socket: QEMU's console.log keeps it, and the
+  /// next server finds it when it attaches at start.
+  @Test func panicWithNobodyWatchingIsFoundByTheNextServer() async throws {
+    let home = URL(filePath: "/tmp/vmlab-test-\(getpid())-nw")
+    try? FileManager.default.removeItem(at: home)
+    try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+    try FileManager.default.createSymbolicLink(
+      at: home.appending(path: "images"),
+      withDestinationURL: FileManager.default.homeDirectoryForCurrentUser.appending(
+        path: ".vmlab/images"))
+    let binary = try TwoServersIntegrationTests.vmlabURL()
+    let first = try StdioMCPClient(binary: binary, home: home, tag: "1")
+    var second: StdioMCPClient?
+    defer {
+      first.terminate()
+      second?.terminate()
+      for pid in TwoServersIntegrationTests.qemuPIDs(in: home) { kill(pid, SIGKILL) }
+      try? FileManager.default.removeItem(at: home)
+    }
+    try await first.initialize()
+    let requirements: JSONValue = [
+      "guest": ["os": "linux", "arch": "arm64"],
+      "require": ["serial", "exec_ssh", "introspection"],
+      "resources": ["cpus": 1, "memoryGB": 1, "diskGB": 8], "image": "debian-13-arm64",
+    ]
+    let made = try await first.call(
+      "vm_create", ["requirements": requirements, "name": "lonely", "autostart": true])
+    try #require(made.isError == false, "\(made.text)")
+    let job = try await first.call(
+      "vm_exec",
+      [
+        "vm": "lonely", "background": true,
+        "command": "sleep 8; echo c | sudo tee /proc/sysrq-trigger",
+      ])
+    try #require(job.isError == false, "\(job.text)")
+    first.terminate()  // nobody holds the serial socket now
+    try await Task.sleep(for: .seconds(20))
+    let store = Store(home: home)
+    let log = EventLog(vmDirectory: store.directory(of: try store.find("lonely").id))
+    #expect(try await log.latestPanic() == nil)  // nobody was watching
+
+    let next = try StdioMCPClient(binary: binary, home: home, tag: "2")
+    second = next
+    try await next.initialize()
+    var panic: JSONValue = .null
+    let deadline = ContinuousClock.now + .seconds(30)
+    while panic == .null, ContinuousClock.now < deadline {
+      try await Task.sleep(for: .seconds(1))
+      panic = try await next.call("vm_inspect", ["vm": "lonely"]).value["panic"] ?? .null
+    }
+    let message = panic["message"]?.stringValue ?? ""
+    #expect(message.contains("sysrq") || message.contains("Kernel panic"), "\(panic)")
+    _ = try await next.call("vm_lifecycle", ["vm": "lonely", "action": "kill"])
+  }
 }

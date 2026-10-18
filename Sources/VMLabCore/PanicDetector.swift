@@ -81,9 +81,10 @@ public final class PanicDetector: Sendable {
     await channel.addLineObserver { [self] line in observe(line) }
   }
 
-  /// Checks one serial line; a match queues a `panic` event.
-  public func observe(_ line: SerialLine) {
-    guard let signature = PanicSignature.match(line.text, in: table) else { return }
+  /// Checks one serial line; a match queues a `panic` event. Returns whether it matched.
+  @discardableResult
+  public func observe(_ line: SerialLine) -> Bool {
+    guard let signature = PanicSignature.match(line.text, in: table) else { return false }
     let event: VMEvent? = state.withLock { state in
       if state.emitted < maxEvents {
         state.emitted += 1
@@ -105,6 +106,7 @@ public final class PanicDetector: Sendable {
         ])
     }
     if let event { continuation.yield(event) }
+    return true
   }
 
   /// Stops accepting lines and waits until every queued event is in the log.
@@ -163,5 +165,81 @@ extension EventLog {
   /// Whether `event` reports a crash (not the detector's suppression notice).
   public static func isPanic(_ event: VMEvent) -> Bool {
     event.kind == .panic && event.data?["suppressed"] != .bool(true)
+  }
+}
+
+/// Panic detection over an engine's own console log (QEMU's chardev `logfile`, R-304), so a panic
+/// printed while no vmlab process held the serial socket is still found. `<vm>/console.scan`
+/// holds how far the log has been checked. `attach(to:)`, before the channel starts, scans the
+/// log from there to its end, then checks the channel's live lines, whose bytes the engine also
+/// appends to the log (log position = the log's size at attach + the channel offset); the
+/// position is saved at each panic line and by `checkpoint`. A position past the log's end (the
+/// log was removed) starts over at 0. A crash of the holder may make the next scan see a few
+/// lines twice; it never skips one.
+public final class ConsolePanicWatch: Sendable {
+  public let console: URL
+  public let positionFile: URL
+  public let detector: PanicDetector
+  private let base = Mutex<UInt64>(0)
+
+  public init(vmDirectory: URL, console: URL) {
+    self.console = console
+    self.positionFile = vmDirectory.appending(path: "console.scan")
+    self.detector = PanicDetector(vmDirectory: vmDirectory)
+  }
+
+  /// The saved position, or 0.
+  public var savedPosition: UInt64 {
+    (try? String(contentsOf: positionFile, encoding: .utf8))
+      .flatMap { UInt64($0.trimmingCharacters(in: .whitespacesAndNewlines)) } ?? 0
+  }
+
+  func save(_ position: UInt64) {
+    try? Data("\(position)\n".utf8).write(to: positionFile, options: .atomic)
+  }
+
+  /// Checks the log from the saved position to its end, saves how far it got (the start of a
+  /// trailing partial line) and returns that.
+  @discardableResult
+  public func catchUp() -> UInt64 {
+    let size =
+      ((try? FileManager.default.attributesOfItem(atPath: console.path))?[.size] as? NSNumber)?
+      .uint64Value ?? 0
+    var from = savedPosition
+    if from > size { from = 0 }
+    if from < size, let handle = try? FileHandle(forReadingFrom: console) {
+      defer { try? handle.close() }
+      try? handle.seek(toOffset: from)
+      let data = (try? handle.read(upToCount: Int(size - from))) ?? Data()
+      var start = from
+      for chunk in data.split(separator: 0x0A, omittingEmptySubsequences: false).dropLast() {
+        var bytes = Array(chunk)
+        let end = start + UInt64(bytes.count) + 1
+        if bytes.last == 0x0D { bytes.removeLast() }
+        detector.observe(
+          SerialLine(text: String(decoding: bytes, as: UTF8.self), start: start, end: end))
+        start = end
+      }
+      // A trailing partial line is checked again by the next scan, once it is complete.
+      save(start)
+      base.withLock { $0 = size }
+      return start
+    }
+    save(size)
+    base.withLock { $0 = size }
+    return size
+  }
+
+  /// Scans what the log gained since the last check, then watches `channel`'s lines.
+  public func attach(to channel: SerialChannel) async {
+    catchUp()
+    await channel.addLineObserver { [self] line in
+      if detector.observe(line) { checkpoint(channelOffset: line.end) }
+    }
+  }
+
+  /// Saves the position the channel has reached (`channelOffset`, from its first byte).
+  public func checkpoint(channelOffset: UInt64) {
+    save(base.withLock { $0 } + channelOffset)
   }
 }

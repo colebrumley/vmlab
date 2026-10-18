@@ -40,8 +40,10 @@ virtio-tablet-pci
 unix:/Users/someone/.vmlab/vms/vm-tcgx86/qmp.sock,server,wait=off
 -qmp
 unix:/Users/someone/.vmlab/vms/vm-tcgx86/qmp2.sock,server,wait=off
+-chardev
+socket,id=serial0,path=/Users/someone/.vmlab/vms/vm-tcgx86/serial.sock,server=on,wait=off,logfile=/Users/someone/.vmlab/vms/vm-tcgx86/console.log,logappend=on
 -serial
-unix:/Users/someone/.vmlab/vms/vm-tcgx86/serial.sock,server,wait=off
+chardev:serial0
 -vnc
 unix:/Users/someone/.vmlab/vms/vm-tcgx86/vnc.sock
 -gdb

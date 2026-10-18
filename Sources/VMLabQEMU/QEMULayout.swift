@@ -28,6 +28,10 @@ public struct QEMULayout: Sendable, Hashable {
   public var pidFile: URL { directory.appending(path: "qemu.pid") }
   public var log: URL { directory.appending(path: "qemu.log") }
   public var serialLog: URL { directory.appending(path: "serial.log") }
+  /// Everything the guest writes to its serial port, written by QEMU itself (chardev `logfile`),
+  /// whether or not a vmlab process holds the serial socket. Appended across boots, never
+  /// rotated by vmlab.
+  public var consoleLog: URL { directory.appending(path: "console.log") }
 
   public var sockets: [URL] {
     [qmpSocket, secondaryQMPSocket, serialSocket, vncSocket, agentSocket]

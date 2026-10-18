@@ -112,3 +112,56 @@ import VMLabCore
     #expect(contents.events.count == 1 && contents.events[0].data == nil)
   }
 }
+
+/// R-304 durable: panics QEMU logged to console.log while nobody held the serial socket.
+@Suite struct ConsolePanicWatchTests {
+  static func panics(_ dir: URL) async throws -> [VMEvent] {
+    try await EventLog(vmDirectory: dir).read().events.filter { $0.kind == .panic }
+  }
+
+  @Test func catchUpFindsWhatNobodyWatchedOnceEach() async throws {
+    let dir = FileManager.default.temporaryDirectory.appending(path: "vmlab-console-\(UUID())")
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let console = dir.appending(path: "console.log")
+    try Data("boot\r\n[ 9.1] Kernel panic - not syncing: one\nhalf a li".utf8).write(to: console)
+
+    let first = ConsolePanicWatch(vmDirectory: dir, console: console)
+    #expect(first.catchUp() == 45)  // up to the partial line
+    await first.detector.finish()
+    var found = try await Self.panics(dir)
+    #expect(found.map(\.message) == ["[ 9.1] Kernel panic - not syncing: one"])
+    #expect(found.first?.data?["offset"] == .number(6))
+
+    // A later attach (server restart) sees only what is new, the partial line completed.
+    let handle = try FileHandle(forWritingTo: console)
+    try handle.seekToEnd()
+    try handle.write(contentsOf: Data("ne\nOops: two\n".utf8))
+    try handle.close()
+    let second = ConsolePanicWatch(vmDirectory: dir, console: console)
+    second.catchUp()
+    second.catchUp()
+    await second.detector.finish()
+    found = try await Self.panics(dir)
+    #expect(found.map(\.message) == ["[ 9.1] Kernel panic - not syncing: one", "Oops: two"])
+
+    // The log was removed and restarted: scanning starts over.
+    try Data("BUG: three\n".utf8).write(to: console)
+    let third = ConsolePanicWatch(vmDirectory: dir, console: console)
+    #expect(third.catchUp() == 11)
+    await third.detector.finish()
+    #expect(try await Self.panics(dir).last?.message == "BUG: three")
+  }
+
+  @Test func liveLinesAdvanceThePosition() throws {
+    let dir = FileManager.default.temporaryDirectory.appending(path: "vmlab-console-\(UUID())")
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let console = dir.appending(path: "console.log")
+    try Data("abc\n".utf8).write(to: console)
+    let watch = ConsolePanicWatch(vmDirectory: dir, console: console)
+    watch.catchUp()
+    watch.checkpoint(channelOffset: 10)  // the channel read 10 more bytes, also in the log
+    #expect(watch.savedPosition == 14)
+  }
+}
