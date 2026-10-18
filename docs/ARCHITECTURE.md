@@ -11,7 +11,10 @@ MCP module, and `VMLabMCP` and `vmlab` import no backend module.
 **`VMLabCore`** (library). The engine-free model: the feature catalogue, the four profiles, the
 capability matrix (`Capabilities.swift`, the authority by C7), the selector, the VM store and
 `vm.json` records, the `Backend` protocol and the backend registry, and `VMLabError` with the Appendix
-D codes. It owns the per-VM event log (`EventLog`, one `VMEvent` JSON object per line of
+D codes. `Features.swift` holds the Appendix A catalogue (`Feature`, with `kind` and `summary`) and the
+`Requirements` request (`GuestSpec`, `ResourceSpec`, `NetworkSpec`, `BootSpec`), which refuses a
+self-contradictory request at decode time with `invalid_request`; `Errors.swift` holds `ErrorCode`,
+`VMLabError` and `JSONValue` for error `data`. It owns the per-VM event log (`EventLog`, one `VMEvent` JSON object per line of
 `events.jsonl`, appended with `O_APPEND` so the server and runner processes never interleave) and
 process-wide logging (`VMLabLogging`: swift-log to stderr at the `VMLAB_LOG` level, default `info`).
 `CodeSignature` reads `codesign` output so `vmlab doctor` can say whether the runner is entitled.

@@ -7,3 +7,4 @@ Read by unit tests through `#filePath`; never written at test time.
 - `rfb/` — recorded RFB captures
 - `host-facts/` — `host-facts.json` samples
 - `codesign/` — `codesign -d --entitlements -` output
+- `features/` — the feature catalogue snapshot (Appendix A)

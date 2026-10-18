@@ -158,7 +158,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
 
 ## Phase 1 — Core model: features, profiles, selection, store
 
-- [ ] **R-100 Feature catalogue**
+- [x] **R-100 Feature catalogue**
   `Sources/VMLabCore/Features.swift`: `enum Feature: String, CaseIterable, Codable` with every row
   of Appendix A, each with a one-line `summary` and a `kind` (`channel`, `boot`, `state`, `net`,
   `compute`). `GuestSpec { os: macos|linux, arch: arm64|x86_64|riscv64|other(String) }`.
