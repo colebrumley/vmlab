@@ -43,7 +43,13 @@ import Testing
     #expect(!EngineProcess.isRunning(getpid()))
     #expect(!EngineProcess.isRunning(0) && !EngineProcess.isRunning(-1))
     #expect(EngineProcess.kill(pid, vmDirectory: vm))
-    engine.waitUntilExit()
+    // Polled, not waitUntilExit: that spins a run loop which can miss the exit on a
+    // concurrency thread and hang the suite.
+    let deadline = ContinuousClock.now + .seconds(10)
+    while engine.isRunning, ContinuousClock.now < deadline {
+      try await Task.sleep(for: .milliseconds(20))
+    }
+    try #require(!engine.isRunning)
     #expect(engine.terminationReason == .uncaughtSignal)
   }
 }
