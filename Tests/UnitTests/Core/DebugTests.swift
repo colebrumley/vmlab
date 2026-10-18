@@ -150,4 +150,55 @@ import Testing
     #expect(await session.running() == !halted)
     #expect(target.inserted == [DebugPoint(address: 0x1000, kind: .hardware)])
   }
+
+  /// Codex CX-7: `remove` found the point's index before awaiting the stub, so two overlapping
+  /// removes ended in `remove(at: 1)` on a one-element array. Run in a child process so a trap
+  /// is a failure rather than the end of the test run.
+  @Test func overlappingRemovesDoNotTrap() async {
+    await #expect(processExitsWith: .success) {
+      let (session, connector, dir) = try await DebugTests.session()
+      defer { try? FileManager.default.removeItem(at: dir) }
+      let a = DebugPoint(address: 0x1000, kind: .software)
+      let b = DebugPoint(address: 0x2000, kind: .software)
+      try await session.add(a)
+      try await session.add(b)
+      connector.latest?.state.withLock { $0.removeDelays[b.address] = .milliseconds(200) }
+      // b's index (1) is taken first; a's remove finishes while b's still waits on the stub.
+      async let slow = session.remove(address: b.address, kind: .software)
+      try await Task.sleep(for: .milliseconds(50))
+      let fast = try await session.remove(address: a.address, kind: .software)
+      guard fast == [b] else { exit(3) }
+      guard try await slow == [] else { exit(4) }
+      guard await session.points.isEmpty, connector.latest?.inserted.isEmpty == true else {
+        exit(5)
+      }
+      // A point added while a remove of another waits is kept.
+      try await session.add(a)
+      try await session.add(b)
+      connector.latest?.state.withLock { $0.removeDelays[a.address] = .milliseconds(200) }
+      async let removing = session.remove(address: a.address, kind: .software)
+      try await Task.sleep(for: .milliseconds(50))
+      let c = DebugPoint(address: 0x3000, kind: .software)
+      try await session.add(c)
+      guard try await removing == [b, c] else { exit(6) }
+    }
+  }
+
+  /// A detach while a connect is in flight wins: the late connection is closed, not adopted.
+  @Test func detachDuringConnectDropsTheLateConnection() async throws {
+    let (session, connector, dir) = try await Self.session()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    connector.connectDelay.withLock { $0 = .milliseconds(200) }
+    let halting = Task { try await session.halt() }
+    try await Task.sleep(for: .milliseconds(50))
+    await session.detach()
+    await #expect(throws: VMLabError.self) { try await halting.value }
+    #expect(await session.attached == false)
+    #expect(await connector.latest?.isConnected == false)
+    // The next call connects afresh.
+    connector.connectDelay.withLock { $0 = nil }
+    _ = try await session.halt()
+    #expect(await session.attached)
+    #expect(connector.targets.count == 2)
+  }
 }

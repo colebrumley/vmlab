@@ -13,6 +13,8 @@ final class FakeDebugTarget: DebugTarget {
     var inserted: [DebugPoint] = []
     var log: [String] = []
     var pendingStop: DebugStop?
+    /// How long `remove` of the point at an address takes, to make removes overlap.
+    var removeDelays: [UInt64: Duration] = [:]
   }
 
   let state = Mutex(State())
@@ -93,6 +95,9 @@ final class FakeDebugTarget: DebugTarget {
 
   func remove(_ point: DebugPoint) async throws(VMLabError) {
     try check("remove \(point.kind.rawValue) \(String(point.address, radix: 16))")
+    if let delay = state.withLock({ $0.removeDelays[point.address] }) {
+      try? await Task.sleep(for: delay)
+    }
     state.withLock { $0.inserted.removeAll { $0.matches(point) } }
   }
 
@@ -140,10 +145,14 @@ final class FakeDebugConnector: DebugConnector {
   /// Makes every later connect fail with `debug_busy`.
   func setBusy(_ busy: Bool) { state.withLock { $0.busy = busy } }
 
+  /// How long each connect takes, to let a test detach while one is in flight.
+  let connectDelay = Mutex<Duration?>(nil)
+
   func connect(to endpoint: GDBEndpoint, arch: GuestSpec.Arch) async throws(VMLabError)
     -> any DebugTarget
   {
-    try state.withLock { s throws(VMLabError) -> FakeDebugTarget in
+    if let delay = connectDelay.withLock({ $0 }) { try? await Task.sleep(for: delay) }
+    return try state.withLock { s throws(VMLabError) -> FakeDebugTarget in
       if s.busy {
         throw VMLabError(
           code: .debugBusy, message: "busy", hint: "",
