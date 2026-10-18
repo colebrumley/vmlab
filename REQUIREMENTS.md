@@ -295,7 +295,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   **Verify:** `vmlab doctor --json` on the dev host lists every prerequisite; a unit test renders a
   fixture report with one missing tool and shows its fix line.
 
-- [ ] **R-204 `vm_plan`, `vm_list`, `vm_inspect` on the server**
+- [x] **R-204 `vm_plan`, `vm_list`, `vm_inspect` on the server**
   Wire R-103, R-104 to the tools. `vm_inspect` returns the record, the runtime endpoints, the
   resolved features (so a model can rediscover what a VM has after a context reset), and the last
   20 events. `vm_plan` returns the plan or the unsatisfiable object

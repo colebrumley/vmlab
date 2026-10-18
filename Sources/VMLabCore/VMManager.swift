@@ -33,6 +33,7 @@ public actor VMManager {
     new.state = .created
     new.runtime = nil
     new.checkpoints = []
+    new.plan = plan
     let stored = try store.create(new)
     do throws(VMLabError) {
       try await backend.create(stored, plan: plan)

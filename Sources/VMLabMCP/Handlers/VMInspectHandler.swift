@@ -1,7 +1,8 @@
 import VMLabCore
 
-/// `vm_inspect`: the record, its resolved features, the runtime endpoints and the last 20
-/// events. Segments and panics join when Phases 9 and 3 record them.
+/// `vm_inspect`: the record, the plan it was created from (null for a record older than the
+/// plan field), its resolved features, the runtime endpoints and the last 20 events, so a model
+/// can rediscover what a VM has after a context reset. Segments and panics join when Phases 9 and 3 record them.
 struct VMInspectHandler: ToolHandler {
   static let eventCount = 20
 
@@ -28,6 +29,8 @@ struct VMInspectHandler: ToolHandler {
       [
         "vm": .object(["id": .string(record.id), "name": .string(record.name)]),
         "record": try JSONValue(encoding: record),
+        "plan": try record.plan.map { plan throws(VMLabError) in try JSONValue(encoding: plan) }
+          ?? .null,
         "features": .array(record.features.map { .string($0.rawValue) }),
         "endpoints": .object(Self.endpoints(record.runtime)),
         "segments": .array([]),
