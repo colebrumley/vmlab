@@ -1,0 +1,60 @@
+# Architecture
+
+vmlab is one Swift package. A model talks MCP over stdio to `vmlab serve`; the MCP layer and the CLI
+are thin adapters over `VMLabCore`, which chooses an engine for each guest and drives it through the
+`Backend` protocol. State lives on disk under `VMLAB_HOME` (Appendix F), so guests outlive the server.
+Constraint C3 is enforced by `Tests/UnitTests/BoundariesTests.swift`: Core imports no engine and no
+MCP module, and `VMLabMCP` and `vmlab` import no backend module.
+
+## Targets
+
+**`VMLabCore`** (library). The engine-free model: the feature catalogue, the four profiles, the
+capability matrix (`Capabilities.swift`, the authority by C7), the selector, the VM store and
+`vm.json` records, the `Backend` protocol and the backend registry, and `VMLabError` with the Appendix
+D codes. It owns the per-VM event log (`EventLog`, one `VMEvent` JSON object per line of
+`events.jsonl`, appended with `O_APPEND` so the server and runner processes never interleave) and
+process-wide logging (`VMLabLogging`: swift-log to stderr at the `VMLAB_LOG` level, default `info`).
+`CodeSignature` reads `codesign` output so `vmlab doctor` can say whether the runner is entitled.
+`FeatureDocs` renders `docs/FEATURES.md` from the matrix. It depends on swift-log only.
+
+**`VMLabQEMU`** (library). The QEMU backend: launching and supervising `qemu-system-aarch64`, the QMP
+client, the serial channel, the GDB stub endpoint, and qcow2 internal snapshots.
+
+**`VMLabVZ`** (library). The Virtualization.framework backend, seen from the server: the client of a
+`vmlab-vz` runner's control socket, and the integration with Tart for macOS images and clones. The
+framework itself is loaded only in `vmlab-vz`.
+
+**`VMLabRFB`** (library). A VNC (RFB) client: framebuffer updates to PNG, pointer and key events. It
+gives both engines a screen to look at and click on.
+
+**`VMLabGDB`** (library). A GDB remote serial protocol client: registers, memory, breakpoints and
+stepping over a guest's GDB stub.
+
+**`VMLabMCP`** (library). The MCP server on the official Swift SDK: tool schemas (Appendix C),
+handlers that call Core, rendering of `VMLabError` as structured refusals, and the stdio transport.
+`ToolDocs` renders `docs/TOOLS.md` from the schemas.
+
+**`vmlab`** (executable). The CLI on swift-argument-parser: every MCP tool as a subcommand with
+`--json` output, `vmlab serve` for the MCP server, `vmlab doctor`, and the hidden `vmlab gen-docs`
+that `scripts/gen-docs.sh` uses. It bootstraps logging and hands off to Core and `VMLabMCP`.
+
+**`vmlab-vz`** (executable). The VZ runner: one process per Virtualization.framework guest, so a
+guest outlives the server, driven over `control.sock` in the VM directory. It is the only binary
+that needs `com.apple.security.virtualization`; `scripts/sign.sh` ad-hoc signs it with
+`Sources/vmlab-vz/vmlab-vz.entitlements` after every build.
+
+**`vmlab-switch`** (executable). A user-space Ethernet switch that joins guests of both engines on a
+private segment, with no root and no `vmnet` (C2).
+
+**`UnitTests`** (Swift Testing). Fast tests with no engines; file paths mirror `Sources/`, and
+fixtures come from `Tests/Fixtures/` through `#filePath`.
+
+**`IntegrationTests`** (Swift Testing). Tests that boot real guests through QEMU or Tart and need
+pulled images; each skips itself unless `VMLAB_INTEGRATION=1`.
+
+## Scripts
+
+`scripts/check.sh` (format lint, build, unit tests, sign, generated docs current), `build.sh`,
+`sign.sh`, `bootstrap.sh` (Homebrew: qemu, tart), `gen-docs.sh`, and the process scripts
+`board.mjs`, `tidy.mjs`, `review.mjs`, `retro.mjs` and `guard.mjs` (the worktree-rule hook)
+described in CLAUDE.md.

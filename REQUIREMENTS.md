@@ -147,7 +147,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   **Verify:** unit test: 100 appended events round-trip through the reader; a malformed line is
   skipped with a warning, not a crash.
 
-- [ ] **R-005 Architecture and docs scaffold**
+- [x] **R-005 Architecture and docs scaffold**
   `docs/ARCHITECTURE.md` with one paragraph per target from R-001. `docs/AGENT.md` placeholder (filled
   by R-1104). `scripts/gen-docs.sh` regenerates `docs/FEATURES.md` from the matrix (R-102) and
   `docs/TOOLS.md` from the tool schemas (R-202); `check.sh` fails if the generated files are stale.
