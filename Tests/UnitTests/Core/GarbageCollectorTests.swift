@@ -111,6 +111,56 @@ import VMLabCore
     #expect(again.items.isEmpty)
   }
 
+  /// A template no VM was created from or reads through, unchanged for a week, goes; one a VM
+  /// names, one a backing chain reads, a young one and a plain pulled image stay.
+  @Test func collectsUnusedTemplates() async throws {
+    let f = try Fixture()
+    let vm = try await f.create()
+    let images = ImageStore(home: f.store.home)
+    func image(_ name: String, template: Bool, modified: Date? = Self.old) throws -> URL {
+      let directory = images.imageDirectory(name)
+      try Self.write(directory.appending(path: "disk.qcow2"), bytes: 8192)
+      let pulled = PulledImage(
+        name: name, guest: GuestSpec(os: .linux, arch: .arm64),
+        source: template ? "template:vm-src001" : "fixture", format: .qcow2, checksum: nil,
+        files: ["qcow2": "disk.qcow2"], login: ImageLogin(user: "debian"), pulledAt: Date(),
+        template: template
+          ? TemplateInfo(
+            sourceVM: "vm-src001", sourceName: "src", baseImage: "debian-13-arm64",
+            revokedKeys: [], provisioned: [], createdAt: Date()) : nil)
+      let encoder = JSONEncoder()
+      encoder.dateEncodingStrategy = .iso8601
+      let json = directory.appending(path: "image.json")
+      try encoder.encode(pulled).write(to: json)
+      if let modified {
+        try FileManager.default.setAttributes(
+          [.modificationDate: modified], ofItemAtPath: json.path)
+      }
+      return directory
+    }
+    let unused = try image("tpl-unused", template: true)
+    let named = try image("tpl-named", template: true)
+    let read = try image("tpl-read", template: true)
+    let young = try image("tpl-young", template: true, modified: nil)
+    let plain = try image("plain-image", template: false)
+    try f.store.update(id: vm.id) {
+      $0.image = "tpl-named"
+      $0.backingChain = [read.appending(path: "disk.qcow2").path]
+    }
+
+    var collector = GarbageCollector(manager: f.manager)
+    collector.processes = Processes().inspector
+    let report = await collector.run()
+    #expect(report.errors.isEmpty, "\(report.errors)")
+    let templates = report.items.filter { $0.kind == .templateImage }
+    #expect(templates.map(\.target) == [unused.path])
+    #expect((templates.first?.bytes ?? 0) >= 8192)
+    #expect(!FileManager.default.fileExists(atPath: unused.path))
+    for kept in [named, read, young, plain] {
+      #expect(FileManager.default.fileExists(atPath: kept.path), "\(kept.lastPathComponent)")
+    }
+  }
+
   @Test func destroyRefusesWhileAnotherDiskDependsOnItUnlessForced() async throws {
     let f = try Fixture()
     let source = try await f.create([.serial, .checkpointDisk])

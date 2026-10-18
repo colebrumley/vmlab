@@ -12,6 +12,8 @@ public struct GCReport: Codable, Sendable, Hashable {
     case temporaryCheckpoint = "temporary_checkpoint"
     /// A frozen layer under `<vm>/backing/` that no VM's backing chain reads any more.
     case backingFile = "backing_file"
+    /// A template (R-804) under `images/` that no VM was created from or reads through.
+    case templateImage = "template_image"
   }
 
   public struct Item: Codable, Sendable, Hashable {
@@ -80,8 +82,12 @@ public struct ProcessInspector: Sendable {
 /// `vm.json` is gone) with that directory, dumps and exec logs older than `maxAge`, temporary
 /// checkpoints (the saves of `checkpoint_stop` that were resumed), and frozen layers in
 /// `<vm>/backing/` that no VM's `backingChain` reads. Files younger than `grace` are left alone,
-/// so a create or clone in flight in another process is never collected. Templates (R-804) will
-/// keep their files under `images/`; when they are backing files the same chain rule applies.
+/// so a create or clone in flight in another process is never collected. A template (R-804) is
+/// the backing file of its QEMU children: its `images/<name>/` goes when no VM names it as its
+/// image (the rule `images prune` uses) and no backing chain reads a file in it, and it has not
+/// changed for `maxAge`, so a template made for children not yet created survives a week. Pulled
+/// images are left to `images prune`, and a home whose `images` is a link to another's cache
+/// (the test homes) collects none.
 public struct GarbageCollector: Sendable {
   public static let pidFiles = ["qemu.pid", "vz.pid"]
   /// The executables an engine pid file may name: QEMU's system emulators and the VZ runner.
@@ -114,6 +120,7 @@ public struct GarbageCollector: Sendable {
     for record in records { collectOldFiles(of: record, into: &report) }
     for record in records { await collectTemporaryCheckpoints(of: record, into: &report) }
     collectBackingFiles(records: records, into: &report)
+    collectTemplates(records: records, into: &report)
     return report
   }
 
@@ -193,6 +200,28 @@ public struct GarbageCollector: Sendable {
         }
         remove(file, kind: .backingFile, vm: record.id, into: &report)
       }
+    }
+  }
+
+  func collectTemplates(records: [VMRecord], into report: inout GCReport) {
+    let images = ImageStore(home: store.home)
+    let linked =
+      (try? images.directory.resourceValues(forKeys: [.isSymbolicLinkKey]))?.isSymbolicLink
+      ?? false
+    guard !linked else { return }
+    let named = ImageStore.references(records)
+    let chains = records.flatMap { $0.backingChain ?? [] }.map {
+      URL(filePath: $0).standardizedFileURL.path
+    }
+    let names = (try? FileManager.default.contentsOfDirectory(atPath: images.directory.path)) ?? []
+    for name in names.sorted() where !name.hasPrefix(".") && !named.contains(name) {
+      guard images.pulled(name)?.template != nil else { continue }
+      let directory = images.imageDirectory(name)
+      let prefix = directory.standardizedFileURL.path + "/"
+      guard !chains.contains(where: { $0.hasPrefix(prefix) }),
+        isOld(directory.appending(path: "image.json"), than: maxAge)
+      else { continue }
+      remove(directory, kind: .templateImage, vm: nil, into: &report)
     }
   }
 
