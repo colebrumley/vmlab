@@ -29,6 +29,9 @@ final class FakeBackend: Backend {
 
   func reportSSHPort(_ port: Int?) { ssh.withLock { $0 = port } }
 
+  /// The engine snapshots of every VM this backend runs, bound to the VM's state per call.
+  let snapshots = FakeCheckpoints()
+
   init(profile: Profile = .qemuHVF, store: Store) {
     self.profile = profile
     self.store = store
@@ -100,7 +103,12 @@ final class FakeBackend: Backend {
       display: DisplayEndpoint(
         address: .unixSocket(path: dir.appending(path: "vnc.sock").path), hostSide: true),
       gdb: GDBEndpoint(host: "127.0.0.1", port: 1234),
-      introspection: FakeIntrospection(), exec: FakeExec(), checkpoints: FakeCheckpoints())
+      introspection: FakeIntrospection(), exec: FakeExec(),
+      checkpoints: snapshots.bound(to: record.state))
+  }
+
+  func checkpoints(_ record: VMRecord) async throws(VMLabError) -> any CheckpointProvider {
+    snapshots.bound(to: record.state)
   }
 
   private func runtime(of record: VMRecord) -> VMRuntime {
@@ -155,13 +163,78 @@ struct FakeMemoryDumper: MemoryDumper {
   }
 }
 
+/// Engine snapshots by id. Bound to a VM state (`bound(to:)`) it follows QEMU's contract: live
+/// checkpoints only while the guest runs, disk ones only while it is stopped, `wrong_state`
+/// otherwise; an unknown or taken id is `invalid_request` with field `id`.
 final class FakeCheckpoints: CheckpointProvider {
-  private let made = Mutex<[String]>([])
-  var ids: [String] { made.withLock { $0 } }
+  struct Snapshot: Sendable, Equatable {
+    var id: String
+    var mode: CheckpointMode
+  }
+
+  final class Storage: Sendable {
+    let value = Mutex<(snapshots: [Snapshot], restored: [String])>(([], []))
+  }
+
+  private let storage: Storage
+  private let state: VMState?
+
+  init() {
+    storage = Storage()
+    state = nil
+  }
+
+  private init(storage: Storage, state: VMState) {
+    self.storage = storage
+    self.state = state
+  }
+
+  /// A view on the same snapshots from a VM in `state`.
+  func bound(to state: VMState) -> FakeCheckpoints {
+    FakeCheckpoints(storage: storage, state: state)
+  }
+
+  var ids: [String] { storage.value.withLock { $0.snapshots.map(\.id) } }
+  var snapshots: [Snapshot] { storage.value.withLock { $0.snapshots } }
+  var restored: [String] { storage.value.withLock { $0.restored } }
+
+  private func check(_ mode: CheckpointMode) throws(VMLabError) {
+    guard let state else { return }
+    if mode == .live, !state.isLive {
+      throw VMLabError(
+        code: .wrongState, message: "fake: live needs a running guest", hint: "start")
+    }
+    if mode == .disk, state.isLive {
+      throw VMLabError(code: .wrongState, message: "fake: disk needs a stopped guest", hint: "stop")
+    }
+  }
+
+  private static func missing(_ id: String) -> VMLabError {
+    .invalidRequest(field: "id", reason: "no snapshot \(id)", hint: "none")
+  }
 
   func create(id: String, mode: CheckpointMode) async throws(VMLabError) {
-    made.withLock { $0.append(id) }
+    try check(mode)
+    try storage.value.withLock { (s) throws(VMLabError) in
+      guard !s.snapshots.contains(where: { $0.id == id }) else {
+        throw VMLabError.invalidRequest(field: "id", reason: "taken", hint: "none")
+      }
+      s.snapshots.append(Snapshot(id: id, mode: mode))
+    }
   }
-  func restore(id: String, mode: CheckpointMode) async throws(VMLabError) {}
-  func delete(id: String) async throws(VMLabError) { made.withLock { $0.removeAll { $0 == id } } }
+
+  func restore(id: String, mode: CheckpointMode) async throws(VMLabError) {
+    try check(mode)
+    try storage.value.withLock { (s) throws(VMLabError) in
+      guard s.snapshots.contains(Snapshot(id: id, mode: mode)) else { throw Self.missing(id) }
+      s.restored.append(id)
+    }
+  }
+
+  func delete(id: String) async throws(VMLabError) {
+    try storage.value.withLock { (s) throws(VMLabError) in
+      guard s.snapshots.contains(where: { $0.id == id }) else { throw Self.missing(id) }
+      s.snapshots.removeAll { $0.id == id }
+    }
+  }
 }
