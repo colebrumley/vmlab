@@ -25,9 +25,29 @@ import VMLabCore
       let handle = fromServer.fileHandleForReading
       let inbox = inbox
       reader = Task {
-        do {
-          for try await line in handle.bytes.lines { await inbox.add(line) }
-        } catch {}
+        for await line in Self.lines(of: handle) { await inbox.add(line) }
+      }
+    }
+
+    /// The lines `handle` yields, read on a thread of its own: `FileHandle.bytes` does its
+    /// blocking `read` on the cooperative pool, which starves the other tests of the suite.
+    static func lines(of handle: FileHandle) -> AsyncStream<String> {
+      AsyncStream { continuation in
+        Thread.detachNewThread {
+          var pending = Data()
+          while true {
+            let chunk = handle.availableData
+            if chunk.isEmpty { break }
+            pending.append(chunk)
+            while let newline = pending.firstIndex(of: 0x0A) {
+              continuation.yield(
+                String(decoding: pending[pending.startIndex..<newline], as: UTF8.self))
+              pending = Data(pending[pending.index(after: newline)...])
+            }
+          }
+          if !pending.isEmpty { continuation.yield(String(decoding: pending, as: UTF8.self)) }
+          continuation.finish()
+        }
       }
     }
 

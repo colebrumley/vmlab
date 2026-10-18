@@ -218,15 +218,17 @@ private final class BundleToken {}
       try process.run()
       return process
     }
-    var reads = 0
-    while processes.contains(where: \.isRunning) {
-      _ = try store.load(id: record.id)
-      reads += 1
+    // The polling reads and the waits run on a thread of their own, not the cooperative pool.
+    let reads = try await OffPool.run { () throws(VMLabError) -> Int in
+      var reads = 0
+      while processes.contains(where: \.isRunning) {
+        _ = try store.load(id: record.id)
+        reads += 1
+      }
+      for process in processes { process.waitUntilExit() }
+      return reads
     }
-    for process in processes {
-      process.waitUntilExit()
-      #expect(process.terminationStatus == 0)
-    }
+    for process in processes { #expect(process.terminationStatus == 0) }
     let final = try store.load(id: record.id)
     #expect(final.checkpoints.count == 2 * count)
     for tag in ["a", "b"] {

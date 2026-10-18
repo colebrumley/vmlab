@@ -100,14 +100,15 @@ final class FakeProvisioner: GuestProvisioning {
 
   // MARK: Seed
 
-  @Test(.enabled(if: RubyYAML.available)) func provisionGoesIntoTheSeed() throws {
+  @Test(.enabled(if: RubyYAML.available)) func provisionGoesIntoTheSeed() async throws {
     let config = CloudInitTests.base().provisioned(
       ProvisionSpec(
         packages: ["jq", "qemu-guest-agent"], userData: "#cloud-config\nhostname: theirs\n",
         runCommands: ["echo 'a \"quoted\" one' > /tmp/x", "false"]))
     #expect(config.packages == ["jq", "qemu-guest-agent"])
     #expect(config.extraUserData == "#cloud-config\nhostname: theirs\n")
-    let ours = try #require(try RubyYAML.parse(CloudInit.cloudConfig(config)) as? [String: Any])
+    let ours = try #require(
+      try await RubyYAML.parse(CloudInit.cloudConfig(config)) as? [String: Any])
     #expect(ours["packages"] as? [String] == ["qemu-guest-agent", "jq"])
     let runcmd = try #require(ours["runcmd"] as? [[String]])
     #expect(runcmd.last == ["/bin/sh", ProvisionPaths.runner])

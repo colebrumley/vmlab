@@ -11,13 +11,17 @@ enum PoolSaturation {
 
   /// How long a peer that never answers holds each caller; a pool held for this long fails
   /// `budget` by a wide margin.
-  static let hold = Duration.seconds(3)
+  static let hold = Duration.seconds(6)
 
-  /// What a sleep of 200 ms and a trivial task may take while `width` callers wait.
-  static let budget = Duration.seconds(1)
+  /// What a sleep of 200 ms and a trivial task may take while `width` callers wait. Generous:
+  /// when a whole suite starts at once its first second or two queue every task behind a
+  /// thousand others (measured with blockers that do nothing), which is not what is proved here.
+  static let budget = Duration.seconds(3)
 
   /// Runs `blocker` in `width` tasks at once and returns how long, beyond a 200 ms sleep, a
-  /// trivial task took to run meanwhile; returns after every blocker has ended.
+  /// trivial task took to run meanwhile; returns after every blocker has ended. The probe runs at
+  /// the default priority on purpose: a higher one gets a thread of its own even when every
+  /// default one is blocked, and would prove nothing.
   static func latency(
     width: Int = width, _ blocker: @escaping @Sendable (Int) async -> Void
   ) async -> Duration {

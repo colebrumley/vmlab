@@ -16,24 +16,30 @@ import VMLabCore
   /// Runs the guest script on the host against a copy of an `/etc/hosts`. The lock path is left
   /// as it is (CX-17): this macOS host has no /run, as a macOS guest has none, and a non-root
   /// run cannot create the lock at all; the names must be published regardless.
-  static func apply(_ segment: Segment, to hosts: URL, shell: String = "/bin/sh") throws -> String {
+  /// The script and its wait run on a thread of their own, off the cooperative pool.
+  static func apply(_ segment: Segment, to hosts: URL, shell: String = "/bin/sh") async throws
+    -> String
+  {
     let script = SegmentHosts.script(segment)
       .replacingOccurrences(of: "/etc/hosts", with: hosts.path)
-    let process = Process()
-    process.executableURL = URL(filePath: shell)
-    process.arguments = ["-c", script]
-    let input = Pipe()
-    process.standardInput = input
-    try process.run()
-    input.fileHandleForWriting.write(
-      Data(SegmentHosts.lines(segment).map { $0 + "\n" }.joined().utf8))
-    try input.fileHandleForWriting.close()
-    process.waitUntilExit()
-    #expect(process.terminationStatus == 0)
+    let input = Data(SegmentHosts.lines(segment).map { $0 + "\n" }.joined().utf8)
+    let status = try await OffPool.run { () throws(any Error) -> Int32 in
+      let process = Process()
+      process.executableURL = URL(filePath: shell)
+      process.arguments = ["-c", script]
+      let pipe = Pipe()
+      process.standardInput = pipe
+      try process.run()
+      pipe.fileHandleForWriting.write(input)
+      try pipe.fileHandleForWriting.close()
+      process.waitUntilExit()
+      return process.terminationStatus
+    }
+    #expect(status == 0)
     return try String(contentsOf: hosts, encoding: .utf8)
   }
 
-  @Test func blockIsRewrittenWholeAndIdempotent() throws {
+  @Test func blockIsRewrittenWholeAndIdempotent() async throws {
     let hosts = FileManager.default.temporaryDirectory.appending(path: "hosts-\(UUID())")
     defer { try? FileManager.default.removeItem(at: hosts) }
     let original = "127.0.0.1 localhost\n::1 localhost ip6-localhost\n"
@@ -47,13 +53,13 @@ import VMLabCore
       # vmlab segment cluster end
 
       """
-    #expect(try Self.apply(two, to: hosts) == original + block)
-    #expect(try Self.apply(two, to: hosts) == original + block)
+    #expect(try await Self.apply(two, to: hosts) == original + block)
+    #expect(try await Self.apply(two, to: hosts) == original + block)
 
     // A leave: the block shrinks, the rest of the file stays.
     let one = Self.segment([("node-2", "10.3.0.11")])
     #expect(
-      try Self.apply(one, to: hosts)
+      try await Self.apply(one, to: hosts)
         == original + """
           # vmlab segment cluster begin
           10.3.0.11 node-2 node-2.cluster
@@ -64,7 +70,7 @@ import VMLabCore
 
   /// CX-17: the lock lives where both Linux and macOS have a directory, and a lock that cannot
   /// be made never stops the update; checked with macOS's /bin/sh and, when present, dash.
-  @Test func scriptRunsWhereThereIsNoRun() throws {
+  @Test func scriptRunsWhereThereIsNoRun() async throws {
     #expect(!SegmentHosts.script(Self.segment([])).contains(" 9>/run/"))
     #expect(FileManager.default.fileExists(atPath: "/var/run"))
     for shell in ["/bin/sh", "/bin/zsh", "/bin/dash"]
@@ -72,7 +78,7 @@ import VMLabCore
       let hosts = FileManager.default.temporaryDirectory.appending(path: "hosts-\(UUID())")
       defer { try? FileManager.default.removeItem(at: hosts) }
       try "127.0.0.1 localhost\n".write(to: hosts, atomically: true, encoding: .utf8)
-      let text = try Self.apply(Self.segment([("a", "10.3.0.10")]), to: hosts, shell: shell)
+      let text = try await Self.apply(Self.segment([("a", "10.3.0.10")]), to: hosts, shell: shell)
       #expect(text.contains("10.3.0.10 a a.cluster"), "\(shell)")
     }
   }

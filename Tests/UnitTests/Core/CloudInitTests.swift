@@ -9,14 +9,14 @@ enum RubyYAML {
   static let ruby = "/usr/bin/ruby"
   static var available: Bool { FileManager.default.isExecutableFile(atPath: ruby) }
 
-  static func parse(_ text: String) throws -> Any {
+  static func parse(_ text: String) async throws -> Any {
     let file = FileManager.default.temporaryDirectory.appending(path: "vmlab-yaml-\(UUID()).yaml")
     try Data(text.utf8).write(to: file)
     defer { try? FileManager.default.removeItem(at: file) }
     let script =
       "require 'yaml'; require 'json'; "
       + "puts JSON.generate([YAML.safe_load(File.read(ARGV[0]), permitted_classes: [], aliases: false)])"
-    let result = try #require(ProcessRunner().run(ruby, ["-e", script, file.path]))
+    let result = try #require(await ProcessRunner().run(ruby, ["-e", script, file.path]))
     #expect(result.status == 0, "YAML did not parse: \(result.output)")
     let array = try JSONSerialization.jsonObject(with: Data(result.output.utf8)) as? [Any]
     return try #require(array?.first)
@@ -31,10 +31,10 @@ enum RubyYAML {
       instanceID: "vm-0001", hostname: "dev1", user: "debian", sshPublicKey: key)
   }
 
-  @Test(.enabled(if: RubyYAML.available)) func userDataIsValidYAMLWithExpectedKeys() throws {
+  @Test(.enabled(if: RubyYAML.available)) func userDataIsValidYAMLWithExpectedKeys() async throws {
     let text = try CloudInit.userData(Self.base())
     #expect(text.hasPrefix("#cloud-config\n"))
-    let doc = try #require(try RubyYAML.parse(text) as? [String: Any])
+    let doc = try #require(try await RubyYAML.parse(text) as? [String: Any])
     #expect(doc["hostname"] as? String == "dev1")
     #expect(doc["ssh_pwauth"] as? Bool == false)
     let users = try #require(doc["users"] as? [[String: Any]])
@@ -57,12 +57,13 @@ enum RubyYAML {
     #expect(CloudInit.networkConfig(Self.base()) == nil)
   }
 
-  @Test(.enabled(if: RubyYAML.available)) func metaDataCarriesInstanceAndHostname() throws {
-    let doc = try #require(try RubyYAML.parse(CloudInit.metaData(Self.base())) as? [String: String])
+  @Test(.enabled(if: RubyYAML.available)) func metaDataCarriesInstanceAndHostname() async throws {
+    let doc = try #require(
+      try await RubyYAML.parse(CloudInit.metaData(Self.base())) as? [String: String])
     #expect(doc == ["instance-id": "vm-0001", "local-hostname": "dev1"])
   }
 
-  @Test(.enabled(if: RubyYAML.available)) func optionalPartsAppear() throws {
+  @Test(.enabled(if: RubyYAML.available)) func optionalPartsAppear() async throws {
     var config = Self.base()
     config.packages = ["build-essential", "qemu-guest-agent"]
     config.gui = GUIStack(vncPassword: "s3cret\"x")
@@ -71,7 +72,7 @@ enum RubyYAML {
       GuestMount(tag: "share0", guestPath: "/mnt/share", kind: .ninep),
       GuestMount(tag: "share1", guestPath: "/mnt/ro", kind: .virtiofs, readOnly: true),
     ]
-    let doc = try #require(try RubyYAML.parse(CloudInit.userData(config)) as? [String: Any])
+    let doc = try #require(try await RubyYAML.parse(CloudInit.userData(config)) as? [String: Any])
     #expect(
       doc["packages"] as? [String] == ["qemu-guest-agent"] + GUIStack.desktopPackages + [
         "x11vnc", "xserver-xorg-video-dummy", "build-essential",
@@ -102,11 +103,11 @@ enum RubyYAML {
   }
 
   /// R-603: Rosetta is mounted over virtiofs and registered with binfmt_misc after the mount.
-  @Test(.enabled(if: RubyYAML.available)) func rosettaIsMountedAndRegistered() throws {
+  @Test(.enabled(if: RubyYAML.available)) func rosettaIsMountedAndRegistered() async throws {
     var config = Self.base()
     config.rosetta = true
     config.mounts = [GuestMount(tag: "share0", guestPath: "/mnt/share0", kind: .virtiofs)]
-    let doc = try #require(try RubyYAML.parse(CloudInit.userData(config)) as? [String: Any])
+    let doc = try #require(try await RubyYAML.parse(CloudInit.userData(config)) as? [String: Any])
     #expect(
       doc["mounts"] as? [[String]] == [
         ["share0", "/mnt/share0", "virtiofs", "rw,nofail", "0", "0"],
@@ -127,10 +128,10 @@ enum RubyYAML {
   }
 
   /// R-504 on QEMU: the desktop without a VNC server, which QEMU's own VNC replaces.
-  @Test(.enabled(if: RubyYAML.available)) func desktopWithoutVNCServer() throws {
+  @Test(.enabled(if: RubyYAML.available)) func desktopWithoutVNCServer() async throws {
     var config = Self.base()
     config.gui = GUIStack(vncPassword: nil)
-    let doc = try #require(try RubyYAML.parse(CloudInit.userData(config)) as? [String: Any])
+    let doc = try #require(try await RubyYAML.parse(CloudInit.userData(config)) as? [String: Any])
     let packages = try #require(doc["packages"] as? [String])
     #expect(packages.contains("xfce4") && packages.contains("xserver-xorg-video-fbdev"))
     #expect(!packages.contains("x11vnc") && !packages.contains("xserver-xorg-video-dummy"))
@@ -159,12 +160,12 @@ enum RubyYAML {
     #expect(stack.packages.suffix(2) == ["x11vnc", "xserver-xorg-video-dummy"])
   }
 
-  @Test(.enabled(if: RubyYAML.available)) func segmentNICGetsStaticNetworkConfig() throws {
+  @Test(.enabled(if: RubyYAML.available)) func segmentNICGetsStaticNetworkConfig() async throws {
     var config = Self.base()
     config.segment = SegmentNIC(
       primaryMAC: "52:54:00:AA:00:01", mac: "52:54:00:aa:00:02", address: "10.1.0.10")
     let text = try #require(CloudInit.networkConfig(config))
-    let doc = try #require(try RubyYAML.parse(text) as? [String: Any])
+    let doc = try #require(try await RubyYAML.parse(text) as? [String: Any])
     #expect(doc["version"] as? Int == 2)
     let ethernets = try #require(doc["ethernets"] as? [String: [String: Any]])
     #expect(
@@ -175,11 +176,11 @@ enum RubyYAML {
   }
 
   /// VZ finds the guest by MAC in vmnet's lease file, so the NAT NIC identifies itself by MAC.
-  @Test(.enabled(if: RubyYAML.available)) func dhcpIdentifierMACGetsNetworkConfig() throws {
+  @Test(.enabled(if: RubyYAML.available)) func dhcpIdentifierMACGetsNetworkConfig() async throws {
     var config = Self.base()
     config.dhcpIdentifierMAC = "02:AB:00:00:00:01"
     let text = try #require(CloudInit.networkConfig(config))
-    let doc = try #require(try RubyYAML.parse(text) as? [String: Any])
+    let doc = try #require(try await RubyYAML.parse(text) as? [String: Any])
     let ethernets = try #require(doc["ethernets"] as? [String: [String: Any]])
     #expect(ethernets.keys.sorted() == ["nat0"])
     #expect(
@@ -188,7 +189,7 @@ enum RubyYAML {
     #expect(ethernets["nat0"]?["dhcp-identifier"] as? String == "mac")
   }
 
-  @Test(.enabled(if: RubyYAML.available)) func hostileStringsRoundTrip() throws {
+  @Test(.enabled(if: RubyYAML.available)) func hostileStringsRoundTrip() async throws {
     let values = [
       "yes", "no", "null", "~", "123", "0o17", "- a", ": b", "#c", "a: b", "'q'", "\"dq\"",
       "back\\slash", "line\nbreak", "tab\there", "\u{1}ctl", "é ü 日本", "", " lead", "trail ",
@@ -201,7 +202,7 @@ enum RubyYAML {
       ),
       ("Odd Key: x", "v"),
     ])
-    let doc = try #require(try RubyYAML.parse(node.render()) as? [String: Any])
+    let doc = try #require(try await RubyYAML.parse(node.render()) as? [String: Any])
     #expect(doc["list"] as? [String] == values)
     let nested = try #require(doc["nested"] as? [Any])
     #expect((nested[0] as? [Any])?.first as? String == "a")
@@ -250,21 +251,24 @@ enum RubyYAML {
   }
 
   @Test(.enabled(if: FileManager.default.isExecutableFile(atPath: "/usr/bin/hdiutil")))
-  func buildsISOContainingSeedFiles() throws {
+  func buildsISOContainingSeedFiles() async throws {
     let dir = FileManager.default.temporaryDirectory.appending(path: "vmlab-seed-\(UUID())")
     defer { try? FileManager.default.removeItem(at: dir) }
     let iso = dir.appending(path: "seed.iso")
     var config = Self.base()
     config.segment = SegmentNIC(
       primaryMAC: "52:54:00:00:00:01", mac: "52:54:00:00:00:02", address: "10.1.0.10")
-    try CloudInit.makeSeed(config, directory: dir.appending(path: "seed"), iso: iso)
+    let seed = config
+    try await OffPool.run { () throws(any Error) in
+      try CloudInit.makeSeed(seed, directory: dir.appending(path: "seed"), iso: iso)
+    }
     #expect(FileManager.default.fileExists(atPath: iso.path))
 
     let mount = dir.appending(path: "mnt")
     try FileManager.default.createDirectory(at: mount, withIntermediateDirectories: true)
     let runner = ProcessRunner()
     let attach = try #require(
-      runner.run(
+      await runner.run(
         "/usr/bin/hdiutil",
         ["attach", "-readonly", "-nobrowse", "-mountpoint", mount.path, iso.path]))
     #expect(attach.status == 0, "\(attach.output)")

@@ -41,14 +41,12 @@ import VMLabCore
     #expect(latency < PoolSaturation.budget)
   }
 
-  /// Host commands awaited from async code (`qemu-img`, `tart`, `codesign`, `ssh-keygen`) do not
-  /// hold pool threads while they run.
-  @Test func hostCommandsLeaveThePoolFree() async {
-    let seconds = String(PoolSaturation.hold.components.seconds)
-    let latency = await PoolSaturation.latency { _ in
-      _ = await ProcessRunner().run("/bin/sleep", [seconds])
-    }
-    #expect(latency < PoolSaturation.budget)
+  /// Async callers of `CommandRunning.run` get the overload that waits off the pool (it is
+  /// `OffPool.run` around the synchronous one, which `blockingWorkLeavesThePoolFree` covers;
+  /// saturating the pool with real children here would hold pipes other tests' children read).
+  @Test func hostCommandsRunFromAsyncCode() async {
+    let output = await ProcessRunner().run("/bin/echo", ["off", "pool"])
+    #expect(output == CommandOutput(status: 0, output: "off pool\n"))
   }
 
   @Test func sleepWaitsEvenWhenCancelled() async {
