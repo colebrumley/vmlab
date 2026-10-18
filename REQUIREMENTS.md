@@ -240,7 +240,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   **Verify:** table-driven unit test over every (state, action) pair; a reconcile test with a fixture
   directory whose pid is a finished process marks it `stopped` and logs the event.
 
-- [ ] **R-107 Memory and concurrency budgets**
+- [x] **R-107 Memory and concurrency budgets**
   Before start: sum of memory of running guests plus this one must leave `reserveGB` (Appendix G,
   default 4) free of physical memory, else `limit_memory` with the numbers. Running macOS guests
   must stay under 2, else `limit_macos_guests`. A global `StartGate` limits concurrent starts to
@@ -349,7 +349,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   integration: boot `debian-13-arm64` under `qemu-hvf`, `query-status` says `running`, stop via
   `system_powerdown` finishes within 60 s.
 
-- [ ] **R-303 Serial channel**
+- [x] **R-303 Serial channel**
   `SerialChannel` over the serial unix socket: a background reader appends to `<vm>/serial.log`
   (never truncated during a run; rotated to `serial.log.1` at 64 MB) and a 4 MB ring with byte
   offsets. `read(since: offset|tail: n)`, `write(text)`, `wait(regex, timeout)` returning the match
