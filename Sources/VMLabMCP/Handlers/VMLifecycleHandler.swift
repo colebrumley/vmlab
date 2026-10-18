@@ -2,7 +2,8 @@ import Foundation
 import VMLabCore
 
 /// `vm_lifecycle`: one power transition through `VMManager`. `start` runs under the start gate
-/// and reports progress while the guest boots; `clone` belongs to R-803 and is refused until then.
+/// and reports progress while the guest boots; `clone` (R-803) makes a new VM, in state `created`,
+/// from the VM's current disk or from checkpoint `from`.
 struct VMLifecycleHandler: ToolHandler {
   var spec: ToolSpec { .vmLifecycle }
 
@@ -11,15 +12,11 @@ struct VMLifecycleHandler: ToolHandler {
   {
     let vm = try arguments.string("vm") ?? ""
     let actionName = try arguments.string("action") ?? ""
+    if actionName == "clone" { return try await clone(vm, arguments, context: context) }
     guard let action = LifecycleAction(rawValue: actionName), action != .checkpointStop else {
-      if actionName == "clone" {
-        throw VMLabError.invalidRequest(
-          field: "action", reason: "clone is not built yet",
-          hint: "Create a new VM with vm_create instead.")
-      }
       throw VMLabError.invalidRequest(
         field: "action", reason: "\(actionName) is not a vm_lifecycle action",
-        hint: "Use one of: start, stop, kill, pause, resume, reset, destroy.")
+        hint: "Use one of: start, stop, kill, pause, resume, reset, destroy, clone.")
     }
     var warnings: [String] = []
     if try arguments.int("timeoutSeconds") != nil {
@@ -53,5 +50,33 @@ struct VMLifecycleHandler: ToolHandler {
         "state": .string(after?.state.rawValue ?? "destroyed"),
         "durationMs": .number(ms),
       ], warnings: warnings)
+  }
+
+  func clone(
+    _ vm: String, _ arguments: ToolArguments, context: ToolContext
+  ) async throws(VMLabError) -> ToolResult {
+    let name = try arguments.string("name")
+    let from = try arguments.string("from")
+    let source = try context.store.find(vm)
+    let manager = context.manager
+    let started = ContinuousClock.now
+    let clone = try await context.progress.during(
+      "cloning \(source.id)", every: context.heartbeat
+    ) { () throws(VMLabError) -> VMRecord in
+      try await manager.clone(source.id, name: name, from: from)
+    }
+    let ms = ((ContinuousClock.now - started) / .milliseconds(1)).rounded()
+    var result: [String: JSONValue] = [
+      "vm": .object(["id": .string(clone.id), "name": .string(clone.name)]),
+      "source": .object(["id": .string(source.id), "name": .string(source.name)]),
+      "state": .string(clone.state.rawValue),
+      "durationMs": .number(ms),
+      "backingChain": .array((clone.backingChain ?? []).map { .string($0) }),
+    ]
+    if let plan = clone.plan { result["plan"] = try JSONValue(encoding: plan) }
+    if let checkpoint = clone.clonedFrom?.checkpointName {
+      result["from"] = .string(checkpoint)
+    }
+    return ToolResult(result)
   }
 }
