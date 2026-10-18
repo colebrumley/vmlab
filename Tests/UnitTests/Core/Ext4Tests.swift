@@ -273,7 +273,9 @@ struct Ext4Fixture {
       try? FileManager.default.setAttributes(
         [.posixPermissions: 0o644], ofItemAtPath: unreadable.path)
     }
-    await #expect(throws: (any Error).self) { try await store.registerKernel("k", kernel: unreadable) }
+    await #expect(throws: (any Error).self) {
+      try await store.registerKernel("k", kernel: unreadable)
+    }
     #expect(try Data(contentsOf: files.kernel) == Data("kernel".utf8))
     let left = try FileManager.default.contentsOfDirectory(
       atPath: files.kernel.deletingLastPathComponent().path)

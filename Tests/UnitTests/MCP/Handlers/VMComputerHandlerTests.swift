@@ -382,3 +382,76 @@ final class FakeDisplay: DisplaySession, DisplayConnector {
     #expect(list.value["vms"]?.arrayValue?.first?["brokenReason"] != nil)
   }
 }
+
+/// Model-supplied numbers in `vm_computer` once reached unchecked arithmetic: a scaled
+/// coordinate of 9e18 trapped converting to Int, and a region's corners could overflow.
+@Suite struct VMComputerExtremeArgumentTests {
+  static let huge = 9e18
+
+  /// Each call must fail with `invalid_request`, inside a child process so a trap is a failure
+  /// rather than the end of the test run.
+  @Test func extremeArgumentsAreInvalidRequestsNotTraps() async {
+    await #expect(processExitsWith: .success) {
+      let f = try VMComputerHandlerTests.Fixture()
+      defer { f.cleanUp() }
+      _ = try await f.call(["action": .string("screenshot")])
+      let huge = VMComputerExtremeArgumentTests.huge
+      let region = { (n: [Double]) in JSONValue.array(n.map { .number($0) }) }
+      let calls: [[String: JSONValue]] = [
+        ["action": .string("screenshot"), "region": region([-huge, 0, huge, 10])],
+        ["action": .string("screenshot"), "region": region([0, 0, huge, 10])],
+        ["action": .string("zoom"), "region": region([0, 0, huge, huge])],
+        ["action": .string("zoom"), "region": region([0, 0, huge, 10]), "scaled": .bool(true)],
+        ["action": .string("left_click"), "coordinate": region([huge, 0]), "scaled": .bool(true)],
+        ["action": .string("mouse_move"), "coordinate": region([huge, huge])],
+        [
+          "action": .string("left_click_drag"), "startCoordinate": region([0, 0]),
+          "coordinate": region([huge, 0]), "scaled": .bool(true),
+        ],
+        [
+          "action": .string("scroll"), "scrollDirection": .string("up"),
+          "coordinate": region([huge, 0]), "scaled": .bool(true),
+        ],
+        [
+          "action": .string("scroll"), "scrollDirection": .string("up"),
+          "scrollAmount": .number(huge),
+        ],
+        ["action": .string("screenshot"), "maxEdge": .number(huge * 10)],
+        ["action": .string("wait"), "durationSeconds": .number(huge)],
+      ]
+      for arguments in calls {
+        do {
+          _ = try await f.call(arguments)
+          Issue.record("\(arguments) was accepted")
+          exit(1)
+        } catch {
+          guard (error as? VMLabError)?.code == .invalidRequest else { exit(2) }
+        }
+      }
+    }
+  }
+
+  @Test func coordinatesPastTheLimitAreRefusedBeforeArithmetic() async throws {
+    let f = try VMComputerHandlerTests.Fixture()
+    defer { f.cleanUp() }
+    let limit = Double(DisplayRect.coordinateLimit)
+    let error = await #expect(throws: VMLabError.self) {
+      try await f.call([
+        "action": .string("zoom"),
+        "region": .array([0, 0, limit + 1, 10].map { JSONValue.number($0) }),
+      ])
+    }
+    #expect(error?.code == .invalidRequest)
+    #expect(error?.data["field"] == .string("region"))
+    #expect(
+      Computer.unscale((x: Int.max, y: 0), frame: .init(originX: 0, originY: 0, scale: 0.5)).x
+        == DisplayRect.coordinateLimit)
+    #expect(
+      Computer.unscale((x: 5, y: 5), frame: .init(originX: 0, originY: 0, scale: 0)).x
+        == DisplayRect.coordinateLimit)
+    // A region past the screen but within the limit is still clipped, not refused.
+    _ = try await f.call([
+      "action": .string("zoom"), "region": .array([0, 0, limit, 10].map { JSONValue.number($0) }),
+    ])
+  }
+}

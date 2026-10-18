@@ -89,3 +89,63 @@ import VMLabGDB
     #expect(throws: GDBError.self) { try map.decode(registersReply: "zz00000000000000") }
   }
 }
+
+/// A stub's target description is untrusted: a negative or huge `bitsize`, or a `regnum` at
+/// `Int.max`, once trapped the server (a backwards range or an arithmetic overflow).
+@Suite struct TargetDescriptionLimitsTests {
+  @Test func negativeBitsizeDoesNotTrapDecode() async {
+    await #expect(processExitsWith: .success) {
+      let xml = "<target><feature name=\"f\"><reg name=\"x0\" bitsize=\"-64\"/></feature></target>"
+      if let map = try? RegisterMap.build(targetXML: xml) {
+        _ = try? map.decode(registersReply: "0011")
+      }
+    }
+  }
+
+  @Test func hugeBitsizeDoesNotTrap() async {
+    await #expect(processExitsWith: .success) {
+      let xml =
+        "<target><feature name=\"f\"><reg name=\"x0\" bitsize=\"9223372036854775807\"/>"
+        + "</feature></target>"
+      if let map = try? RegisterMap.build(targetXML: xml) {
+        _ = map.registers.first?.byteSize
+        _ = try? map.decode(registersReply: "0011")
+      }
+    }
+  }
+
+  @Test func regnumAtIntMaxDoesNotTrap() async {
+    await #expect(processExitsWith: .success) {
+      let xml =
+        "<target><feature name=\"f\"><reg name=\"x0\" bitsize=\"64\" regnum=\"9223372036854775807\"/>"
+        + "<reg name=\"x1\" bitsize=\"64\"/></feature></target>"
+      _ = try? RegisterMap.build(targetXML: xml)
+    }
+  }
+
+  @Test(arguments: [
+    "<reg name=\"x0\" bitsize=\"-64\"/>",
+    "<reg name=\"x0\" bitsize=\"0\"/>",
+    "<reg name=\"x0\" bitsize=\"4097\"/>",
+    "<reg name=\"x0\" bitsize=\"9223372036854775807\"/>",
+    "<reg name=\"x0\" bitsize=\"64\" regnum=\"-1\"/>",
+    "<reg name=\"x0\" bitsize=\"64\" regnum=\"65536\"/>",
+    "<reg name=\"x0\" bitsize=\"64\" regnum=\"65535\"/><reg name=\"x1\" bitsize=\"64\"/>",
+  ])
+  func outOfRangeRegistersAreBadTargetDescriptions(_ reg: String) {
+    let xml = "<target><feature name=\"f\">\(reg)</feature></target>"
+    #expect {
+      try RegisterMap.build(targetXML: xml)
+    } throws: { error in
+      if case .badTargetDescription = error as? GDBError { true } else { false }
+    }
+  }
+
+  @Test func limitsAreInclusive() throws {
+    let xml =
+      "<target><feature name=\"f\"><reg name=\"v\" bitsize=\"4096\" regnum=\"65535\"/>"
+      + "<reg name=\"b\" bitsize=\"1\" regnum=\"0\"/></feature></target>"
+    let map = try RegisterMap.build(targetXML: xml)
+    #expect(map.registers.map(\.byteSize) == [1, 512])
+  }
+}

@@ -36,6 +36,8 @@ public struct SwitchStats: Codable, Sendable, Equatable {
   public var congested = 0
   /// Datagrams from a sender with no bound address, which the switch cannot answer.
   public var unaddressable = 0
+  /// Frames from a new source address not learned because the table held `SwitchCore.maxMACs`.
+  public var unlearned = 0
   public var ports = 0
   public var macs = 0
 
@@ -50,6 +52,9 @@ public struct SwitchCore: Sendable {
   public static let maxFrameSize = 1600
   /// Destination, source and EtherType.
   public static let headerSize = 14
+  /// The most addresses the table holds. A guest chooses its frames' source addresses, so
+  /// without a cap one guest could grow the table, and the switch's memory, without bound.
+  public static let maxMACs = 4096
 
   public enum Decision: Equatable, Sendable {
     case deliver([PortID])
@@ -61,6 +66,8 @@ public struct SwitchCore: Sendable {
   public private(set) var ports: Set<PortID> = []
   public private(set) var stats = SwitchStats()
   private var table: [MACAddress: (port: PortID, seen: Double)] = [:]
+  /// When the full table was last swept of aged entries; sweeps run at most once a second.
+  private var lastSweep: Double?
 
   public init(agingSeconds: Double = 300) {
     self.agingSeconds = agingSeconds
@@ -104,8 +111,7 @@ public struct SwitchCore: Sendable {
       stats.malformed += 1
       return .drop
     }
-    table[source] = (port, now)
-    stats.macs = table.count
+    learn(source, on: port, now: now)
 
     if !destination.isGroup, let target = self.port(for: destination, now: now) {
       if target == port {
@@ -117,5 +123,24 @@ public struct SwitchCore: Sendable {
     }
     stats.flooded += 1
     return .deliver(ports.filter { $0 != port }.sorted())
+  }
+
+  /// Records `source` on `port`. Known addresses are always refreshed; a new one is learned only
+  /// while the table has room, after sweeping aged entries from a full table. Otherwise frames
+  /// to it keep flooding, which is correct, only less efficient.
+  private mutating func learn(_ source: MACAddress, on port: PortID, now: Double) {
+    if table[source] == nil, table.count >= Self.maxMACs {
+      if lastSweep.map({ now - $0 >= 1 }) ?? true {
+        lastSweep = now
+        table = table.filter { now - $0.value.seen <= agingSeconds }
+      }
+      if table.count >= Self.maxMACs {
+        stats.unlearned += 1
+        stats.macs = table.count
+        return
+      }
+    }
+    table[source] = (port, now)
+    stats.macs = table.count
   }
 }
