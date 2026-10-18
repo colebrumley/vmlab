@@ -255,7 +255,25 @@ public enum CloudInit {
             })
         ))
     }
-    for command in config.runCommands { runcmd.append(.list(["sh", "-c", .string(command)])) }
+    if !config.runCommands.isEmpty {
+      // R-1004: each command is a file the runner times and records, so the host can read every
+      // step's exit and duration back from steps.tsv.
+      for (index, command) in config.runCommands.enumerated() {
+        writeFiles.append(
+          .map([
+            ("path", .string("\(ProvisionPaths.guestDirectory)/\(index).sh")),
+            ("permissions", "0700"),
+            ("content", .string(command.hasSuffix("\n") ? command : command + "\n")),
+          ]))
+      }
+      writeFiles.append(
+        .map([
+          ("path", .string(ProvisionPaths.runner)),
+          ("permissions", "0700"),
+          ("content", .string(ProvisionPaths.runnerScript(count: config.runCommands.count))),
+        ]))
+      runcmd.append(.list(["/bin/sh", .string(ProvisionPaths.runner)]))
+    }
     if !writeFiles.isEmpty { entries.append(("write_files", .list(writeFiles))) }
     entries.append(("runcmd", .list(runcmd)))
     return "#cloud-config\n" + YAML.map(entries).render()

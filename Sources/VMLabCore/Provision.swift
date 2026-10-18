@@ -91,6 +91,8 @@ public struct ProvisionStep: Codable, Sendable, Hashable {
     case succeeded, failed, skipped
   }
 
+  public static let cloudInit = "cloud-init"
+
   /// `cloud-init`, or `runCommands[<n>]`.
   public var name: String
   public var command: String
@@ -129,8 +131,12 @@ public struct ProvisionReport: Codable, Sendable, Hashable {
     self.steps = steps
   }
 
-  /// The first failed step, if any.
-  public var failure: ProvisionStep? { steps.first { $0.status == .failed } }
+  /// The step to blame: the first failed `runCommands` entry (a failing command fails
+  /// cloud-init's `runcmd` too), else the first failed step.
+  public var failure: ProvisionStep? {
+    steps.first { $0.status == .failed && $0.name != ProvisionStep.cloudInit }
+      ?? steps.first { $0.status == .failed }
+  }
 
   public static func url(in vmDirectory: URL) -> URL {
     vmDirectory.appending(path: "provision.json")
@@ -171,9 +177,11 @@ public protocol GuestProvisioning: Sendable {
   func provision(_ record: VMRecord, target: SSHTarget) async -> [String]
 }
 
-/// The provisioning a start runs over SSH: on a macOS guest, `provision.runCommands` one by one
-/// as the login user (after R-606's own first-boot steps). Steps go to `<vm>/provision.json` and
-/// their output to `<vm>/provision.log`; a VM that already has a report is not provisioned again.
+/// The provisioning a start runs over SSH when the request had a `provision`. On a Linux guest it
+/// waits for cloud-init (`cloud-init status --wait`), then reads back the steps the seed's runner
+/// recorded (R-1004); on a macOS guest it runs `provision.runCommands` one by one as the login
+/// user (after R-606's own first-boot steps). Steps go to `<vm>/provision.json` and their output
+/// to `<vm>/provision.log`; a VM that already has a report is not provisioned again.
 public struct SSHProvisioner: GuestProvisioning {
   /// Runs one command in the guest; `SSHExecChannel` unless a test replaces it.
   public var exec: @Sendable (SSHTarget, ExecRequest) async throws(VMLabError) -> ExecResult
@@ -196,13 +204,96 @@ public struct SSHProvisioner: GuestProvisioning {
     guard let spec = record.provision, !spec.isEmpty,
       ProvisionReport.load(from: directory) == nil
     else { return [] }
-    guard record.guest.os == .macos else { return [] }
-    let steps = await runCommands(spec.runCommands, target: target)
+    let steps =
+      record.guest.os == .macos
+      ? await runCommands(spec.runCommands, target: target)
+      : await collectCloudInit(spec.runCommands, target: target)
     let report = ProvisionReport(vm: record.id, steps: steps)
     do { try report.write(to: directory) } catch {
       return ["provision_failed: cannot write \(ProvisionReport.url(in: directory).path): \(error)"]
     }
     return report.warning(vmDirectory: directory).map { [$0] } ?? []
+  }
+
+  static let waitCommand = "cloud-init status --wait --long"
+  static let separator = "==vmlab-provision-log=="
+
+  /// Waits for cloud-init to finish, then reads the runner's `steps.tsv` and log as root.
+  /// cloud-init exits 0 when done, 2 when done with recoverable errors (deprecated keys and the
+  /// like), 1 on an error.
+  func collectCloudInit(_ commands: [String], target: SSHTarget) async -> [ProvisionStep] {
+    let log = ProvisionLog(url: ProvisionReport.logURL(in: target.vmDirectory))
+    let name = ProvisionStep.cloudInit
+    log.append("\(name): $ \(Self.waitCommand)")
+    let started = ContinuousClock.now
+    var steps: [ProvisionStep] = []
+    do {
+      let result = try await exec(
+        target, ExecRequest(command: Self.waitCommand, timeout: stepTimeout))
+      log.append(result.stdout + result.stderr)
+      log.append("\(name): exit \(result.exitCode) after \(result.durationMs) ms")
+      let ok = result.exitCode == 0 || result.exitCode == 2
+      steps.append(
+        ProvisionStep(
+          name: name, command: Self.waitCommand, status: ok ? .succeeded : .failed,
+          exitCode: Int(result.exitCode), durationMs: result.durationMs))
+    } catch {
+      let ms = Int((ContinuousClock.now - started) / .milliseconds(1))
+      log.append("\(name): \(error.code.rawValue): \(error.message)")
+      steps.append(
+        ProvisionStep(
+          name: name, command: Self.waitCommand, status: .failed, durationMs: ms,
+          error: error.message))
+    }
+
+    if !commands.isEmpty {
+      let read =
+        "cat \(ProvisionPaths.steps) 2>/dev/null; echo \(Self.separator); "
+        + "cat \(ProvisionPaths.guestLog) 2>/dev/null; true"
+      var recorded: [Int: (exit: Int, ms: Int)] = [:]
+      var unread: String?
+      do {
+        let result = try await exec(
+          target, ExecRequest(command: read, timeout: .seconds(60), user: "root"))
+        let parts = result.stdout.components(separatedBy: Self.separator + "\n")
+        recorded = ProvisionPaths.parseSteps(parts.first ?? "")
+        if parts.count > 1 { log.append(parts[1]) }
+      } catch {
+        unread = "could not read \(ProvisionPaths.steps): \(error.message)"
+      }
+      var failed = false
+      for (index, command) in commands.enumerated() {
+        let stepName = "runCommands[\(index)]"
+        if let step = recorded[index] {
+          let ok = step.exit == 0
+          steps.append(
+            ProvisionStep(
+              name: stepName, command: command, status: ok ? .succeeded : .failed,
+              exitCode: step.exit, durationMs: step.ms))
+          failed = failed || !ok
+        } else if failed {
+          steps.append(ProvisionStep(name: stepName, command: command, status: .skipped))
+        } else {
+          steps.append(
+            ProvisionStep(
+              name: stepName, command: command, status: .failed,
+              error: unread ?? "it did not run (cloud-init never reached runcmd)"))
+          failed = true
+        }
+      }
+    }
+
+    if steps.contains(where: { $0.status == .failed }),
+      let tail = try? await exec(
+        target,
+        ExecRequest(
+          command: "tail -n 100 /var/log/cloud-init-output.log", timeout: .seconds(60),
+          user: "root"))
+    {
+      log.append("-- the end of /var/log/cloud-init-output.log --")
+      log.append(tail.stdout)
+    }
+    return steps
   }
 
   /// Runs `commands` in order over SSH; after a failure the rest are `skipped`.
@@ -255,5 +346,50 @@ struct ProvisionLog {
     defer { try? handle.close() }
     _ = try? handle.seekToEnd()
     try? handle.write(contentsOf: Data(line.utf8))
+  }
+}
+
+/// Where a Linux guest keeps its first-boot steps (R-1004): `<n>.sh` per `runCommands` entry, the
+/// runner cloud-init's `runcmd` calls, `steps.tsv` (`<n> <exit> <ms>` per step run) and the steps'
+/// output in `/var/log/vmlab-provision.log`.
+public enum ProvisionPaths {
+  public static let guestDirectory = "/var/lib/vmlab/provision"
+  public static let runner = "\(guestDirectory)/run.sh"
+  public static let steps = "\(guestDirectory)/steps.tsv"
+  public static let guestLog = "/var/log/vmlab-provision.log"
+
+  /// Runs `0.sh` to `<count-1>.sh` in order, timing each with GNU `date`; stops at the first that
+  /// fails, so cloud-init records the failure too.
+  public static func runnerScript(count: Int) -> String {
+    let indices = (0..<count).map(String.init).joined(separator: " ")
+    return """
+      #!/bin/sh
+      # vmlab first-boot steps (R-1004).
+      dir=\(guestDirectory)
+      log=\(guestLog)
+      : > "$dir/steps.tsv"
+      for n in \(indices); do
+        echo "== runCommands[$n]" >> "$log"
+        start=$(date +%s%3N)
+        /bin/sh "$dir/$n.sh" >> "$log" 2>&1 < /dev/null
+        code=$?
+        end=$(date +%s%3N)
+        echo "$n $code $((end - start))" >> "$dir/steps.tsv"
+        echo "== runCommands[$n] exit $code" >> "$log"
+        [ "$code" -eq 0 ] || exit "$code"
+      done
+
+      """
+  }
+
+  /// `steps.tsv` as index → (exit, milliseconds).
+  public static func parseSteps(_ text: String) -> [Int: (exit: Int, ms: Int)] {
+    var steps: [Int: (exit: Int, ms: Int)] = [:]
+    for line in text.split(whereSeparator: \.isNewline) {
+      let fields = line.split(separator: " ").compactMap { Int($0) }
+      guard fields.count == 3 else { continue }
+      steps[fields[0]] = (fields[1], fields[2])
+    }
+    return steps
   }
 }

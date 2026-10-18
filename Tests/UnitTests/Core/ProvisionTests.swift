@@ -110,10 +110,15 @@ final class FakeProvisioner: GuestProvisioning {
     let ours = try #require(try RubyYAML.parse(CloudInit.cloudConfig(config)) as? [String: Any])
     #expect(ours["packages"] as? [String] == ["qemu-guest-agent", "jq"])
     let runcmd = try #require(ours["runcmd"] as? [[String]])
-    #expect(
-      Array(runcmd.suffix(2)) == [
-        ["sh", "-c", "echo 'a \"quoted\" one' > /tmp/x"], ["sh", "-c", "false"],
-      ])
+    #expect(runcmd.last == ["/bin/sh", ProvisionPaths.runner])
+    let files = try #require(ours["write_files"] as? [[String: Any]])
+    let byPath = Dictionary(
+      uniqueKeysWithValues: files.map { ($0["path"] as? String ?? "", $0["content"] as? String) })
+    #expect(byPath["\(ProvisionPaths.guestDirectory)/0.sh"] == "echo 'a \"quoted\" one' > /tmp/x\n")
+    #expect(byPath["\(ProvisionPaths.guestDirectory)/1.sh"] == "false\n")
+    let runner = try #require(byPath[ProvisionPaths.runner] ?? nil)
+    #expect(runner.contains("for n in 0 1; do"))
+    #expect(files.allSatisfy { $0["permissions"] as? String == "0700" })
     let text = try CloudInit.userData(config)
     #expect(text.contains("hostname: theirs"))
     #expect(text.contains("Merge-Type: \(CloudInit.mergeType)"))
@@ -172,6 +177,97 @@ final class FakeProvisioner: GuestProvisioning {
       features: [.execSSH])
     #expect(await provisioner.provision(record, target: Self.target(dir)).isEmpty)
     #expect(exec.commands.isEmpty && ProvisionReport.load(from: dir) == nil)
+  }
+
+  @Test func stepsTSVParses() {
+    let steps = ProvisionPaths.parseSteps("0 0 12\n1 3 4500\njunk\n2 x 1\n")
+    #expect(steps.count == 2)
+    #expect(steps[0]?.exit == 0 && steps[0]?.ms == 12)
+    #expect(steps[1]?.exit == 3 && steps[1]?.ms == 4500)
+    #expect(ProvisionPaths.runnerScript(count: 3).contains("for n in 0 1 2; do"))
+  }
+
+  /// Answers the Linux collection's three commands: the cloud-init wait, the read of steps.tsv
+  /// and the log, and the tail of cloud-init's own log.
+  final class CloudInitGuest: Sendable {
+    let waitExit: Int32
+    let tsv: String
+    private let asked = Mutex<[ExecRequest]>([])
+    var requests: [ExecRequest] { asked.withLock { $0 } }
+
+    init(waitExit: Int32, tsv: String) {
+      self.waitExit = waitExit
+      self.tsv = tsv
+    }
+
+    func run(_ request: ExecRequest) -> ExecResult {
+      asked.withLock { $0.append(request) }
+      if request.command == SSHProvisioner.waitCommand {
+        return ExecResult(
+          exitCode: waitExit, stdout: "status: done\n", stderr: "", durationMs: 30_000)
+      }
+      if request.command.hasPrefix("cat \(ProvisionPaths.steps)") {
+        return ExecResult(
+          exitCode: 0, stdout: tsv + SSHProvisioner.separator + "\n== runCommands[0]\nhello\n",
+          stderr: "")
+      }
+      return ExecResult(exitCode: 0, stdout: "cloud-init output tail\n", stderr: "")
+    }
+  }
+
+  static func linux(_ commands: [String], packages: [String] = []) -> VMRecord {
+    VMRecord(
+      id: "vm-abcdef", profile: .qemuHVF, guest: GuestSpec(os: .linux, arch: .arm64),
+      features: [.execSSH],
+      provision: ProvisionSpec(packages: packages, runCommands: commands))
+  }
+
+  /// R-1004: the failing runCommands entry is the step provision.json and the warning name.
+  @Test func linuxStepsComeBackFromTheGuest() async throws {
+    let dir = try Self.directory()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let guest = CloudInitGuest(waitExit: 1, tsv: "0 0 15\n1 42 7\n")
+    let provisioner = SSHProvisioner { _, request in guest.run(request) }
+    let warnings = await provisioner.provision(
+      Self.linux(["echo hello", "exit 42", "echo never"]), target: Self.target(dir))
+    let report = try #require(ProvisionReport.load(from: dir))
+    #expect(
+      report.steps.map(\.name) == [
+        "cloud-init", "runCommands[0]", "runCommands[1]", "runCommands[2]",
+      ])
+    #expect(report.steps.map(\.status) == [.failed, .succeeded, .failed, .skipped])
+    #expect(report.steps.map(\.exitCode) == [1, 0, 42, nil])
+    #expect(report.steps.map(\.durationMs) == [30_000, 15, 7, nil])
+    #expect(report.steps[2].command == "exit 42")
+    #expect(warnings == [report.warning(vmDirectory: dir)!])
+    #expect(warnings[0].contains("step runCommands[1] `exit 42` exited 42"))
+    // The reads run as root; the failure brings cloud-init's own log into provision.log.
+    #expect(guest.requests.dropFirst().allSatisfy { $0.user == "root" })
+    let log = try String(contentsOf: ProvisionReport.logURL(in: dir), encoding: .utf8)
+    #expect(log.contains("status: done") && log.contains("hello") && log.contains("output tail"))
+  }
+
+  @Test func cloudInitFailureAloneIsTheStep() async throws {
+    let dir = try Self.directory()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    // Packages that would not install: cloud-init errors, and no command was asked for.
+    let provisioner = SSHProvisioner { _, request in
+      CloudInitGuest(waitExit: 1, tsv: "").run(request)
+    }
+    let warnings = await provisioner.provision(
+      Self.linux([], packages: ["no-such-package"]), target: Self.target(dir))
+    #expect(warnings.first?.contains("step cloud-init") == true, "\(warnings)")
+    // Recoverable errors (exit 2) are not a failure; a command that never ran is.
+    let other = try Self.directory()
+    defer { try? FileManager.default.removeItem(at: other) }
+    let degraded = SSHProvisioner { _, request in CloudInitGuest(waitExit: 2, tsv: "").run(request)
+    }
+    let unrun = await degraded.provision(Self.linux(["true"]), target: Self.target(other))
+    let report = try #require(ProvisionReport.load(from: other))
+    #expect(report.steps[0].status == .succeeded)
+    #expect(
+      report.steps[1].status == .failed && report.steps[1].error?.contains("did not run") == true)
+    #expect(unrun.count == 1)
   }
 
   @Test func startCarriesTheProvisionersWarnings() async throws {

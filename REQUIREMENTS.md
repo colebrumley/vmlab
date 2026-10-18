@@ -808,7 +808,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   references; pulls over 10 GB (macOS) require `confirm: true` from the tool with the size stated.
   **Verify:** unit tests for the reference check and the confirm gate.
 
-- [ ] **R-1004 Reproducible first boot**
+- [x] **R-1004 Reproducible first boot**
   Every provisioning step (cloud-init, macOS SSH steps) writes `<vm>/provision.log` and a
   `provision.json` with each step's command, duration and exit; `vm_inspect` surfaces failures as
   a `provision_failed` warning rather than hiding them behind `ssh_unreachable`.
