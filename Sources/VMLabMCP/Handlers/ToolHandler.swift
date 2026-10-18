@@ -38,7 +38,8 @@ public struct ToolResult: Sendable, Hashable {
 /// `notifications/progress` with the call's progress token; elsewhere, and when the client sent no
 /// token, it does nothing. R-205 makes the long calls report at least every 5 s.
 public struct ToolProgress: Sendable {
-  public typealias Send = @Sendable (_ progress: Double, _ total: Double?, _ message: String?) async
+  public typealias Send =
+    @Sendable (_ progress: Double, _ total: Double?, _ message: String?) async
     -> Void
 
   private let send: Send?
