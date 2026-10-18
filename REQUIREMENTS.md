@@ -624,7 +624,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
 
 ## Phase 7 — Debug channel
 
-- [ ] **R-700 GDB remote protocol client**
+- [x] **R-700 GDB remote protocol client**
   `VMLabGDB`: packet framing with checksums and acks, `qSupported`, `?`, `vCont?`, `c`, `s`, `g`/`G`,
   `p`/`P`, `m`/`M`, `Z0`/`z0` (software breakpoints), `Z1`/`z1` (hardware), `vCont;c`/`;s`,
   interrupt (`\x03`), `qXfer:features:read` to parse `target.xml` into a register map, with

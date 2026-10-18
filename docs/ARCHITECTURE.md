@@ -27,8 +27,13 @@ framework itself is loaded only in `vmlab-vz`.
 **`VMLabRFB`** (library). A VNC (RFB) client: framebuffer updates to PNG, pointer and key events. It
 gives both engines a screen to look at and click on.
 
-**`VMLabGDB`** (library). A GDB remote serial protocol client: registers, memory, breakpoints and
-stepping over a guest's GDB stub.
+**`VMLabGDB`** (library). A GDB remote serial protocol client: registers, memory, breakpoints,
+watchpoints and stepping over a guest's GDB stub. `GDBPacket`/`GDBPacketDecoder` frame packets
+(checksums, acks, escapes, run-length encoding); `GDBCommand` builds payloads; `GDBClient` is an
+actor in all-stop mode over a `GDBTransport` (`GDBTCPTransport` for QEMU's `-gdb tcp:...`) that
+serialises commands, acks replies, resends on `-`, and turns stop replies into `StopReason`.
+`RegisterMap` comes from `qXfer:features:read` (`target.xml` and its `xi:include`s) or a built-in
+arm64/x86_64 layout. Errors are the module's own `GDBError`; the debug tool maps them to Appendix D.
 
 **`VMLabMCP`** (library). The MCP server on the official Swift SDK: tool schemas (Appendix C),
 handlers that call Core, rendering of `VMLabError` as structured refusals, and the stdio transport.
