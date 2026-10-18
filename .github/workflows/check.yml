@@ -1,0 +1,12 @@
+name: check
+on:
+  push:
+    branches: [main]
+  pull_request:
+jobs:
+  check:
+    # Unit tests only: hosted runners cannot run VMs.
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - run: scripts/check.sh
