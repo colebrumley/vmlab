@@ -170,7 +170,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   **Verify:** snapshot test of the catalogue; a table-driven test of every contradiction above and
   of ten valid requests that decode.
 
-- [ ] **R-101 Profiles and host facts**
+- [x] **R-101 Profiles and host facts**
   `enum Profile: String { vzMacOS = "vz-macos", vzLinux = "vz-linux", qemuHVF = "qemu-hvf",
   qemuTCG = "qemu-tcg" }` with `performanceTier`, `energyTier`, `startupTier` (Appendix B).
   `HostFacts` (Appendix E) as a Codable struct, gathered by `HostProbe` (fast, every server start:
@@ -473,7 +473,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
 
 ## Phase 5 — GUI channel
 
-- [ ] **R-500 RFB client: handshake and framebuffer**
+- [x] **R-500 RFB client: handshake and framebuffer**
   `VMLabRFB`: RFB 3.8 over a unix or TCP socket; security types None and VNC Authentication (DES
   challenge); `ClientInit` shared; encodings requested: Raw, CopyRect, DesktopSize; pixel format
   negotiated to 32-bit BGRX; an incremental `FramebufferUpdateRequest` loop keeps a `Framebuffer`
@@ -624,7 +624,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
 
 ## Phase 7 — Debug channel
 
-- [ ] **R-700 GDB remote protocol client**
+- [x] **R-700 GDB remote protocol client**
   `VMLabGDB`: packet framing with checksums and acks, `qSupported`, `?`, `vCont?`, `c`, `s`, `g`/`G`,
   `p`/`P`, `m`/`M`, `Z0`/`z0` (software breakpoints), `Z1`/`z1` (hardware), `vCont;c`/`;s`,
   interrupt (`\x03`), `qXfer:features:read` to parse `target.xml` into a register map, with
