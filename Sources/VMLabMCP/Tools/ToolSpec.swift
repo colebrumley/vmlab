@@ -212,6 +212,20 @@ enum Schema {
                 + "-pidfile, -daemonize, -monitor, -mon and -readconfig are refused: vmlab owns them."
             )
           ], description: "Engine-specific additions."),
+        "provision": object(
+          [
+            "packages": array(
+              string("A distribution package name, e.g. jq."),
+              "Packages cloud-init installs on first boot (Linux only)."),
+            "userData": string(
+              "cloud-init user-data merged after vmlab's own (its keys win, lists append); must "
+                + "start with #cloud-config, #!, #cloud-boothook or #include (Linux only)."),
+            "runCommands": array(
+              string("One shell command."),
+              "Commands run in order on first boot: as root after cloud-init (Linux), or over "
+                + "SSH as the login user (macOS). The first that fails stops the rest; "
+                + "vm_inspect reports it as provision_failed."),
+          ], description: "First-boot provisioning beyond vmlab's own setup."),
       ], required: ["guest"],
       description: "What the VM must be. Only guest is required; every other field has a default.")
   }()

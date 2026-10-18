@@ -95,12 +95,15 @@ public struct CloudInitConfig: Codable, Sendable, Hashable {
   /// User-supplied `user-data`, merged after ours (cloud-config, shell script, boothook or
   /// include). Its cloud-config keys win; lists are appended.
   public var extraUserData: String?
+  /// The request's `provision.runCommands` (R-1001), run as root in order after vmlab's own
+  /// `runcmd` entries.
+  public var runCommands: [String]
 
   public init(
     instanceID: String, hostname: String, user: String, sshPublicKey: String,
     packages: [String] = [], gui: GUIStack? = nil, segment: SegmentNIC? = nil,
     mounts: [GuestMount] = [], console: ConsoleDevice = .ttyAMA0,
-    dhcpIdentifierMAC: String? = nil, extraUserData: String? = nil
+    dhcpIdentifierMAC: String? = nil, extraUserData: String? = nil, runCommands: [String] = []
   ) {
     self.instanceID = instanceID
     self.hostname = hostname
@@ -113,6 +116,19 @@ public struct CloudInitConfig: Codable, Sendable, Hashable {
     self.console = console
     self.dhcpIdentifierMAC = dhcpIdentifierMAC
     self.extraUserData = extraUserData
+    self.runCommands = runCommands
+  }
+
+  /// `provision` applied: its packages, user-data and commands.
+  public func provisioned(_ provision: ProvisionSpec?) -> CloudInitConfig {
+    guard let provision else { return self }
+    var config = self
+    for package in provision.packages where !config.packages.contains(package) {
+      config.packages.append(package)
+    }
+    if let userData = provision.userData, !userData.isEmpty { config.extraUserData = userData }
+    config.runCommands += provision.runCommands
+    return config
   }
 }
 
@@ -192,6 +208,7 @@ public enum CloudInit {
             })
         ))
     }
+    for command in config.runCommands { runcmd.append(.list(["sh", "-c", .string(command)])) }
     if !writeFiles.isEmpty { entries.append(("write_files", .list(writeFiles))) }
     entries.append(("runcmd", .list(runcmd)))
     return "#cloud-config\n" + YAML.map(entries).render()

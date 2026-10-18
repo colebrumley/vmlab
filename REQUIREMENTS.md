@@ -792,7 +792,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   amd64 images select `qemu-tcg` only.
   **Verify:** catalogue test; integration: Ubuntu arm64 boots under both engines.
 
-- [ ] **R-1001 Custom user-data and packages**
+- [x] **R-1001 Custom user-data and packages**
   `Requirements.provision: { packages: [String], userData: String?, runCommands: [String] }` merged
   into the cloud-init seed; for macOS guests `runCommands` run over SSH after R-606.
   **Verify:** integration: a Debian guest created with `packages: [jq]` has `jq --version` working.

@@ -556,6 +556,10 @@ The `requirements` object of `vm_plan`, `vm_create` and `fleet` (`Requirements` 
 | `network.mode` | `nat` \| `none` |  | nat for outbound internet, none for no network device at all. |
 | `network.segment` | string |  | A private segment (net_segment) to join with a second NIC. |
 | `prefer` | array of `exec_ssh` \| `exec_agent` \| `gui` \| `gui_preboot` \| `gui_desktop` \| `gui_accel` \| `serial` \| `gdb` \| `introspection` \| `memory_dump` \| `direct_kernel_boot` \| `custom_firmware` \| `custom_devices` \| `halt_at_start` \| `checkpoint_disk` \| `checkpoint_live` \| `pause` \| `net_nat` \| `net_fast` \| `net_segment` \| `net_port_forward` \| `net_none` \| `rosetta` \| `nested_virt` \| `shared_dir` \| `cloud_init` \| `many_guests` |  | Features to have when possible; they rank profiles but never rule one out. |
+| `provision` | object |  | First-boot provisioning beyond vmlab's own setup. |
+| `provision.packages` | array of string |  | Packages cloud-init installs on first boot (Linux only). |
+| `provision.runCommands` | array of string |  | Commands run in order on first boot: as root after cloud-init (Linux), or over SSH as the login user (macOS). The first that fails stops the rest; vm_inspect reports it as provision_failed. |
+| `provision.userData` | string |  | cloud-init user-data merged after vmlab's own (its keys win, lists append); must start with #cloud-config, #!, #cloud-boothook or #include (Linux only). |
 | `require` | array of `exec_ssh` \| `exec_agent` \| `gui` \| `gui_preboot` \| `gui_desktop` \| `gui_accel` \| `serial` \| `gdb` \| `introspection` \| `memory_dump` \| `direct_kernel_boot` \| `custom_firmware` \| `custom_devices` \| `halt_at_start` \| `checkpoint_disk` \| `checkpoint_live` \| `pause` \| `net_nat` \| `net_fast` \| `net_segment` \| `net_port_forward` \| `net_none` \| `rosetta` \| `nested_virt` \| `shared_dir` \| `cloud_init` \| `many_guests` |  | Features the VM must have; a profile lacking any is ruled out. Default [] (VZ). |
 | `resources` | object |  | Guest resources; each omitted field takes the guest's default. |
 | `resources.cpus` | integer, ≥ 1 |  | Virtual CPUs. |

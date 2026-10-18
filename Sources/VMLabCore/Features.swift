@@ -321,12 +321,15 @@ public struct Requirements: Codable, Sendable, Hashable {
   public var image: String?
   public var boot: BootSpec?
   public var extra: ExtraSpec?
+  /// First-boot packages, user-data and commands (R-1001).
+  public var provision: ProvisionSpec?
 
   /// Builds a request and checks it as decoding would.
   public init(
     guest: GuestSpec, require: [Feature] = [], prefer: [Feature] = [],
     resources: ResourceSpec = ResourceSpec(), network: NetworkSpec = NetworkSpec(),
-    image: String? = nil, boot: BootSpec? = nil, extra: ExtraSpec? = nil
+    image: String? = nil, boot: BootSpec? = nil, extra: ExtraSpec? = nil,
+    provision: ProvisionSpec? = nil
   ) throws(VMLabError) {
     self.guest = guest
     self.require = require
@@ -336,11 +339,12 @@ public struct Requirements: Codable, Sendable, Hashable {
     self.image = image
     self.boot = boot
     self.extra = extra
+    self.provision = provision
     try validate()
   }
 
   enum CodingKeys: String, CodingKey {
-    case guest, require, prefer, resources, network, image, boot, extra
+    case guest, require, prefer, resources, network, image, boot, extra, provision
   }
 
   public init(from decoder: any Decoder) throws {
@@ -353,6 +357,7 @@ public struct Requirements: Codable, Sendable, Hashable {
     image = try c.decodeIfPresent(String.self, forKey: .image)
     boot = try c.decodeIfPresent(BootSpec.self, forKey: .boot)
     extra = try c.decodeIfPresent(ExtraSpec.self, forKey: .extra)
+    provision = try c.decodeIfPresent(ProvisionSpec.self, forKey: .provision)
     try validate()
   }
 
@@ -444,6 +449,14 @@ public struct Requirements: Codable, Sendable, Hashable {
     if let extra, !extra.qemuArgs.isEmpty {
       named.append((.customDevices, "extra.qemuArgs"))
     }
+    if let provision, !provision.isEmpty {
+      // Linux provisioning is the seed's; macOS commands go over SSH.
+      if guest.os == .macos {
+        if !provision.runCommands.isEmpty { named.append((.execSSH, "provision.runCommands")) }
+      } else {
+        named.append((.cloudInit, "provision"))
+      }
+    }
     return named
   }
 
@@ -492,6 +505,7 @@ public struct Requirements: Codable, Sendable, Hashable {
       }
     }
     try extra?.validate()
+    try provision?.validate(guest: guest)
     try checkContradictions()
   }
 

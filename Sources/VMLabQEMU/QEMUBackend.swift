@@ -208,7 +208,8 @@ public final class QEMUBackend: Backend {
       config = CloudInitConfig(
         instanceID: record.id, hostname: record.name,
         user: images.pulled(image)?.login.user ?? "debian",
-        sshPublicKey: key.trimmingCharacters(in: .whitespacesAndNewlines))
+        sshPublicKey: key.trimmingCharacters(in: .whitespacesAndNewlines)
+      ).provisioned(record.provision)
     }
     return QEMULaunchRequest(
       record: record, plan: plan, layout: layout, baseImage: base, boot: boot, seed: config,

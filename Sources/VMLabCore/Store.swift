@@ -78,13 +78,15 @@ public struct VMRecord: Codable, Sendable, Hashable {
   public var boot: BootSpec?
   /// The request's `extra` (R-306: `qemuArgs`); nil when it had none. Additive: schema 1 still.
   public var extra: ExtraSpec?
+  /// The request's `provision` (R-1001); nil when it had none. Additive: schema 1 still.
+  public var provision: ProvisionSpec?
 
   public init(
     id: String, name: String? = nil, profile: Profile, guest: GuestSpec, features: [Feature],
     resources: ResourceSpec = ResourceSpec(), image: String? = nil,
     network: NetworkSpec = NetworkSpec(), createdAt: Date = Date(), state: VMState = .created,
     runtime: VMRuntime? = nil, checkpoints: [CheckpointRef] = [], plan: Plan? = nil,
-    boot: BootSpec? = nil, extra: ExtraSpec? = nil
+    boot: BootSpec? = nil, extra: ExtraSpec? = nil, provision: ProvisionSpec? = nil
   ) {
     self.schemaVersion = Self.currentSchemaVersion
     self.id = id
@@ -102,11 +104,12 @@ public struct VMRecord: Codable, Sendable, Hashable {
     self.plan = plan
     self.boot = boot
     self.extra = extra
+    self.provision = provision
   }
 
   enum CodingKeys: String, CodingKey {
     case schemaVersion, id, name, profile, guest, features, resources, image, network, createdAt
-    case state, runtime, checkpoints, plan, boot, extra
+    case state, runtime, checkpoints, plan, boot, extra, provision
   }
 
   public init(from decoder: any Decoder) throws {
@@ -127,6 +130,7 @@ public struct VMRecord: Codable, Sendable, Hashable {
     plan = try c.decodeIfPresent(Plan.self, forKey: .plan)
     boot = try c.decodeIfPresent(BootSpec.self, forKey: .boot)
     extra = try c.decodeIfPresent(ExtraSpec.self, forKey: .extra)
+    provision = try c.decodeIfPresent(ProvisionSpec.self, forKey: .provision)
   }
 
   /// `vm-` plus six lowercase RFC 4648 base32 characters.

@@ -14,18 +14,22 @@ public actor VMManager {
   public nonisolated let readiness: any GuestReadiness
   /// Runs `ssh-keygen` for a new VM's key pair.
   public nonisolated let keygen: any CommandRunning
+  /// What a first start does once SSH answers (R-1001: `provision`).
+  public nonisolated let provisioner: any GuestProvisioning
 
   private var busy: Set<String> = []
   private var waiters: [String: [CheckedContinuation<Void, Never>]] = [:]
 
   public init(
     store: Store, backends: BackendRegistry = Backends.shared,
-    readiness: any GuestReadiness = SSHReadiness(), keygen: any CommandRunning = ProcessRunner()
+    readiness: any GuestReadiness = SSHReadiness(), keygen: any CommandRunning = ProcessRunner(),
+    provisioner: any GuestProvisioning = SSHProvisioner()
   ) {
     self.store = store
     self.backends = backends
     self.readiness = readiness
     self.keygen = keygen
+    self.provisioner = provisioner
   }
 
   /// What a lifecycle action left: the record (nil once destroyed) and warnings for the result,
@@ -103,9 +107,17 @@ public actor VMManager {
     do {
       let updated = try await apply(action, target: target, to: record, with: backend)
       var warnings: [String] = []
-      if action == .start, let updated, let warning = await waitForSSH(updated, backend: backend) {
-        warnings.append(warning)
-        if warning != Self.noEndpoint(id) { await log(id, warning, level: .warning) }
+      if action == .start, let updated {
+        let ready = await waitForSSH(updated, backend: backend)
+        if let warning = ready.warning {
+          warnings.append(warning)
+          if warning != Self.noEndpoint(id) { await log(id, warning, level: .warning) }
+        } else if let target = ready.target {
+          for warning in await provisioner.provision(updated, target: target) {
+            warnings.append(warning)
+            await log(id, warning, level: .warning)
+          }
+        }
       }
       return Outcome(record: updated, warnings: warnings)
     } catch {
@@ -149,16 +161,21 @@ public actor VMManager {
     return updated
   }
 
-  /// Nil when the guest answered SSH or is not one to wait for (no `exec_ssh`, networking off);
-  /// otherwise the warning.
-  private func waitForSSH(_ record: VMRecord, backend: any Backend) async -> String? {
-    guard record.features.contains(.execSSH), record.network.mode != .disabled else { return nil }
+  /// The target when the guest answered SSH; neither when it is not one to wait for (no
+  /// `exec_ssh`, networking off); otherwise the warning.
+  private func waitForSSH(
+    _ record: VMRecord, backend: any Backend
+  ) async -> (target: SSHTarget?, warning: String?) {
+    guard record.features.contains(.execSSH), record.network.mode != .disabled else {
+      return (nil, nil)
+    }
     let timeout = ResourceLimits.bootTimeout(profile: record.profile, os: record.guest.os)
     guard let endpoint = await backend.sshEndpoint(record, timeout: timeout) else {
-      return Self.noEndpoint(record.id)
+      return (nil, Self.noEndpoint(record.id))
     }
     let target = SSHTarget(record: record, endpoint: endpoint, store: store)
-    return await readiness.wait(for: target, timeout: timeout)
+    if let warning = await readiness.wait(for: target, timeout: timeout) { return (nil, warning) }
+    return (target, nil)
   }
 
   static func noEndpoint(_ id: String) -> String {

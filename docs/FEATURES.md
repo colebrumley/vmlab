@@ -15,7 +15,7 @@ column is what `host-facts.json` on the development host recorded; `unknown` cou
 | `gui_desktop` | Y (built in) | Y (R-504) | Y (R-504) | Y |  |
 | `gui_accel` | Y | Y | N | N |  |
 | `serial` | N | Y | Y | Y |  |
-| `gdb` | N | N | ? `qemu_hvf_gdb` (R-702) | Y | `qemu_hvf_gdb`: unknown |
+| `gdb` | N | N | ? `qemu_hvf_gdb` (R-702) | Y | `qemu_hvf_gdb`: yes, 2026-10-18 |
 | `introspection` | N | N | Y | Y |  |
 | `memory_dump` | N | N | Y | Y |  |
 | `direct_kernel_boot` | N | Y | Y | Y |  |
