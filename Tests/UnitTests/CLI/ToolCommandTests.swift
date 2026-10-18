@@ -93,6 +93,16 @@ import VMLabMCP
     }
   }
 
+  /// P3: `vmlab checkpoint <vm> diff --from a --to b` passes vm_checkpoint's from and to.
+  @Test func checkpointDiffTakesFromAndTo() throws {
+    #expect(
+      try CheckpointCommand.parse(["web", "diff", "--from", "base", "--to", "@now"]).arguments()
+        == .object([
+          "vm": .string("web"), "action": .string("diff"), "from": .string("base"),
+          "to": .string("@now"),
+        ]))
+  }
+
   @Test func versionIsThePackageVersion() {
     #expect(VMLab.configuration.version == VMLabMCP.version)
   }
