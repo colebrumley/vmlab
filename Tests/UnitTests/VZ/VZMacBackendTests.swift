@@ -159,6 +159,30 @@ import VMLabCore
     #expect(error?.code == .invalidRequest)
   }
 
+  /// CX-29: resources below the image's minimums are raised in vm.json too, so admission and the
+  /// inventory count what the guest really gets.
+  @Test func createRecordsTheEffectiveResources() async throws {
+    let (home, store, backend, _) = try Self.sandbox()
+    defer { try? FileManager.default.removeItem(at: home) }
+    let record = try store.update(id: try Self.create(store).id) {
+      $0.resources = ResourceSpec(cpus: 1, memoryGB: 2)
+    }
+    try await backend.create(record, plan: Self.plan)
+    let stored = try store.load(id: record.id)
+    // The fixture's minimums: 2 CPUs, 4 GiB.
+    #expect(stored.resources.cpus == 2 && stored.resources.memoryGB == 4)
+    #expect(Inventory.Guest(record: stored).memoryGB == 4)
+
+    // Requests at or above the minimums are kept as they are.
+    let (home2, store2, backend2, _) = try Self.sandbox()
+    defer { try? FileManager.default.removeItem(at: home2) }
+    let big = try store2.update(id: try Self.create(store2).id) {
+      $0.resources = ResourceSpec(memoryGB: 12)
+    }
+    try await backend2.create(big, plan: Self.plan)
+    #expect(try store2.load(id: big.id).resources == ResourceSpec(memoryGB: 12))
+  }
+
   @Test func diskGBGrowsTheCloneAndRefusesShrinking() async throws {
     let (home, store, backend, fake) = try Self.sandbox()
     defer { try? FileManager.default.removeItem(at: home) }

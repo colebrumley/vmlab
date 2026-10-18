@@ -102,7 +102,7 @@ public struct VZMacBackend: Backend {
     let tart = try tart()
     let clone = try tart.clone(pulled.tartVM ?? pulled.source, to: record.id)
     do throws(VMLabError) {
-      _ = try TartVMConfig.read(from: clone.directory)
+      let tartConfig = try TartVMConfig.read(from: clone.directory)
       for file in [clone.disk, clone.nvram]
       where !FileManager.default.fileExists(atPath: file.path) {
         throw TartVMConfig.layoutError(file, "missing from the clone")
@@ -115,7 +115,13 @@ public struct VZMacBackend: Backend {
         try VZDisk.refuseShrink(current: current, toBytes: target, diskGB: diskGB, image: name)
         if current < target { try tart.setDiskSize(record.id, gigabytes: diskGB) }
       }
-      try store.update(id: record.id) { $0.tartClone = clone.directory.path }
+      // CX-29: the runner never goes below the image's minimums; vm.json says what the guest
+      // gets, so start admission and the inventory count it.
+      let resources = Self.effectiveResources(record.resources, config: tartConfig)
+      try store.update(id: record.id) {
+        $0.tartClone = clone.directory.path
+        $0.resources = resources
+      }
       let dir = store.directory(of: record.id)
       // VMManager makes the key first (R-400); this keeps a direct create complete.
       try SSHKeys.generate(in: dir, comment: "vmlab-\(record.id)", runner: commands)
@@ -124,6 +130,20 @@ public struct VZMacBackend: Backend {
       try? tart.delete(record.id)
       throw error
     }
+  }
+
+  /// `resources` with CPUs and memory raised to the image's `cpuCountMin` and `memorySizeMin`
+  /// (memory rounded up to whole GiB) where the request, or its Appendix G default, is below
+  /// them; fields already at or above the minimums are left as they are.
+  static func effectiveResources(_ resources: ResourceSpec, config: TartVMConfig) -> ResourceSpec {
+    let resolved = ResourceLimits.resolve(resources, for: .macos)
+    var effective = resources
+    if (resolved.cpus ?? 4) < config.cpuCountMin { effective.cpus = config.cpuCountMin }
+    let gib: UInt64 = 1 << 30
+    let minimumGB = Int(
+      clamping: config.memorySizeMin / gib + (config.memorySizeMin % gib == 0 ? 0 : 1))
+    if (resolved.memoryGB ?? 8) < minimumGB { effective.memoryGB = minimumGB }
+    return effective
   }
 
   /// Launches the runner on the clone's files, then waits up to `leaseTimeout` for the lease of
