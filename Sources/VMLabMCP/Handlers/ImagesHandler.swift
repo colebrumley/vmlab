@@ -223,6 +223,7 @@ struct ImagesHandler: ToolHandler {
         field: "name", reason: "name is required for this action",
         hint: "Add the image name; images list shows them.")
     }
+    try ImageStore.checkName(name, field: "name")
     return name
   }
 

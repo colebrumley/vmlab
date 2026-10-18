@@ -52,6 +52,55 @@ final class TartRunner: CommandRunning {
   static let fixtures = URL(filePath: #filePath).deletingLastPathComponent()
     .deletingLastPathComponent().deletingLastPathComponent().appending(path: "Fixtures/images")
 
+  /// Writes `images/<directory>/image.json` naming `files`, for the path-policy tests.
+  static func plant(_ store: ImageStore, directory: URL, files: [String: String]) throws {
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    let record = PulledImage(
+      name: directory.lastPathComponent, guest: GuestSpec(os: .linux, arch: .arm64),
+      source: "x", format: .qcow2, checksum: nil, files: files,
+      login: ImageLogin(user: "debian"), pulledAt: Date())
+    let encoder = JSONEncoder()
+    encoder.dateEncodingStrategy = .iso8601
+    try encoder.encode(record).write(to: directory.appending(path: "image.json"))
+  }
+
+  /// CR-4: an image name with `/` or `..` is never looked up outside images/, and a pulled
+  /// record whose files escape its directory (by path or by symlink) is not a pulled image.
+  @Test func pulledRefusesNamesAndFilesOutsideTheImageDirectory() throws {
+    let (home, bin) = try Self.sandbox()
+    defer { try? FileManager.default.removeItem(at: home.deletingLastPathComponent()) }
+    let store = ImageStore(home: home, catalogue: try Self.catalogue(), searchPaths: [bin.path])
+    let outside = home.appending(path: "outside")
+    try Self.plant(store, directory: outside, files: ["raw": "disk.raw"])
+    #expect(store.pulled("../outside") == nil)
+    #expect(store.pulled("a/b") == nil)
+
+    for files in [["raw": "/etc/hosts"], ["raw": "../../outside/disk.raw"], ["raw": ""]] {
+      try Self.plant(store, directory: store.imageDirectory("bad"), files: files)
+      #expect(store.pulled("bad") == nil, "files \(files)")
+    }
+    try Self.plant(store, directory: store.imageDirectory("bad"), files: ["raw": "disk.raw"])
+    try FileManager.default.createSymbolicLink(
+      atPath: store.imageDirectory("bad").appending(path: "disk.raw").path,
+      withDestinationPath: "/etc/hosts")
+    #expect(store.pulled("bad") == nil)
+
+    try Self.plant(
+      store, directory: store.imageDirectory("good"),
+      files: ["raw": "disk.raw", "kernel": "kernel/vmlinuz"])
+    #expect(store.pulled("good")?.files["kernel"] == "kernel/vmlinuz")
+  }
+
+  @Test func imageNamesAreCheckedWhereverTheyAreAccepted() throws {
+    for name in ["../../tmp/x", "a/b", "..", "."] {
+      let error = #expect(throws: VMLabError.self) {
+        try Requirements(guest: GuestSpec(os: .linux, arch: .arm64), image: name)
+      }
+      #expect(error?.data["field"] == .string("image"))
+    }
+    _ = try Requirements(guest: GuestSpec(os: .linux, arch: .arm64), image: "debian-13-arm64")
+  }
+
   static func catalogue() throws -> ImageCatalogue {
     try ImageCatalogue.decode(Data(contentsOf: fixtures.appending(path: "catalogue.json")))
   }

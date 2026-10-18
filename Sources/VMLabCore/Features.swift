@@ -543,6 +543,7 @@ public struct Requirements: Codable, Sendable, Hashable {
   }
 
   private func validate() throws(VMLabError) {
+    if let image { try ImageStore.checkName(image, field: "image") }
     if case .other(let name) = guest.arch, name.isEmpty {
       throw .invalidRequest(
         field: "guest.arch", reason: "empty architecture",

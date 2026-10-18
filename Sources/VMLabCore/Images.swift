@@ -297,15 +297,48 @@ public actor ImageStore {
     return FileManager.default.homeDirectoryForCurrentUser.appending(path: ".vmlab")
   }
 
+  /// `images/<name>/`. Callers pass a name `isImageName` accepts (`checkName` at every entry
+  /// point); `pulled` refuses any other.
   public nonisolated func imageDirectory(_ name: String) -> URL { directory.appending(path: name) }
 
-  /// The record of a pulled image, or nil when it is not pulled.
+  /// The record of a pulled image, or nil when it is not pulled. Nil too for a name that is not a
+  /// single path component, and for a record whose `files` name anything but a file inside the
+  /// image's directory (canonical, symlinks resolved), so an `image.json` cannot point an engine
+  /// at another host file (CR-4).
   public nonisolated func pulled(_ name: String) -> PulledImage? {
-    let url = imageDirectory(name).appending(path: "image.json")
-    guard let data = try? Data(contentsOf: url) else { return nil }
+    guard Self.isImageName(name) else { return nil }
+    let folder = imageDirectory(name)
+    guard let data = try? Data(contentsOf: folder.appending(path: "image.json")) else { return nil }
     let decoder = JSONDecoder()
     decoder.dateDecodingStrategy = .iso8601
-    return try? decoder.decode(PulledImage.self, from: data)
+    guard let record = try? decoder.decode(PulledImage.self, from: data),
+      record.files.values.allSatisfy({ Self.isContained($0, in: folder) })
+    else { return nil }
+    return record
+  }
+
+  /// Whether `name` can name an image: one non-empty path component, not `.` or `..`.
+  public static func isImageName(_ name: String) -> Bool {
+    !name.isEmpty && name != "." && name != ".." && !name.contains("/") && !name.contains("\0")
+  }
+
+  /// `invalid_request` on `field` unless `isImageName(name)`.
+  public static func checkName(_ name: String, field: String) throws(VMLabError) {
+    guard isImageName(name) else {
+      throw VMLabError.invalidRequest(
+        field: field, reason: "\(name) is not an image name",
+        hint: "Use a name from images list.")
+    }
+  }
+
+  /// Whether the relative path `file` stays inside `folder` once canonical.
+  static func isContained(_ file: String, in folder: URL) -> Bool {
+    guard !file.isEmpty, !file.hasPrefix("/"), !file.split(separator: "/").contains("..") else {
+      return false
+    }
+    let root = PathPolicy.canonical(folder.path)
+    let resolved = PathPolicy.canonical(folder.appending(path: file).path)
+    return resolved != root && PathPolicy.isInside(resolved, root)
   }
 
   /// The guest an image runs: its pulled record's, else its catalogue entry's; nil when unknown.
@@ -503,10 +536,7 @@ public actor ImageStore {
   }
 
   static func validate(_ name: String) throws {
-    guard !name.isEmpty, name != ".", name != "..", !name.contains("/") else {
-      throw VMLabError.invalidRequest(
-        field: "name", reason: "\(name) is not an image name", hint: "Use a name from images list")
-    }
+    try checkName(name, field: "name")
   }
 
   static func downloadError(_ url: URL, _ reason: String) -> VMLabError {
