@@ -333,7 +333,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   **Verify:** unit test: the generated `user-data` is valid YAML with the expected keys; the ISO is
   produced and `hdiutil` lists `user-data` and `meta-data` inside.
 
-- [ ] **R-302 QEMU process and QMP client**
+- [x] **R-302 QEMU process and QMP client**
   `VMLabQEMU`: builds the command line from a `VMRecord` and `Plan` (Appendix G for defaults):
   `-machine virt -accel hvf` for `qemu-hvf`, `-accel tcg` for `qemu-tcg`, `-cpu host|max`, UEFI from
   Homebrew's edk2 for installed-disk boot, virtio-blk disks, virtio-net, `-qmp

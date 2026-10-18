@@ -36,6 +36,27 @@ and `EventLog.latestPanic()` reads the newest. Also process-wide logging (`VMLab
 **`VMLabQEMU`** (library). The QEMU backend: launching and supervising `qemu-system-aarch64`, the QMP
 client, the GDB stub endpoint, and qcow2 internal snapshots. The serial channel itself is Core's
 `SerialChannel`, shared with VZ.
+`QEMUInstallation` finds the binaries and Homebrew's edk2 firmware (`<prefix>/share/qemu`).
+`QEMULayout` names a guest's files in its VM directory (Appendix F) and refuses socket paths that do
+not fit `sockaddr_un` (103 bytes), so tests use a short `/tmp/vmlab-test-*` home. `QEMUCommandLine`
+builds the argument array from a `VMRecord`, `Plan` and `QEMULaunchOptions`: `virt` (arm64) or
+`q35` (x86_64) with `hvf`/`host` or `tcg`/`max`, edk2 pflash code plus `efi-vars.bin`, a
+`disk.qcow2` overlay and `seed.iso` on virtio-blk, user-mode virtio-net with loopback `hostfwd`s and
+a MAC derived from the id, `ramfb` (a linear GOP framebuffer that cloud kernels without DRM keep
+showing; `virtio-gpu-pci` went dark under Debian's cloud kernel), USB and virtio-input keyboard
+and tablet, QMP/serial/VNC unix sockets, `-gdb` when granted, `-pidfile`, `-daemonize`, and always
+`-S`. `QMPClient` (an actor over a `QMPTransport`; `UnixQMPTransport` reads on its own thread) does
+the greeting and `qmp_capabilities`, matches replies to `vmlab-<n>` ids (QMP errors become
+`engine_error`, silence `timeout`, a closed socket `guest_unreachable`) and broadcasts events to
+every `events()` stream; reconnecting is `connect(socketPath:)` again once the previous client has
+gone (QEMU greets one client at a time). `QEMUMachine` prepares the overlay, EFI vars and seed,
+daemonizes QEMU (output to `qemu.log`), connects QMP and the `SerialChannel` while the CPU is
+halted, then sends `cont` unless `haltAtStart`; `attach` reconnects from the pid file, `powerdown`
+sends `system_powerdown` and waits for the process to exit, `kill` sends `quit` then `SIGKILL`.
+`QEMUBackend` is the `Backend` for `qemu-hvf` and `qemu-tcg`: it keeps a `QEMUMachine` per running
+guest (reattaching after a server restart), builds the seed when R-400's `id_ed25519.pub` exists,
+and hands out `QEMURunningVM` (serial, VNC display, GDB, QMP `query-*` introspection; exec and
+checkpoints answer `guest_unreachable` until R-400 and R-307).
 
 **`VMLabVZ`** (library). The Virtualization.framework backend, seen from the server; it never
 imports Virtualization (`BoundariesTests`), which is loaded only in `vmlab-vz`. `ControlProtocol.swift`
