@@ -30,13 +30,20 @@ import VMLabSwitch
       return fd
     }
 
+    /// Closes a port early. Tests run in parallel in one process, so an fd closed twice can close
+    /// another test's socket that reused the number; `stop()` must not close this one again.
+    func close(_ fd: Int32) {
+      fds.removeAll { $0 == fd }
+      Darwin.close(fd)
+    }
+
     func stop() {
       server.stop()
       let deadline = Date().addingTimeInterval(5)
       while FileManager.default.fileExists(atPath: paths.pidFile.path), Date() < deadline {
         usleep(10_000)
       }
-      for fd in fds { close(fd) }
+      for fd in fds { Darwin.close(fd) }
       try? FileManager.default.removeItem(at: root)
     }
 
@@ -154,7 +161,7 @@ import VMLabSwitch
     _ = try h.stats(afterReceiving: 1)
     Self.send(pb, SwitchCoreTests.frame(to: SwitchCoreTests.broadcast, from: b))
     #expect(Self.receive(pa) != nil)
-    close(pb)
+    h.close(pb)
     unlink(h.paths.portsDirectory.appending(path: "b.sock").path)
     Self.send(pa, SwitchCoreTests.frame(to: b, from: a))
     let deadline = Date().addingTimeInterval(5)

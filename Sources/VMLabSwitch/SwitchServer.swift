@@ -128,6 +128,9 @@ public final class SwitchServer: @unchecked Sendable {
       if fds[1].revents & Int16(POLLIN) != 0 { receiveOnSwitchSocket() }
       if fds[2].revents & Int16(POLLIN) != 0 { serveStats() }
       for (index, (port, fd)) in readable.enumerated() {
+        // A delivery earlier in this pass may have removed the port and closed its fd, and another
+        // thread may since have been given that number: never touch an fd the port no longer owns.
+        guard ports[port]?.fd == fd else { continue }
         let events = fds[3 + index].revents
         if events & Int16(POLLIN) != 0 {
           receive(on: fd, port: port)
