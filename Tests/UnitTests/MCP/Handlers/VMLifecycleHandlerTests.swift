@@ -167,10 +167,14 @@ import VMLabCore
         ]), context: f.context)
     }
     #expect(try await act("start", 30).warnings.allSatisfy { !$0.contains("timeoutSeconds") })
+    // The start's wait for SSH is the given 30 s, not the boot default.
+    #expect(f.backend.sshTimeouts == [.seconds(30)])
     let paused = try await act("pause", 30)
     #expect(paused.warnings.contains("timeoutSeconds applies to start and stop; pause ignores it"))
     _ = try await act("resume", 30)
     #expect(try await act("stop", 9).value["state"] == .string("stopped"))
+    // The stop's grace before the kill is the given 9 s.
+    #expect(f.backend.graces == [.seconds(9)])
     let zero = await #expect(throws: VMLabError.self) { try await act("start", 0) }
     #expect(zero?.data["field"] == .string("timeoutSeconds"))
   }
