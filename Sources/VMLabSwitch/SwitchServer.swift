@@ -89,10 +89,13 @@ public final class SwitchServer: @unchecked Sendable {
   }
 
   /// Adds a port on an already connected datagram socket (one end of a `socketpair`); the switch
-  /// owns `fd` from now on.
+  /// owns `fd` from now on, and closes it at once if it has already stopped.
   public func attach(fd: Int32) {
-    lock.withLock { pending.append(fd) }
-    wake()
+    let accepted = lock.withLock {
+      if !closed { pending.append(fd) }
+      return !closed
+    }
+    if accepted { wake() } else { close(fd) }
   }
 
   /// Switches frames until `stop()`.
@@ -142,9 +145,14 @@ public final class SwitchServer: @unchecked Sendable {
     cleanup()
   }
 
+  /// Under the lock, and never after `cleanup()`: a closed `wakeWrite` number may already belong
+  /// to another socket or pipe in this process.
   private func wake() {
-    var byte: UInt8 = 1
-    _ = write(wakeWrite, &byte, 1)
+    lock.withLock {
+      guard !closed else { return }
+      var byte: UInt8 = 1
+      _ = write(wakeWrite, &byte, 1)
+    }
   }
 
   private func receiveOnSwitchSocket() {
@@ -246,14 +254,21 @@ public final class SwitchServer: @unchecked Sendable {
   }
 
   private func cleanup() {
-    let alreadyClosed = lock.withLock {
-      defer { closed = true }
-      return closed
+    // Marking closed and closing the pipe under one lock keeps `wake()` off a reused number; fds
+    // attached after `run()` last looked are closed here, so every fd is closed exactly once.
+    let (alreadyClosed, attached) = lock.withLock {
+      defer {
+        closed = true
+        pending = []
+      }
+      if !closed { close(wakeWrite) }
+      return (closed, pending)
     }
     guard !alreadyClosed else { return }
+    for fd in attached { close(fd) }
     for port in ports.values { close(port.fd) }
     ports = [:]
-    for fd in [dataFD, statsFD, wakeRead, wakeWrite] { close(fd) }
+    for fd in [dataFD, statsFD, wakeRead] { close(fd) }
     unlink(paths.switchSocket.path)
     unlink(paths.statsSocket.path)
     unlink(paths.pidFile.path)

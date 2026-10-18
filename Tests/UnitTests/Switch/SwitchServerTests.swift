@@ -141,7 +141,7 @@ import VMLabSwitch
     Self.send(pa, SwitchCoreTests.frame(to: SwitchCoreTests.mac(0xee), from: a))
     _ = try h.stats(afterReceiving: 1)
     var pair: [Int32] = [0, 0]
-    #expect(socketpair(AF_UNIX, SOCK_DGRAM, 0, &pair) == 0)
+    try #require(socketpair(AF_UNIX, SOCK_DGRAM, 0, &pair) == 0)
     defer { close(pair[1]) }
     h.server.attach(fd: pair[0])
     let fromPair = SwitchCoreTests.frame(to: SwitchCoreTests.broadcast, from: b)
@@ -172,6 +172,21 @@ import VMLabSwitch
     }
     #expect(stats.ports == 1)
     #expect(stats.macs == 1)
+  }
+
+  @Test func attachAndStopAfterTheSwitchHasStoppedTouchNoClosedFd() throws {
+    let h = try Harness()
+    h.stop()
+    var pair: [Int32] = [0, 0]
+    try #require(socketpair(AF_UNIX, SOCK_DGRAM, 0, &pair) == 0)
+    defer { close(pair[1]) }
+    // The switch owns pair[0] and, being stopped, closes it at once; neither call writes to the
+    // wake pipe, whose number another test may already hold.
+    h.server.attach(fd: pair[0])
+    h.server.stop()
+    let frame = SwitchCoreTests.frame(to: SwitchCoreTests.broadcast, from: a)
+    let sent = frame.withUnsafeBytes { Darwin.send(pair[1], $0.baseAddress, $0.count, 0) }
+    #expect(sent == -1)
   }
 
   @Test func aSecondSwitchOnALiveSegmentIsRefusedAndStopCleansUp() throws {
