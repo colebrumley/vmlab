@@ -26,7 +26,9 @@ struct VMCreateHandler: ToolHandler {
     }
     await context.progress.step("planned \(plan.profile.rawValue)")
 
-    let image = try Self.image(for: requirements, catalogue: context.images.catalogue)
+    let images = context.images
+    let image = try Self.image(
+      for: requirements, catalogue: images.catalogue, guestOf: { images.guest(of: $0) })
     var warnings: [String] = []
     if try await LongOperation.pullIfMissing(image, context: context) != nil {
       warnings.append("pulled image \(image) first")
@@ -68,11 +70,28 @@ struct VMCreateHandler: ToolHandler {
     return ToolResult(object, warnings: warnings)
   }
 
-  /// The image the VM boots: the request's, or the first catalogue image for its guest.
-  static func image(for requirements: Requirements, catalogue: ImageCatalogue)
-    throws(VMLabError) -> String
-  {
-    if let image = requirements.image { return image }
+  /// The image the VM boots: the request's, or the first catalogue image for its guest. A named
+  /// image whose guest (`guestOf`, else the catalogue's) differs from the request's is refused,
+  /// so an amd64 image never lands on a profile that cannot run it (R-1000).
+  static func image(
+    for requirements: Requirements, catalogue: ImageCatalogue,
+    guestOf: (String) -> GuestSpec? = { _ in nil }
+  ) throws(VMLabError) -> String {
+    if let image = requirements.image {
+      let guest = guestOf(image) ?? catalogue.image(named: image)?.guest
+      if let guest, guest != requirements.guest {
+        throw VMLabError.invalidRequest(
+          field: "image",
+          reason:
+            "\(image) is a \(guest.os.rawValue) \(guest.arch.rawValue) image but the request's "
+            + "guest is \(requirements.guest.os.rawValue) \(requirements.guest.arch.rawValue)",
+          hint:
+            "Set guest to {os: \(guest.os.rawValue), arch: \(guest.arch.rawValue)}"
+            + (guest.arch == .arm64 ? "" : " (it runs under qemu-tcg)")
+            + ", or name an image for the guest you asked for.")
+      }
+      return image
+    }
     guard let entry = catalogue.images.first(where: { $0.guest == requirements.guest }) else {
       throw VMLabError(
         code: .imageNotFound,

@@ -787,7 +787,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
 
 ## Phase 10 — Images and provisioning
 
-- [ ] **R-1000 Ubuntu images and the amd64 catalogue**
+- [x] **R-1000 Ubuntu images and the amd64 catalogue**
   Add `ubuntu-24.04-arm64`, `ubuntu-24.04-amd64`, `debian-13-amd64` with their checksum URLs;
   amd64 images select `qemu-tcg` only.
   **Verify:** catalogue test; integration: Ubuntu arm64 boots under both engines.

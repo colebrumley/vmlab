@@ -294,6 +294,11 @@ public actor ImageStore {
     return try? decoder.decode(PulledImage.self, from: data)
   }
 
+  /// The guest an image runs: its pulled record's, else its catalogue entry's; nil when unknown.
+  public nonisolated func guest(of name: String) -> GuestSpec? {
+    pulled(name)?.guest ?? catalogue.image(named: name)?.guest
+  }
+
   /// Every catalogue image with its pulled record, then pulled images the catalogue lacks.
   public nonisolated func list() -> [ImageListing] {
     var rows = catalogue.images.map {
