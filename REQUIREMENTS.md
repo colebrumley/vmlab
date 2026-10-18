@@ -505,7 +505,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   integration on Debian with the GUI image (R-504): click the terminal icon, type a command, the
   screenshot contains new pixels in the terminal region.
 
-- [ ] **R-503 Display endpoint per profile**
+- [x] **R-503 Display endpoint per profile**
   QEMU: the built-in VNC socket, always present, works from the first firmware frame (`gui_preboot`).
   VZ Linux: an in-guest VNC server on the NAT address, port 5900, password from `<vm>/vnc.pass`,
   provisioned by R-504 when `gui` was granted; absent otherwise. VZ macOS: the guest's Screen

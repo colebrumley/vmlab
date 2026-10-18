@@ -184,7 +184,8 @@ Everything about one VM: its record, the plan and resolved features (what channe
 
 ```
 { vm: { id, name }, record: VMRecord, plan: Plan, features: [feature],
-  endpoints: { ssh?, ip?, serial?, display?: { kind, hostSide }, gdb? },
+  endpoints: { ssh?, ip?, serial?, gdb?,
+    display?: { kind, address, auth, passwordFile?, hostSide } },
   segments: [ { name, ip } ], events: [ Event ], panic?: { line, offset, at }, warnings }
 ```
 

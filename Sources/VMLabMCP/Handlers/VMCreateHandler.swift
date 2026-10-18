@@ -60,7 +60,7 @@ struct VMCreateHandler: ToolHandler {
       "plan": try JSONValue(encoding: plan),
       "vm": .object(["id": .string(record.id), "name": .string(record.name)]),
       "state": .string(record.state.rawValue),
-      "endpoints": .object(VMInspectHandler.endpoints(record.runtime)),
+      "endpoints": .object(VMInspectHandler.endpoints(record, store: context.store)),
     ]
     return ToolResult(object, warnings: warnings)
   }
