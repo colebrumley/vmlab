@@ -182,10 +182,13 @@ public struct PulledImage: Codable, Sendable, Hashable {
   public var files: [String: String]
   public var login: ImageLogin
   public var pulledAt: Date
+  /// For a Tart image, the name `tart clone` takes as its source (the OCI reference that was
+  /// pulled). Absent from records of disk images and from Tart records written before R-605.
+  public var tartVM: String?
 
   public init(
     name: String, guest: GuestSpec, source: String, format: ImageFormat, checksum: Checksum?,
-    files: [String: String], login: ImageLogin, pulledAt: Date
+    files: [String: String], login: ImageLogin, pulledAt: Date, tartVM: String? = nil
   ) {
     self.schemaVersion = Self.currentSchemaVersion
     self.name = name
@@ -195,6 +198,7 @@ public struct PulledImage: Codable, Sendable, Hashable {
     self.checksum = checksum
     self.files = files
     self.login = login
+    self.tartVM = tartVM
     // Whole seconds, so the record equals what image.json (ISO 8601) reads back.
     self.pulledAt = Date(timeIntervalSince1970: pulledAt.timeIntervalSince1970.rounded(.down))
   }
@@ -431,8 +435,11 @@ public actor ImageStore {
     try FileManager.default.moveItem(at: partial, to: raw)
   }
 
+  /// `tart pull <ref>` into Tart's cache; the record names the ref as the Tart VM to clone.
   func pullTart(_ entry: CatalogImage) throws -> PullResult {
-    if let existing = pulled(entry.name) { return PullResult(image: existing, changed: false) }
+    if let existing = pulled(entry.name), existing.tartVM != nil {
+      return PullResult(image: existing, changed: false)
+    }
     let tool = try locate("tart", fix: "brew install cirruslabs/cli/tart")
     let output = runner.run(tool, ["pull", entry.url])
     guard let output, output.status == 0 else {
@@ -445,7 +452,7 @@ public actor ImageStore {
       at: imageDirectory(entry.name), withIntermediateDirectories: true)
     let record = PulledImage(
       name: entry.name, guest: entry.guest, source: entry.url, format: .tart, checksum: nil,
-      files: [:], login: entry.login, pulledAt: now())
+      files: [:], login: entry.login, pulledAt: now(), tartVM: entry.url)
     try write(record)
     return PullResult(image: record, changed: true)
   }

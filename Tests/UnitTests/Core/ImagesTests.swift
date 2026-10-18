@@ -38,6 +38,16 @@ final class ConvertRunner: CommandRunning {
   }
 }
 
+/// Stands in for `tart`: succeeds and records the call.
+final class TartRunner: CommandRunning {
+  let calls = Mutex<[[String]]>([])
+
+  func run(_ executable: String, _ arguments: [String]) -> CommandOutput? {
+    calls.withLock { $0.append([URL(filePath: executable).lastPathComponent] + arguments) }
+    return CommandOutput(status: 0, output: "")
+  }
+}
+
 @Suite struct ImagesTests {
   static let fixtures = URL(filePath: #filePath).deletingLastPathComponent()
     .deletingLastPathComponent().deletingLastPathComponent().appending(path: "Fixtures/images")
@@ -194,6 +204,27 @@ final class ConvertRunner: CommandRunning {
     #expect(error?.data["tool"] == .string("qemu-img"))
     let tart = await #expect(throws: VMLabError.self) { try await store.pull("tiny-mac") }
     #expect(tart?.data["tool"] == .string("tart"))
+  }
+
+  /// R-605: `images pull` of a Tart image runs `tart pull <ref>` and records the ref as the Tart
+  /// VM that `tart clone` takes; a second pull is a no-op.
+  @Test func tartPullRecordsTheTartVMName() async throws {
+    let (home, bin) = try Self.sandbox()
+    defer { try? FileManager.default.removeItem(at: home.deletingLastPathComponent()) }
+    let tart = bin.appending(path: "tart")
+    try Data("#!/bin/sh\nexit 0\n".utf8).write(to: tart)
+    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: tart.path)
+    let runner = TartRunner()
+    let store = ImageStore(
+      home: home, catalogue: try Self.catalogue(), downloader: Self.downloader(), runner: runner,
+      searchPaths: [bin.path])
+    let first = try await store.pull("tiny-mac")
+    #expect(first.changed)
+    #expect(first.image.tartVM == "ghcr.io/example/tiny:latest")
+    #expect(first.image.format == .tart)
+    #expect(store.pulled("tiny-mac")?.tartVM == "ghcr.io/example/tiny:latest")
+    #expect(try await store.pull("tiny-mac").changed == false)
+    #expect(runner.calls.withLock { $0 } == [["tart", "pull", "ghcr.io/example/tiny:latest"]])
   }
 
   @Test func defaultHomeHonoursVMLabHome() {

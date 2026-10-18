@@ -6,13 +6,15 @@ import VMLabVZ
 /// can reach QEMU and VZ through `Backends`, while the CLI and the MCP layer import no backend
 /// module themselves (constraint C3).
 public enum Engines {
-  /// The profiles `registerAll` fills. `vz-macos` joins when `VZBackend` runs macOS guests.
-  public static let profiles: [Profile] = [.qemuHVF, .qemuTCG, .vzLinux]
+  /// The profiles `registerAll` fills.
+  public static let profiles: [Profile] = [.qemuHVF, .qemuTCG, .vzLinux, .vzMacOS]
 
-  /// Registers QEMU for `qemu-hvf` and `qemu-tcg` and VZ for `vz-linux`, all on `store`.
+  /// Registers QEMU for `qemu-hvf` and `qemu-tcg` and VZ for `vz-linux` and `vz-macos`, all on
+  /// `store`.
   public static func registerAll(store: Store, into registry: BackendRegistry = Backends.shared) {
     registry.register(QEMUBackend(profile: .qemuHVF, store: store))
     registry.register(QEMUBackend(profile: .qemuTCG, store: store))
     registry.register(VZBackend(store: store))
+    registry.register(VZMacBackend(store: store))
   }
 }

@@ -8,11 +8,10 @@ import VMLabEngines
     let registry = BackendRegistry()
     let store = Store(home: FileManager.default.temporaryDirectory.appending(path: "vmlab-engines"))
     Engines.registerAll(store: store, into: registry)
-    #expect(Set(registry.profiles) == [.qemuHVF, .qemuTCG, .vzLinux])
+    #expect(Set(registry.profiles) == [.qemuHVF, .qemuTCG, .vzLinux, .vzMacOS])
     #expect(Set(registry.profiles) == Set(Engines.profiles))
     for profile in Engines.profiles {
       #expect(try registry.backend(for: profile).profile == profile)
     }
-    #expect(throws: VMLabError.self) { try registry.backend(for: .vzMacOS) }
   }
 }

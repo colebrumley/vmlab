@@ -69,12 +69,17 @@ public struct VMRecord: Codable, Sendable, Hashable {
   /// The plan the selector made when the VM was created, so `vm_inspect` can show it after a
   /// context reset. Absent from records written before it existed (additive: schema 1 still).
   public var plan: Plan?
+  /// For a `vz-macos` guest, the directory of its Tart clone (`~/.tart/vms/<id>/`, holding
+  /// `config.json`, `disk.img` and `nvram.bin`); its last component is the Tart VM name. Absent
+  /// for other profiles (additive: schema 1 still).
+  public var tartClone: String?
 
   public init(
     id: String, name: String? = nil, profile: Profile, guest: GuestSpec, features: [Feature],
     resources: ResourceSpec = ResourceSpec(), image: String? = nil,
     network: NetworkSpec = NetworkSpec(), createdAt: Date = Date(), state: VMState = .created,
-    runtime: VMRuntime? = nil, checkpoints: [CheckpointRef] = [], plan: Plan? = nil
+    runtime: VMRuntime? = nil, checkpoints: [CheckpointRef] = [], plan: Plan? = nil,
+    tartClone: String? = nil
   ) {
     self.schemaVersion = Self.currentSchemaVersion
     self.id = id
@@ -90,11 +95,12 @@ public struct VMRecord: Codable, Sendable, Hashable {
     self.runtime = runtime
     self.checkpoints = checkpoints
     self.plan = plan
+    self.tartClone = tartClone
   }
 
   enum CodingKeys: String, CodingKey {
     case schemaVersion, id, name, profile, guest, features, resources, image, network, createdAt
-    case state, runtime, checkpoints, plan
+    case state, runtime, checkpoints, plan, tartClone
   }
 
   public init(from decoder: any Decoder) throws {
@@ -113,6 +119,7 @@ public struct VMRecord: Codable, Sendable, Hashable {
     runtime = try c.decodeIfPresent(VMRuntime.self, forKey: .runtime)
     checkpoints = try c.decodeIfPresent([CheckpointRef].self, forKey: .checkpoints) ?? []
     plan = try c.decodeIfPresent(Plan.self, forKey: .plan)
+    tartClone = try c.decodeIfPresent(String.self, forKey: .tartClone)
   }
 
   /// `vm-` plus six lowercase RFC 4648 base32 characters.
