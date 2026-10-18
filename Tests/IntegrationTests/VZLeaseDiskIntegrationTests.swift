@@ -70,7 +70,7 @@ import VMLabVZ
   }
 
   /// diskGB 12 on a 3 GiB image: the raw clone is extended and cloud-init grows `/`.
-  @Test(.enabled(if: ready), .timeLimit(.minutes(5)))
+  @Test(.enabled(if: ready), .timeLimit(.minutes(9)))
   func diskGBGrowsTheRootFilesystem() async throws {
     let guest = try await VZGuest.boot(
       features: [.execSSH], tag: "dg", resources: ResourceSpec(cpus: 2, memoryGB: 2, diskGB: 12))
@@ -85,12 +85,17 @@ import VMLabVZ
 
     // R-1004 without a provision: the first boot is recorded once cloud-init is done.
     let clock = ContinuousClock()
-    let deadline = clock.now.advanced(by: .seconds(180))
+    // First boot updates and installs packages: about two minutes, more on a busy host.
+    let deadline = clock.now.advanced(by: .seconds(360))
     var report: ProvisionReport?
     while report == nil, clock.now < deadline {
       _ = await guest.manager.collectFirstBoot(try guest.store.load(id: guest.id))
       report = ProvisionReport.load(from: guest.directory)
       if report == nil { try await Task.sleep(for: .seconds(2)) }
+    }
+    if report == nil {
+      let status = await guest.ssh("cloud-init status --long; echo exit=$?")
+      print("cloud-init status: \(status?.output ?? "no answer")")
     }
     let steps = try #require(report, "cloud-init's outcome was never recorded").steps
     #expect(steps.map(\.name) == ["cloud-init"])
