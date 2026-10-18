@@ -151,8 +151,7 @@ public struct GDBDebugTarget: DebugTarget {
 
   public func registers(thread: String?) async throws(VMLabError) -> [DebugRegister] {
     try await lift {
-      if let thread { try await client.selectThread(thread) }
-      return try await client.registers().map {
+      try await client.registers(thread: thread).map {
         DebugRegister(name: $0.register.name, value: $0.value?.hex)
       }
     }
@@ -162,8 +161,7 @@ public struct GDBDebugTarget: DebugTarget {
     -> [UInt8]
   {
     try await lift {
-      if let thread { try await client.selectThread(thread) }
-      return try await client.readMemory(address: address, length: length)
+      try await client.readMemory(address: address, length: length, thread: thread)
     }
   }
 
@@ -171,8 +169,7 @@ public struct GDBDebugTarget: DebugTarget {
     async throws(VMLabError)
   {
     try await lift {
-      if let thread { try await client.selectThread(thread) }
-      try await client.writeMemory(address: address, bytes: bytes)
+      try await client.writeMemory(address: address, bytes: bytes, thread: thread)
     }
   }
 
