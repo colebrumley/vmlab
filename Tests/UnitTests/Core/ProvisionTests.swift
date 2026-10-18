@@ -153,6 +153,37 @@ final class FakeProvisioner: GuestProvisioning {
     #expect(exec.commands.count == 2)
   }
 
+  /// The macOS backend's first-boot steps (R-606) are already in provision.json; runCommands are
+  /// added after them, and nothing runs after a failed first boot.
+  @Test func macOSRunCommandsFollowTheBackendsFirstBootSteps() async throws {
+    let dir = try Self.directory()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    try ProvisionReport(
+      vm: "vm-abcdef",
+      steps: [
+        ProvisionStep(name: "ssh", command: "true", status: .succeeded, exitCode: 0),
+        ProvisionStep(name: "hostname", command: "scutil", status: .succeeded, exitCode: 0),
+      ]
+    ).write(to: dir)
+    let exec = ScriptedExec()
+    let provisioner = SSHProvisioner { _, request throws(VMLabError) in try exec.run(request) }
+    let record = VMRecord(
+      id: "vm-abcdef", profile: .vzMacOS, guest: GuestSpec(os: .macos, arch: .arm64),
+      features: [.execSSH], provision: ProvisionSpec(runCommands: ["true"]))
+    #expect(await provisioner.provision(record, target: Self.target(dir)).isEmpty)
+    let report = try #require(ProvisionReport.load(from: dir))
+    #expect(report.steps.map(\.name) == ["ssh", "hostname", "runCommands[0]"])
+    #expect(report.hasRequestedSteps)
+
+    // A failed first boot is not followed by the request's commands.
+    try ProvisionReport(
+      vm: "vm-abcdef",
+      steps: [ProvisionStep(name: "ssh", command: "true", status: .failed, error: "no sshd")]
+    ).write(to: dir)
+    #expect(await provisioner.provision(record, target: Self.target(dir)).isEmpty)
+    #expect(exec.commands == ["true"])
+  }
+
   @Test func aCommandThatErrorsIsAFailedStepWithItsReason() async throws {
     let dir = try Self.directory()
     defer { try? FileManager.default.removeItem(at: dir) }
