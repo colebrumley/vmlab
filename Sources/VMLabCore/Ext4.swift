@@ -39,6 +39,13 @@ public final class Ext4Volume {
   let descriptorTable: UInt64
 
   static let rootInode: UInt32 = 2
+  /// The most a file copied out may hold (CX-8): a kernel or initrd is far smaller, and a size
+  /// field of a crafted image must not ask for exabytes.
+  static let maxFileBytes: UInt64 = 4 << 30
+  /// The most `contents` reads into memory (directories, symlinks, small files).
+  static let maxContentsBytes: UInt64 = 256 << 20
+  /// The most extent-tree nodes one file may have, so a crafted tree cannot fan out for ever.
+  static let maxExtentNodes = 4096
 
   /// Opens the ext4 file system that starts `offset` bytes into `image`.
   public init(image: URL, offset: UInt64 = 0) throws(VMLabError) {
@@ -48,20 +55,44 @@ public final class Ext4Volume {
       throw Self.error("cannot open \(image.path): \(error.localizedDescription)")
     }
     base = offset
-    let superblock = try Self.read(handle, at: offset + 1024, count: 1024)
+    let superblock: Data
+    do {
+      superblock = try Self.read(handle, at: Self.add(offset, 1024), count: 1024)
+    } catch {
+      try? handle.close()
+      throw error
+    }
     guard superblock.u16(56) == 0xEF53 else {
       try? handle.close()
       throw Self.error("no ext4 file system at offset \(offset)")
     }
-    blockSize = 1024 << UInt64(superblock.u32(24))
-    inodesPerGroup = superblock.u32(40)
+    // CX-8: the geometry is checked before anything divides or shifts by it. ext4 allows 1 KB
+    // to 64 KB blocks, inodes of 128 bytes up to a block (a power of two), and descriptors of
+    // 32 or 64..block bytes.
+    let logBlock = superblock.u32(24)
     let revision = superblock.u32(76)
-    inodeSize = revision == 0 ? 128 : UInt64(superblock.u16(88))
-    let incompat = superblock.u32(96)
-    let is64 = incompat & 0x80 != 0
-    descriptorSize = is64 ? max(64, UInt64(superblock.u16(254))) : 32
-    let firstDataBlock = UInt64(superblock.u32(20))
-    descriptorTable = (firstDataBlock + 1) * blockSize
+    let inodeBytes = revision == 0 ? 128 : UInt64(superblock.u16(88))
+    let is64 = superblock.u32(96) & 0x80 != 0
+    let descriptorBytes = is64 ? max(64, UInt64(superblock.u16(254))) : 32
+    let perGroup = superblock.u32(40)
+    guard logBlock <= 6 else {
+      try? handle.close()
+      throw Self.error("bad block size (log \(logBlock))")
+    }
+    let size = UInt64(1024) << UInt64(logBlock)
+    guard perGroup > 0, inodeBytes >= 128, inodeBytes <= size, inodeBytes & (inodeBytes - 1) == 0,
+      descriptorBytes <= size
+    else {
+      try? handle.close()
+      throw Self.error(
+        "bad geometry: \(perGroup) inodes per group, \(inodeBytes)-byte inodes, "
+          + "\(descriptorBytes)-byte descriptors, \(size)-byte blocks")
+    }
+    blockSize = size
+    inodesPerGroup = perGroup
+    inodeSize = inodeBytes
+    descriptorSize = descriptorBytes
+    descriptorTable = (UInt64(superblock.u32(20)) + 1) * blockSize
   }
 
   deinit { try? handle.close() }
@@ -80,15 +111,16 @@ public final class Ext4Volume {
     let entries = header.u64(72)
     let count = min(Int(header.u32(80)), 256)
     let size = Int(header.u32(84))
-    guard size >= 128 else { throw Self.error("bad GPT entry size \(size)") }
-    let table = try read(handle, at: entries * 512, count: count * size)
+    guard size >= 128, size <= 4096 else { throw Self.error("bad GPT entry size \(size)") }
+    let table = try read(handle, at: try multiply(entries, 512), count: count * size)
     var result: [Partition] = []
     for index in 0..<count {
       let entry = table.subdata(in: index * size..<(index + 1) * size)
       guard entry.prefix(16).contains(where: { $0 != 0 }) else { continue }
       let first = entry.u64(32)
       let last = entry.u64(40)
-      guard last >= first else { continue }
+      // Skipped when the byte range does not fit in 64 bits (CX-8).
+      guard last >= first, last < UInt64.max / 512 else { continue }
       result.append(
         Partition(index: index + 1, offset: first * 512, length: (last - first + 1) * 512))
     }
@@ -169,11 +201,15 @@ public final class Ext4Volume {
 
   /// A file's whole contents (directories and symlinks too).
   public func contents(of inode: Inode) throws(VMLabError) -> Data {
+    guard inode.size <= Self.maxContentsBytes else {
+      throw Self.error("inode \(inode.number) is \(inode.size) bytes, too big to read whole")
+    }
     var data = Data(count: Int(inode.size))
     try forEachRun(of: inode) { (offset: UInt64, bytes: Data) throws(VMLabError) in
-      let end = min(Int(offset) + bytes.count, data.count)
-      guard Int(offset) < end else { return }
-      data.replaceSubrange(Int(offset)..<end, with: bytes.prefix(end - Int(offset)))
+      guard offset < UInt64(data.count) else { return }
+      let start = Int(offset)
+      let end = min(start + bytes.count, data.count)
+      data.replaceSubrange(start..<end, with: bytes.prefix(end - start))
     }
     return data
   }
@@ -193,7 +229,7 @@ public final class Ext4Volume {
         guard offset < size else { return }
         do {
           try out.seek(toOffset: offset)
-          try out.write(contentsOf: bytes.prefix(Int(size - offset)))
+          try out.write(contentsOf: bytes.prefix(Int(min(UInt64(bytes.count), size - offset))))
         } catch {
           throw Self.error("cannot write \(destination.path): \(error.localizedDescription)")
         }
@@ -215,7 +251,8 @@ public final class Ext4Volume {
     let descriptor = try read(at: descriptorTable + group * descriptorSize, count: 64)
     var table = UInt64(descriptor.u32(8))
     if descriptorSize >= 64 { table |= UInt64(descriptor.u32(0x28)) << 32 }
-    let raw = try read(at: table * blockSize + index * inodeSize, count: 160)
+    let raw = try read(
+      at: try Self.add(try Self.multiply(table, blockSize), index * inodeSize), count: 160)
     let mode = raw.u16(0)
     let kind: Kind =
       switch mode & 0xF000 {
@@ -235,8 +272,12 @@ public final class Ext4Volume {
   func forEachRun(
     of inode: Inode, _ body: (UInt64, Data) throws(VMLabError) -> Void
   ) throws(VMLabError) {
+    guard inode.size <= Self.maxFileBytes else {
+      throw Self.error("inode \(inode.number) claims \(inode.size) bytes")
+    }
     if inode.flags & 0x80000 != 0 {
-      try walkExtents(node: inode.block, depth: 0, body)
+      var nodes = 0
+      try walkExtents(node: inode.block, depth: 0, nodes: &nodes, body)
     } else {
       let blocks = (inode.size + blockSize - 1) / blockSize
       for logical in 0..<blocks {
@@ -247,9 +288,11 @@ public final class Ext4Volume {
   }
 
   private func walkExtents(
-    node: Data, depth: Int, _ body: (UInt64, Data) throws(VMLabError) -> Void
+    node: Data, depth: Int, nodes: inout Int, _ body: (UInt64, Data) throws(VMLabError) -> Void
   ) throws(VMLabError) {
     guard depth < 8, node.u16(0) == 0xF30A else { throw Self.error("bad extent header") }
+    nodes += 1
+    guard nodes <= Self.maxExtentNodes else { throw Self.error("extent tree too large") }
     let count = Int(node.u16(2))
     let level = node.u16(6)
     for index in 0..<count {
@@ -266,14 +309,15 @@ public final class Ext4Volume {
         var done: UInt64 = 0
         while done < length {
           let chunk = min(length - done, (8 << 20) / blockSize)
-          let bytes = try read(at: (start + done) * blockSize, count: Int(chunk * blockSize))
+          let bytes = try read(
+            at: try Self.multiply(start + done, blockSize), count: Int(chunk * blockSize))
           try body((logical + done) * blockSize, bytes)
           done += chunk
         }
       } else {
         let leaf = UInt64(node.u16(at + 8)) << 32 | UInt64(node.u32(at + 4))
         let child = try read(at: leaf * blockSize, count: Int(blockSize))
-        try walkExtents(node: child, depth: depth + 1, body)
+        try walkExtents(node: child, depth: depth + 1, nodes: &nodes, body)
       }
     }
   }
@@ -307,7 +351,21 @@ public final class Ext4Volume {
   }
 
   private func read(at offset: UInt64, count: Int) throws(VMLabError) -> Data {
-    try Self.read(handle, at: base + offset, count: count)
+    try Self.read(handle, at: try Self.add(base, offset), count: count)
+  }
+
+  /// `a + b`, or an error when an on-disk value makes it overflow (CX-8).
+  static func add(_ a: UInt64, _ b: UInt64) throws(VMLabError) -> UInt64 {
+    let (sum, overflow) = a.addingReportingOverflow(b)
+    guard !overflow else { throw error("offset past 2^64 bytes") }
+    return sum
+  }
+
+  /// `a * b`, or an error when an on-disk value makes it overflow (CX-8).
+  static func multiply(_ a: UInt64, _ b: UInt64) throws(VMLabError) -> UInt64 {
+    let (product, overflow) = a.multipliedReportingOverflow(by: b)
+    guard !overflow else { throw error("offset past 2^64 bytes") }
+    return product
   }
 
   static func read(_ handle: FileHandle, at offset: UInt64, count: Int) throws(VMLabError) -> Data {
