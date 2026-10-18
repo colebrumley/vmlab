@@ -112,6 +112,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   Sources/vmlab/           CLI executable (ArgumentParser); `vmlab serve` runs the MCP server
   Sources/vmlab-vz/        VZ runner executable: one process per VZ guest, control socket (needs entitlement)
   Sources/vmlab-switch/    user-space Ethernet switch for private segments
+  Sources/vmlab-match/     runs one vm_serial wait pattern in a process the server kills at the deadline
   Tests/UnitTests/         Swift Testing, fast, no engines
   Tests/IntegrationTests/  need QEMU/Tart and pulled images; gated by VMLAB_INTEGRATION=1, run with --no-parallel
   Tests/Fixtures/          vm.json fixtures per schema version, QMP transcripts, RFB captures, host-facts samples
@@ -882,9 +883,10 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
 
 - [x] **R-1106 Release build**
   `scripts/release.sh`: `swift build -c release`, signs `vmlab-vz`, bundles `vmlab`, `vmlab-vz`,
-  `vmlab-switch` into `dist/vmlab-<version>-arm64.tar.gz` with a checksum; `vmlab --version` reads
-  the tag.
-  **Verify:** the tarball unpacks and `vmlab doctor` runs from it.
+  `vmlab-switch` and `vmlab-match` (the `vm_serial wait` matcher) into
+  `dist/vmlab-<version>-arm64.tar.gz` with a checksum; `vmlab --version` reads the tag.
+  **Verify:** the tarball unpacks, `vmlab doctor` runs from it, and its `vmlab-match --self-test`
+  prints `ok`.
 
 ---
 

@@ -8,6 +8,7 @@ let package = Package(
     .executable(name: "vmlab", targets: ["vmlab"]),
     .executable(name: "vmlab-vz", targets: ["vmlab-vz"]),
     .executable(name: "vmlab-switch", targets: ["vmlab-switch"]),
+    .executable(name: "vmlab-match", targets: ["vmlab-match"]),
     .library(name: "VMLabCore", targets: ["VMLabCore"]),
   ],
   dependencies: [
@@ -59,6 +60,8 @@ let package = Package(
         .product(name: "Logging", package: "swift-log"),
       ]
     ),
+    // Runs `vm_serial wait` patterns in a process the server can kill; installed beside vmlab.
+    .executableTarget(name: "vmlab-match", dependencies: ["VMLabCore"]),
     // Spawned by StoreTests to write one VM record from a second process; not a product.
     .executableTarget(
       name: "vmlab-store-helper", dependencies: ["VMLabCore"], path: "Tests/StoreHelper"
@@ -67,14 +70,14 @@ let package = Package(
       name: "UnitTests",
       dependencies: [
         "VMLabCore", "VMLabQEMU", "VMLabVZ", "VMLabRFB", "VMLabGDB", "VMLabMCP", "VMLabSwitch",
-        "VMLabEngines", "vmlab-store-helper", "vmlab",
+        "VMLabEngines", "vmlab-store-helper", "vmlab", "vmlab-match",
       ]
     ),
     .testTarget(
       name: "IntegrationTests",
       dependencies: [
         "VMLabCore", "VMLabQEMU", "VMLabVZ", "VMLabRFB", "VMLabGDB", "VMLabMCP", "VMLabEngines",
-        "vmlab",
+        "vmlab", "vmlab-match",
       ]
     ),
   ]

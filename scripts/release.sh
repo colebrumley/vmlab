@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
-# Release build: dist/vmlab-<version>-arm64.tar.gz (vmlab, vmlab-vz, vmlab-switch) and its .sha256.
+# Release build: dist/vmlab-<version>-arm64.tar.gz (vmlab, vmlab-vz, vmlab-switch, vmlab-match)
+# and its .sha256.
 #   scripts/release.sh                     version from `git describe --tags` (a leading v dropped)
 #   VMLAB_VERSION=0.0.0-dry scripts/release.sh   a dry-run version; no tag needed
 # The version is baked into Sources/VMLabMCP/VMLabMCP.swift for the build only, then restored.
 # Afterwards the tarball is unpacked into a temp directory and its vmlab is checked there:
-# `--version` prints the version and `doctor` finds the signed vmlab-vz next to itself.
+# `--version` prints the version, `doctor` finds the signed vmlab-vz next to itself, and the
+# vm_serial wait matcher vmlab-match beside it passes its self-test.
 # Never creates or pushes a tag.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -37,6 +39,7 @@ sed -i '' "s/$pattern/\\1\"$version\"/" "$source_file"
 swift build -c release --product vmlab
 swift build -c release --product vmlab-vz
 swift build -c release --product vmlab-switch
+swift build -c release --product vmlab-match
 restore
 trap - EXIT
 scripts/sign.sh release
@@ -45,7 +48,7 @@ name="vmlab-$version-arm64"
 bin="$(swift build -c release --show-bin-path)"
 rm -rf "dist/$name" "dist/$name.tar.gz" "dist/$name.tar.gz.sha256"
 mkdir -p "dist/$name"
-cp "$bin/vmlab" "$bin/vmlab-vz" "$bin/vmlab-switch" "dist/$name/"
+cp "$bin/vmlab" "$bin/vmlab-vz" "$bin/vmlab-switch" "$bin/vmlab-match" "dist/$name/"
 cp README.md "dist/$name/"
 tar -czf "dist/$name.tar.gz" -C dist "$name"
 rm -rf "dist/$name"
@@ -73,5 +76,9 @@ node -e '
     process.exit(1);
   }
 ' "$check/doctor.json" "$unpacked"
+if [ "$("$unpacked/vmlab-match" --self-test)" != ok ]; then
+  echo "release: the unpacked vmlab-match failed its self-test" >&2
+  exit 1
+fi
 echo "release: dist/$name.tar.gz ($(cut -d' ' -f1 "dist/$name.tar.gz.sha256"))"
-echo "release: unpacked vmlab $version runs doctor and finds its signed vmlab-vz"
+echo "release: unpacked vmlab $version runs doctor, finds its signed vmlab-vz and vmlab-match"

@@ -82,21 +82,25 @@ public actor SerialChannel {
   private var partialLineStart: UInt64 = 0
   private var waiters: [UInt64: Waiter] = [:]
   private var nextWaiterID: UInt64 = 0
-  /// Waiters whose match is running on a matcher thread now.
+  /// Waiters whose window is in their matcher now.
   private var scanning: Set<UInt64> = []
-  /// Matches still running for waiters that already ended (timed out, cancelled, stopped). Swift
-  /// Regex cannot be interrupted, so each holds a thread until it finishes on its own.
-  private var abandoned: Set<UInt64> = []
+  /// The pid of every matcher this channel launched (tests check that none outlives its wait).
+  private(set) var matcherPIDs: [pid_t] = []
 
   /// The most bytes one match runs over; a longer backlog is scanned window by window.
   static let scanWindow: UInt64 = 64 * 1024
   /// The longest pattern `wait` accepts, in UTF-8 bytes.
   static let maxPatternBytes = 1024
-  /// How many abandoned matches a channel tolerates before refusing new waits.
-  static let maxAbandonedScans = 2
+  /// How many matcher processes one channel runs at once; further waits queue for a free one.
+  static let maxMatchers = 4
+  /// The least time between two scans of new output for one waiter, so a guest printing a byte at
+  /// a time costs a matcher round trip per interval, not per byte.
+  static let rescanInterval: Duration = .milliseconds(25)
+
+  /// The `vmlab-match` executable waits run their patterns in; nil when it was not found.
+  public let matcherPath: String?
 
   private struct Waiter {
-    /// The pattern, compiled afresh by each matcher thread (`Regex` is not `Sendable`).
     var pattern: String
     var since: UInt64
     /// Where the next match starts (the end of the last one, less `rescanOverlap`).
@@ -105,14 +109,23 @@ public actor SerialChannel {
     var scannedTo: UInt64
     var continuation: CheckedContinuation<SerialMatch, any Error>
     var timer: Task<Void, Never>?
+    /// The waiter's matcher process, once it has a slot; killed when the wait ends.
+    var matcher: MatchHelperProcess?
+    /// When the last scan that reached the end of the output finished.
+    var caughtUpAt: ContinuousClock.Instant?
+    /// A delayed pump is pending (`rescanInterval`).
+    var deferred = false
   }
 
   /// A channel for the socket at `socketPath` logging to `logURL` (normally `<vm>/serial.log`).
-  /// Nothing is opened until `start`.
+  /// Nothing is opened until `start`. `matcherPath` is the `vmlab-match` helper `wait` runs its
+  /// patterns in (default: `SerialMatcher.defaultPath`).
   public init(
     socketPath: String, logURL: URL, ringCapacity: Int = SerialChannel.defaultRingCapacity,
-    rotateBytes: UInt64 = SerialChannel.defaultRotateBytes
+    rotateBytes: UInt64 = SerialChannel.defaultRotateBytes,
+    matcherPath: String? = SerialMatcher.defaultPath
   ) {
+    self.matcherPath = matcherPath
     self.socketPath = socketPath
     self.logURL = logURL
     self.ringCapacity = max(1, ringCapacity)
@@ -291,9 +304,10 @@ public actor SerialChannel {
 
   /// Waits until `pattern` (Swift `Regex` syntax) matches output at or after `since` (default: the
   /// current end, so only new output counts), or fails with `timeout` after `timeout`. The pattern
-  /// is matched against the retained output in windows of at most 64 KB, then against each new
-  /// chunk re-scanning the last 4 KB. Matching runs on its own thread, off the channel, so a
-  /// pattern that backtracks for ever still times out and never stalls reads or the reader.
+  /// is matched against the retained output in windows of at most 64 KB, then against new output
+  /// re-scanning the last 4 KB. Matching runs in a `vmlab-match` process of the wait's own, killed
+  /// when the wait ends, so a pattern that backtracks for ever times out, stalls neither reads nor
+  /// the reader, and leaves no CPU busy. Fails with `engine_error` when the helper is missing.
   public func wait(
     for pattern: String, since: UInt64? = nil, timeout: Duration
   ) async throws -> SerialMatch {
@@ -310,12 +324,8 @@ public actor SerialChannel {
         field: "pattern", reason: "not a valid regular expression: \(error)",
         hint: "Pass a Swift Regex pattern, for example \"login:\" or \"\\\\$ $\".")
     }
-    guard abandoned.count < Self.maxAbandonedScans else {
-      throw VMLabError.invalidRequest(
-        field: "pattern",
-        reason: "\(abandoned.count) earlier patterns on this serial console are still matching "
-          + "after their waits timed out",
-        hint: "Use a simpler pattern; the runaway matches end on their own.")
+    guard let matcherPath, FileManager.default.isExecutableFile(atPath: matcherPath) else {
+      throw SerialMatcher.missing(matcherPath)
     }
     let from = since ?? ring.end
     let connected = !closed && socket != nil
@@ -340,8 +350,9 @@ public actor SerialChannel {
 
   /// Why `pattern` is refused before compiling, or nil: longer than `maxPatternBytes`, or a group
   /// that holds an unbounded quantifier is itself repeated without bound (`(a+)+`, `(a*)*`,
-  /// `(?:a+b)*`, `(a+){2,}`), the classic exponential-backtracking shape. Not every slow pattern
-  /// is caught; the off-channel matcher and the timeout cover the rest.
+  /// `(?:a+b)*`, `(a+){2,}`), the classic exponential-backtracking shape. The matcher process is
+  /// killed at the deadline whatever the pattern, so this check only spares launching one for a
+  /// pattern that would almost surely run to the timeout; not every slow pattern is caught.
   static func rejection(for pattern: String) -> String? {
     if pattern.utf8.count > maxPatternBytes {
       return "the pattern is \(pattern.utf8.count) bytes; the limit is \(maxPatternBytes)"
@@ -452,10 +463,11 @@ public actor SerialChannel {
     for id in waiters.keys { pump(id) }
   }
 
-  /// Starts the next match for waiter `id` on a matcher thread, unless one is running or there is
-  /// no unscanned output: the bytes from `scanFrom`, at most `scanWindow` of them.
+  /// Sends waiter `id`'s next window to its matcher, unless a scan is running, there is no
+  /// unscanned output, the channel's matchers are all busy (the waiter queues), or the waiter
+  /// caught up less than `rescanInterval` ago (a delayed pump follows).
   private func pump(_ id: UInt64) {
-    guard let waiter = waiters[id], !scanning.contains(id) else { return }
+    guard let waiter = waiters[id], !scanning.contains(id), !waiter.deferred else { return }
     guard ring.end > waiter.scannedTo else {
       if socket == nil { finish(id, throwing: Self.unreachable(socketPath)) }
       return
@@ -466,42 +478,86 @@ public actor SerialChannel {
       if socket == nil { finish(id, throwing: Self.unreachable(socketPath)) }
       return
     }
+    if let caughtUpAt = waiter.caughtUpAt {
+      let due = caughtUpAt + Self.rescanInterval
+      if ContinuousClock.now < due {
+        waiters[id]?.deferred = true
+        Task { [weak self] in
+          try? await Task.sleep(until: due)
+          await self?.resume(id)
+        }
+        return
+      }
+    }
+    let matcher: MatchHelperProcess
+    if let existing = waiter.matcher {
+      matcher = existing
+    } else {
+      guard waiters.values.count(where: { $0.matcher != nil }) < Self.maxMatchers,
+        let matcherPath
+      else { return }
+      matcher = MatchHelperProcess(path: matcherPath, pattern: waiter.pattern)
+      waiters[id]?.matcher = matcher
+    }
     let to = min(ring.end, from + Self.scanWindow)
     let bytes = ring.bytes(from: from, to: to)
-    let pattern = waiter.pattern
     scanning.insert(id)
     let thread = Thread { [weak self] in
-      let found = (try? Regex(pattern)).flatMap {
-        SerialChannel.search($0, bytes: bytes, base: from)
-      }
-      Task { await self?.scanFinished(id, found: found, through: to) }
+      let outcome = matcher.scan(bytes, base: from)
+      let pid = matcher.pid
+      Task { await self?.scanFinished(id, outcome: outcome, through: to, pid: pid) }
     }
     thread.name = "vmlab.serial.match"
     thread.start()
   }
 
-  private func scanFinished(_ id: UInt64, found: SerialMatch?, through end: UInt64) {
-    scanning.remove(id)
-    if abandoned.remove(id) != nil { return }
-    guard var waiter = waiters[id] else { return }
-    if let found {
-      waiters[id] = nil
-      waiter.timer?.cancel()
-      waiter.continuation.resume(returning: found)
-      return
-    }
-    waiter.scannedTo = end
-    waiter.scanFrom = max(waiter.since, end > Self.rescanOverlap ? end - Self.rescanOverlap : 0)
-    waiters[id] = waiter
+  private func resume(_ id: UInt64) {
+    waiters[id]?.deferred = false
     pump(id)
   }
 
-  /// Ends waiter `id` with `error`; a match still running for it is left to finish unobserved.
+  private func scanFinished(
+    _ id: UInt64, outcome: MatchHelperProcess.Outcome, through end: UInt64, pid: pid_t?
+  ) {
+    scanning.remove(id)
+    if let pid, !matcherPIDs.contains(pid) { matcherPIDs.append(pid) }
+    guard var waiter = waiters[id] else { return }
+    switch outcome {
+    case .found(let found):
+      finish(id, returning: found)
+    case .killed:
+      // Only the end of the wait kills its matcher, and that removed the waiter.
+      finish(id, throwing: SerialMatcher.missing(waiter.matcher?.path, detail: "it was killed"))
+    case .failed(let error):
+      finish(id, throwing: error)
+    case .none:
+      waiter.scannedTo = end
+      waiter.scanFrom = max(waiter.since, end > Self.rescanOverlap ? end - Self.rescanOverlap : 0)
+      if end >= ring.end { waiter.caughtUpAt = .now }
+      waiters[id] = waiter
+      pump(id)
+    }
+  }
+
+  private func finish(_ id: UInt64, returning match: SerialMatch) {
+    guard let waiter = waiters.removeValue(forKey: id) else { return }
+    end(waiter)
+    waiter.continuation.resume(returning: match)
+  }
+
+  /// Ends waiter `id` with `error`, killing its matcher.
   private func finish(_ id: UInt64, throwing error: any Error) {
     guard let waiter = waiters.removeValue(forKey: id) else { return }
-    if scanning.contains(id) { abandoned.insert(id) }
-    waiter.timer?.cancel()
+    end(waiter)
     waiter.continuation.resume(throwing: error)
+  }
+
+  /// Kills an ended waiter's matcher and gives its slot to a queued waiter.
+  private func end(_ waiter: Waiter) {
+    waiter.timer?.cancel()
+    guard let matcher = waiter.matcher else { return }
+    matcher.kill()
+    for (other, queued) in waiters where queued.matcher == nil { pump(other) }
   }
 
   /// The reader stopped. A waiter still matching output that arrived before the end keeps going
@@ -551,42 +607,6 @@ public actor SerialChannel {
   private static func seconds(_ duration: Duration) -> Double {
     let (s, attos) = duration.components
     return Double(s) + Double(attos) / 1e18
-  }
-
-  /// The first match of `regex` in `bytes`, which start at offset `base`, with byte offsets. Runs
-  /// on a matcher thread, never on the channel.
-  static func search(_ regex: Regex<AnyRegexOutput>, bytes: [UInt8], base: UInt64)
-    -> SerialMatch?
-  {
-    guard !bytes.isEmpty else { return nil }
-    var bytes = bytes
-    // Start on a UTF-8 boundary and leave out an incomplete final sequence, so the text decodes.
-    var lead = 0
-    while lead < bytes.count, lead < 3, bytes[lead] & 0xC0 == 0x80 { lead += 1 }
-    bytes.removeFirst(lead)
-    bytes.removeLast(UTF8Tail.incompleteSuffix(bytes))
-    let base = base + UInt64(lead)
-    let text: String
-    let utf8: Bool
-    if let valid = String(validating: bytes, as: UTF8.self) {
-      text = valid
-      utf8 = true
-    } else {
-      // Latin-1: one scalar per byte, so offsets stay exact for ASCII patterns.
-      text = String(String.UnicodeScalarView(bytes.map { Unicode.Scalar($0) }))
-      utf8 = false
-    }
-    guard let match = try? regex.firstMatch(in: text) else { return nil }
-    func offset(_ index: String.Index) -> UInt64 {
-      let distance =
-        utf8
-        ? text.utf8.distance(from: text.startIndex, to: index)
-        : text.unicodeScalars.distance(from: text.startIndex, to: index)
-      return base + UInt64(distance)
-    }
-    return SerialMatch(
-      match: String(text[match.range]), start: offset(match.range.lowerBound),
-      offset: offset(match.range.upperBound))
   }
 }
 
