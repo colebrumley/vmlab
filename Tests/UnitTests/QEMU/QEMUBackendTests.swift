@@ -128,4 +128,39 @@ import VMLabCore
     #expect(endpoint?.host == "192.168.64.33")
     #expect(try store.load(id: record.id).runtime?.ip == "192.168.64.33")
   }
+
+  /// From fix-bh-qemu: a qcow2 named by `-drive file=` passed the path policy, but its header
+  /// may name a backing file anywhere (another VM's disk, a file outside the roots), which QEMU
+  /// then opens. Every file in the chain passes the policy now.
+  @Test(.enabled(if: QEMUCloneTests.installation != nil))
+  func aDriveImageBackedByAFileOutsideThePolicyIsRefused() throws {
+    let qemuImg = try #require(QEMUCloneTests.installation).qemuImg
+    let root = URL(filePath: "/tmp/vmlab-qc-\(getpid())-\(UInt32.random(in: 0...UInt32.max))")
+    let home = root.appending(path: "home")
+    let user = root.appending(path: "user")
+    try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: user, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let secret = home.appending(path: "vms/vm-other/disk.qcow2")
+    try FileManager.default.createDirectory(
+      at: secret.deletingLastPathComponent(), withIntermediateDirectories: true)
+    let overlay = user.appending(path: "overlay.qcow2")
+    let plain = user.appending(path: "plain.qcow2")
+    for args in [
+      ["create", "-q", "-f", "qcow2", secret.path, "1M"],
+      ["create", "-q", "-f", "qcow2", "-F", "qcow2", "-b", secret.path, overlay.path],
+      ["create", "-q", "-f", "qcow2", plain.path, "1M"],
+    ] {
+      let result = try #require(ProcessRunner().run(qemuImg.path, args))
+      try #require(result.status == 0, "\(result.output)")
+    }
+    let policy = PathPolicy(roots: [root.path])
+    let refused = ExtraSpec(qemuArgs: ["-drive", "if=none,id=d1,file=\(overlay.path)"])
+    #expect {
+      try QEMUBackend.checkImageChains(
+        refused, policy: policy, vmlabHome: home, qemuImg: qemuImg)
+    } throws: { ($0 as? VMLabError)?.code == .invalidRequest }
+    let fine = ExtraSpec(qemuArgs: ["-drive", "if=none,id=d1,file=\(plain.path)"])
+    try QEMUBackend.checkImageChains(fine, policy: policy, vmlabHome: home, qemuImg: qemuImg)
+  }
 }

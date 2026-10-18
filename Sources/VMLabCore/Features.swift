@@ -609,16 +609,25 @@ public struct ExtraSpec: Codable, Sendable, Hashable {
   /// Throws `invalid_request` for a host path the arguments name that `policy` refuses or that
   /// lies inside `vmlabHome` (whose VM directories hold every guest's QMP, serial and VNC
   /// sockets and disks).
-  public func checkHostPaths(policy: PathPolicy, vmlabHome: URL) throws(VMLabError) {
+  /// One host path through `policy` and out of vmlab's own home; its canonical form.
+  public static func checkHostPath(
+    _ path: String, field: String, policy: PathPolicy, vmlabHome: URL
+  ) throws(VMLabError) -> String {
     let protected = PathPolicy.canonical(vmlabHome.path)
+    let resolved = try policy.check(path, field: field).path
+    if PathPolicy.isInside(resolved, protected) {
+      throw .invalidRequest(
+        field: field, reason: "\(path) is inside vmlab's own home (\(protected))",
+        hint: "Use a path outside VMLAB_HOME; vmlab's VM directories are its own.")
+    }
+    return resolved
+  }
+
+  public func checkHostPaths(policy: PathPolicy, vmlabHome: URL) throws(VMLabError) {
     for hostPath in hostPaths where !Self.harmlessHostPaths.contains(hostPath.path) {
       let field = "extra.qemuArgs[\(hostPath.index)]"
-      let resolved = try policy.check(hostPath.path, field: field).path
-      if PathPolicy.isInside(resolved, protected) {
-        throw .invalidRequest(
-          field: field, reason: "\(hostPath.path) is inside vmlab's own home (\(protected))",
-          hint: "Use a path outside VMLAB_HOME; vmlab's VM directories are its own.")
-      }
+      let resolved = try Self.checkHostPath(
+        hostPath.path, field: field, policy: policy, vmlabHome: vmlabHome)
       // A chardev or netdev client on an existing unix socket would hand the guest a host
       // service (an ssh or Docker agent); a server socket QEMU creates does not exist yet.
       var info = stat()

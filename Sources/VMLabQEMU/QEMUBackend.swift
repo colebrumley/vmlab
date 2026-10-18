@@ -377,8 +377,12 @@ public final class QEMUBackend: Backend {
     try share?.checkHostDirectory(vmDirectory: layout.directory)
     // BH-1: host paths in extra.qemuArgs pass the path policy again at start (a symlink may have
     // moved since create).
-    try record.extra?.checkHostPaths(
-      policy: PathPolicy.load(home: store.home), vmlabHome: store.home)
+    let policy = PathPolicy.load(home: store.home)
+    try record.extra?.checkHostPaths(policy: policy, vmlabHome: store.home)
+    if let extra = record.extra {
+      try Self.checkImageChains(
+        extra, policy: policy, vmlabHome: store.home, qemuImg: try locate().qemuImg)
+    }
     if seed, base != nil, let image = record.image,
       let key = try? String(contentsOf: publicKey, encoding: .utf8)
     {
@@ -403,6 +407,37 @@ public final class QEMUBackend: Backend {
       record: record, plan: plan, layout: layout, baseImage: base, boot: boot, seed: config,
       installation: try locate(),
       sharedDirectory: share?.hostDirectory(vmDirectory: layout.directory))
+  }
+
+  /// An image a `file=` in `extra.qemuArgs` names may be a qcow2 whose header points elsewhere
+  /// (a backing file, an external data file), which QEMU opens too: every file in its chain
+  /// (`qemu-img info --backing-chain`) passes the same path policy. A file qemu-img cannot read
+  /// is left to QEMU to refuse.
+  static func checkImageChains(
+    _ extra: ExtraSpec, policy: PathPolicy, vmlabHome: URL, qemuImg: URL
+  ) throws(VMLabError) {
+    for hostPath in extra.hostPaths
+    where ["file", "filename"].contains(hostPath.key.split(separator: ".").last ?? "") {
+      var isDirectory: ObjCBool = false
+      guard FileManager.default.fileExists(atPath: hostPath.path, isDirectory: &isDirectory),
+        !isDirectory.boolValue,
+        let output = try? info(URL(filePath: hostPath.path), qemuImg: qemuImg, ["--backing-chain"]),
+        let value = try? JSONDecoder().decode(JSONValue.self, from: Data(output.utf8))
+      else { continue }
+      let images = value.arrayValue ?? [value]
+      var referenced: [String] = []
+      for (index, image) in images.enumerated() {
+        if index > 0, let name = image["filename"]?.stringValue { referenced.append(name) }
+        if let dataFile = image["format-specific"]?["data"]?["data-file"]?.stringValue {
+          referenced.append(dataFile)
+        }
+      }
+      for name in referenced {
+        // A relative name is relative to the image that names it; qemu-img prints it resolved.
+        _ = try ExtraSpec.checkHostPath(
+          name, field: "extra.qemuArgs[\(hostPath.index)]", policy: policy, vmlabHome: vmlabHome)
+      }
+    }
   }
 
   /// The record's boot spec with host paths checked; a kernel boot without a kernel path takes
