@@ -244,6 +244,9 @@ import VMLabCore
         boot: BootSpec(mode: .kernel, kernel: "/k/vmlinuz", initrd: "/k/initrd", cmdline: "quiet")))
     #expect(!args.contains { $0.hasPrefix("if=pflash") })
     #expect(args.contains("/k/vmlinuz") && args.contains("/k/initrd") && args.contains("quiet"))
+    // -kernel takes boot index 0 on x86; the disk must not claim it too.
+    #expect(args.contains("virtio-blk-pci,drive=disk0"))
+    #expect(!args.contains { $0.contains("bootindex") })
   }
 
   /// R-310: per-architecture binaries, machines and defaults; TCG caps -smp at 8.

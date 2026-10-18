@@ -119,7 +119,10 @@ public enum QEMUCommandLine {
         "-drive",
         "if=none,id=disk0,format=qcow2,cache=writeback,discard=unmap,file="
           + escape(layout.disk.path),
-        "-device", "virtio-blk-pci,drive=disk0,bootindex=0",
+        // A `-kernel` boot owns boot index 0 on x86 (the linuxboot option ROM); the disk is
+        // then only the root file system.
+        "-device",
+        "virtio-blk-pci,drive=disk0" + (options.boot.mode == .kernel ? "" : ",bootindex=0"),
       ]
     }
     if options.seed {
