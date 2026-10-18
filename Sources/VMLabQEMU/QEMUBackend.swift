@@ -96,7 +96,16 @@ public final class QEMUBackend: Backend {
   }
 
   public func attach(_ record: VMRecord) async throws(VMLabError) -> any RunningVM {
-    QEMURunningVM(record: record, machine: try await machine(for: record))
+    let machine = try await machine(for: record)
+    let target = SSHEndpoint(runtime: machine.runtime).map {
+      SSHTarget(record: record, endpoint: $0, store: store)
+    }
+    return QEMURunningVM(record: record, machine: machine, ssh: target)
+  }
+
+  public func sshEndpoint(_ record: VMRecord, timeout: Duration) async -> SSHEndpoint? {
+    SSHEndpoint(runtime: record.runtime)
+      ?? machines.withLock({ $0[record.id] }).flatMap { SSHEndpoint(runtime: $0.runtime) }
   }
 
   // MARK: Helpers
@@ -169,12 +178,15 @@ public struct QEMURunningVM: RunningVM {
   public let profile: Profile
   public let features: [Feature]
   public let machine: QEMUMachine
+  /// Where SSH reaches the guest: its forwarded loopback port; nil with networking off.
+  public let ssh: SSHTarget?
 
-  public init(record: VMRecord, machine: QEMUMachine) {
+  public init(record: VMRecord, machine: QEMUMachine, ssh: SSHTarget? = nil) {
     id = record.id
     profile = record.profile
     features = record.features
     self.machine = machine
+    self.ssh = ssh
   }
 
   public var serial: SerialChannel? { machine.serial }
@@ -183,7 +195,11 @@ public struct QEMURunningVM: RunningVM {
   }
   public var gdb: GDBEndpoint? { machine.runtime.gdbEndpoint.flatMap(GDBEndpoint.init(runtime:)) }
   public var introspection: (any Introspection)? { QMPIntrospection(qmp: machine.qmp) }
-  public var exec: any ExecChannel { NotYetBuilt(vm: id, channel: "exec", item: "R-400") }
+  /// SSH through the forwarded port (R-400); R-403 adds the guest agent.
+  public var exec: any ExecChannel {
+    if let ssh { return SSHExecChannel(target: ssh) }
+    return NotYetBuilt(vm: id, channel: "exec", item: "R-403: the guest has no network for SSH")
+  }
   public var checkpoints: any CheckpointProvider {
     NotYetBuilt(vm: id, channel: "checkpoints", item: "R-307")
   }

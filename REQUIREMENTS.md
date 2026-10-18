@@ -430,7 +430,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
 
 ## Phase 4 — Shell and files
 
-- [ ] **R-400 SSH keys and known hosts**
+- [x] **R-400 SSH keys and known hosts**
   `vm_create` generates `<vm>/id_ed25519` (`ssh-keygen -t ed25519 -N ""`), injects the public key
   (cloud-init for Linux; R-606 for macOS). `ExecChannel.ssh` runs the system `ssh` with `-i`, `-o
   BatchMode=yes -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=<vm>/known_hosts`, the

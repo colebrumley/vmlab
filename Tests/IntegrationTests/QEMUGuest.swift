@@ -15,6 +15,9 @@ struct QEMUGuest {
   let backend: QEMUBackend
   let record: VMRecord
   let machine: QEMUMachine
+  /// The warnings of the start (R-400: `ssh_unreachable` when exec_ssh was granted and the guest
+  /// never answered).
+  var startWarnings: [String] = []
 
   static func boot(
     features: [Feature] = [.serial, .gui, .netNAT], memoryGB: Int = 2
@@ -45,12 +48,14 @@ struct QEMUGuest {
         id: "", name: "it-\(n)", profile: .qemuHVF, guest: guest, features: features,
         image: "debian-13-arm64"), plan: plan)
     do {
-      guard let running = try await manager.perform(.start, on: created.id) else {
+      let outcome = try await manager.run(.start, on: created.id)
+      guard let running = outcome.record else {
         throw VMLabError(code: .internal, message: "start returned no record", hint: "")
       }
       let machine = try await backend.machine(for: running)
       return QEMUGuest(
-        home: home, manager: manager, backend: backend, record: running, machine: machine)
+        home: home, manager: manager, backend: backend, record: running, machine: machine,
+        startWarnings: outcome.warnings)
     } catch {
       try? await backend.kill(created)
       try? FileManager.default.removeItem(at: home)

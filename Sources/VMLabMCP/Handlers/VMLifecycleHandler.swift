@@ -34,7 +34,9 @@ struct VMLifecycleHandler: ToolHandler {
     let after: VMRecord?
     switch action {
     case .start:
-      after = try await LongOperation.start(record, context: context)
+      let started = try await LongOperation.start(record, context: context)
+      after = started.record
+      warnings += started.warnings
     default:
       let manager = context.manager
       after = try await context.progress.during(

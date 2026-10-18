@@ -47,7 +47,9 @@ struct VMCreateHandler: ToolHandler {
     do throws(VMLabError) {
       try LongOperation.checkCancellation("vm_create", vm: created.id)
       if autostart {
-        record = try await LongOperation.start(created, context: context)
+        let started = try await LongOperation.start(created, context: context)
+        record = started.record
+        warnings += started.warnings
         try LongOperation.checkCancellation("vm_create", vm: created.id)
       }
     } catch {

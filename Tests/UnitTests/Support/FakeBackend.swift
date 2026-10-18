@@ -20,6 +20,10 @@ final class FakeBackend: Backend {
   let store: Store
   private let state = Mutex<(calls: [Call], failures: [Operation: VMLabError], delay: Duration?)>(
     ([], [:], nil))
+  /// The forwarded SSH port the fake runtime reports; nil (the default) means no SSH endpoint.
+  private let ssh = Mutex<Int?>(nil)
+
+  func reportSSHPort(_ port: Int?) { ssh.withLock { $0 = port } }
 
   init(profile: Profile = .qemuHVF, store: Store) {
     self.profile = profile
@@ -87,7 +91,8 @@ final class FakeBackend: Backend {
     let dir = store.directory(of: record.id)
     return VMRuntime(
       pid: 4242, controlSocket: dir.appending(path: "control.sock").path,
-      serialSocket: dir.appending(path: "serial.sock").path, gdbEndpoint: "tcp:127.0.0.1:1234")
+      serialSocket: dir.appending(path: "serial.sock").path, gdbEndpoint: "tcp:127.0.0.1:1234",
+      sshPort: ssh.withLock { $0 })
   }
 }
 

@@ -32,9 +32,17 @@ public protocol Backend: Sendable {
   func destroy(_ record: VMRecord) async throws(VMLabError)
   /// Handles on the channels of a running or paused guest.
   func attach(_ record: VMRecord) async throws(VMLabError) -> any RunningVM
+  /// Where the guest's sshd is reached (R-400). The default reads the recorded runtime (the
+  /// forwarded loopback port, else the IP). A backend that learns the address after `start`
+  /// returns (a DHCP lease) overrides it and may wait up to `timeout` for it; nil when unknown.
+  func sshEndpoint(_ record: VMRecord, timeout: Duration) async -> SSHEndpoint?
 }
 
 extension Backend {
+  public func sshEndpoint(_ record: VMRecord, timeout: Duration) async -> SSHEndpoint? {
+    SSHEndpoint(runtime: record.runtime)
+  }
+
   public func reset(_ record: VMRecord) async throws(VMLabError) -> VMRuntime {
     try await kill(record)
     var stopped = record
@@ -110,11 +118,13 @@ public struct ExecResult: Sendable, Hashable {
   public var exitCode: Int32
   public var stdout: String
   public var stderr: String
+  public var durationMs: Int
 
-  public init(exitCode: Int32, stdout: String, stderr: String) {
+  public init(exitCode: Int32, stdout: String, stderr: String, durationMs: Int = 0) {
     self.exitCode = exitCode
     self.stdout = stdout
     self.stderr = stderr
+    self.durationMs = durationMs
   }
 }
 
