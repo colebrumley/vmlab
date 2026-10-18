@@ -51,6 +51,10 @@ import VMLabCore
     let stored = try store.load(id: record.id)
     #expect(stored.tartClone == clone.path)
     #expect(FileManager.default.fileExists(atPath: clone.appending(path: "disk.img").path))
+    // R-606: the VM's key, and the legacy VNC password because gui was granted.
+    let dir = store.directory(of: record.id)
+    #expect(FileManager.default.fileExists(atPath: dir.appending(path: "id_ed25519.pub").path))
+    #expect(FileManager.default.fileExists(atPath: dir.appending(path: "vnc.pass").path))
 
     try await backend.destroy(stored)
     #expect(!FileManager.default.fileExists(atPath: clone.path))

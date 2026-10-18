@@ -33,7 +33,8 @@ extension VZRunnerConfig {
 /// The `vz-macos` backend: create `tart clone`s the pulled image (an APFS clone, seconds) and
 /// records the clone's directory in `vm.json`; start runs the clone's files in our own `vmlab-vz`
 /// runner (`VZRunnerConfig.macOS`), so pause, stop and the control socket are the same as
-/// `vz-linux`; destroy `tart delete`s the clone.
+/// `vz-linux`; the first start provisions the guest over SSH (R-606, `MacProvisioner`); destroy
+/// `tart delete`s the clone.
 public struct VZMacBackend: Backend {
   public let profile: Profile = .vzMacOS
   public let store: Store
@@ -44,6 +45,10 @@ public struct VZMacBackend: Backend {
   public var leasePath: String
   /// Finds `tart`; only create and destroy need it.
   public var tart: @Sendable () throws(VMLabError) -> Tart
+  /// How long first-boot provisioning waits for sshd (Appendix G: 300 s for macOS).
+  public var bootTimeout: Duration
+  /// Runs `ssh-keygen`.
+  public var commands: any CommandRunning
 
   public init(
     store: Store, launcher: VZRunnerLauncher = VZRunnerLauncher(),
@@ -51,8 +56,11 @@ public struct VZMacBackend: Backend {
     leasePath: String = DHCPLeases.defaultPath,
     tart: @escaping @Sendable () throws(VMLabError) -> Tart = { () throws(VMLabError) in
       try Tart.locate()
-    }
+    },
+    bootTimeout: Duration = .seconds(300), commands: any CommandRunning = ProcessRunner()
   ) {
+    self.bootTimeout = bootTimeout
+    self.commands = commands
     self.store = store
     self.launcher = launcher
     self.stopTimeout = stopTimeout
@@ -94,6 +102,10 @@ public struct VZMacBackend: Backend {
         throw TartVMConfig.layoutError(file, "missing from the clone")
       }
       try store.update(id: record.id) { $0.tartClone = clone.directory.path }
+      let dir = store.directory(of: record.id)
+      _ = try SSHKey.ensure(
+        at: dir.appending(path: "id_ed25519"), comment: "vmlab-\(record.id)", commands: commands)
+      if Self.wantsScreenSharing(record) { _ = try MacProvisioner.ensureVNCPassword(in: dir) }
     } catch {
       try? tart.delete(record.id)
       throw error
@@ -118,7 +130,55 @@ public struct VZMacBackend: Backend {
     if case .nat(let mac?) = config.network.first {
       runtime.ip = await DHCPLeases.waitForIP(mac: mac, path: leasePath, timeout: leaseTimeout)
     }
+    let dir = store.directory(of: record.id)
+    if !MacProvisioner.isProvisioned(dir) {
+      do throws(VMLabError) {
+        try await provision(record, ip: runtime.ip)
+      } catch {
+        var running = record
+        running.runtime = runtime
+        try? await runner.kill(running)
+        throw error
+      }
+    }
     return runtime
+  }
+
+  /// Whether provisioning sets the legacy VNC password: `gui` (or a GUI feature) was granted.
+  static func wantsScreenSharing(_ record: VMRecord) -> Bool {
+    record.features.contains { [.gui, .guiDesktop, .guiAccel].contains($0) }
+  }
+
+  /// R-606: the first boot's SSH provisioning (`MacProvisioner`).
+  func provision(_ record: VMRecord, ip: String?) async throws(VMLabError) {
+    let dir = store.directory(of: record.id)
+    guard let ip else {
+      throw VMLabError(
+        code: .provisionFailed,
+        message:
+          "The macOS guest leased no address within \(leaseTimeout), so it cannot be provisioned",
+        hint: "Check vmnet (/var/db/dhcpd_leases) and <vm>/vz.log, then start again.",
+        data: ["step": .string("lease"), "log": .string(dir.appending(path: "vz.log").path)])
+    }
+    let login =
+      record.image.flatMap { ImageStore(home: store.home).pulled($0)?.login }
+      ?? ImageLogin(user: "admin", password: "admin")
+    let key: String
+    do {
+      key = try String(contentsOf: dir.appending(path: "id_ed25519.pub"), encoding: .utf8)
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+    } catch {
+      throw VMLabError(
+        code: .provisionFailed, message: "The VM's SSH public key cannot be read: \(error)",
+        hint: "Destroy the VM and create it again.",
+        data: ["step": .string("authorized_keys"), "log": .string(dir.path)])
+    }
+    var provisioner = MacProvisioner(
+      vmDirectory: dir, login: login, hostname: VZBackend.hostname(for: record), publicKey: key,
+      vncPassword: Self.wantsScreenSharing(record)
+        ? try MacProvisioner.ensureVNCPassword(in: dir) : nil)
+    provisioner.sshTimeout = bootTimeout
+    try await provisioner.provision(ip: ip)
   }
 
   public func stop(_ record: VMRecord) async throws(VMLabError) { try await runner.stop(record) }

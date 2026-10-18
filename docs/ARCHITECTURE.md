@@ -111,6 +111,14 @@ a `VZMacPlatformConfiguration`, `VZMacOSBootLoader` and `VZMacGraphicsDeviceConf
 `PasswordSSH` runs `ssh` with the image password through an askpass script
 (`SSH_ASKPASS_REQUIRE=force`, the password only in its environment) for a guest whose key is not
 installed yet; `HostCommand` is its subprocess with stdin and a deadline.
+`MacProvisioner` (R-606) is a macOS guest's first boot, run by `VZMacBackend.start` once the lease
+is known and `<vm>/provisioned` is absent: over `PasswordSSH` with the image login it waits for
+sshd, appends `<vm>/id_ed25519.pub` (made at create with `SSHKey.ensure`) to `~/.ssh/authorized_keys`,
+sets the hostname with `scutil` (through `sudo -S`, the password on stdin), and when a GUI feature was
+granted sets the legacy VNC password from `<vm>/vnc.pass` (eight letters and digits, made at
+create) with ARD's `kickstart`, enables Screen Sharing and checks that port 5900 answers RFB. Steps
+go to `<vm>/provision.log`; a failure is `provision_failed` naming the step, and the runner is
+killed. Password authentication stays enabled.
 
 **`VMLabRFB`** (library). A VNC (RFB) client: framebuffer updates to PNG, pointer and key events. It
 gives both engines a screen to look at and click on. `RFBClient` (an actor) speaks RFB 3.8 over an
