@@ -367,7 +367,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   and `RESET` events are logged as well.
   **Verify:** unit test feeds a panic transcript and asserts the event; a `vm_logs` call lists it.
 
-- [ ] **R-305 Direct kernel boot and custom firmware**
+- [x] **R-305 Direct kernel boot and custom firmware**
   `BootSpec`: `.disk` (default), `.kernel(kernel, initrd?, cmdline, dtb?)` → `-kernel/-initrd/-append`,
   `.firmware(path, format: pflash|bios)` → `-pflash` or `-bios`, `.binary(path, loadAddress)` →
   `-device loader,file=...,addr=...` with `-nographic`-equivalent flags. Kernel paths are
@@ -378,10 +378,11 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   kernel and initrd extracted from the pulled image (`images extract-kernel debian-13-arm64`) with
   `console=ttyAMA0 root=/dev/vda1` and reach `login:` on serial.
 
-- [ ] **R-306 Custom devices**
+- [x] **R-306 Custom devices**
   `Requirements.extra.qemuArgs: [String]` is passed through verbatim for the `custom_devices`
   feature, after vmlab's own arguments, with a denylist (`-qmp`, `-serial`, `-vnc`, `-gdb`,
-  `-pidfile`, `-daemonize`, `-monitor`) that raises `invalid_request`.
+  `-pidfile`, `-daemonize`, `-monitor`, and their equivalents `-s`, `-mon`, `-qmp-pretty`,
+  `-readconfig`) that raises `invalid_request`.
   **Verify:** unit tests for pass-through and the denylist.
 
 - [x] **R-307 qcow2 checkpoints and the live-snapshot probe**
@@ -395,20 +396,20 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   probe runs and writes `host-facts.json`; if it says `yes`, a live checkpoint and restore keep an
   SSH session's shell history.
 
-- [ ] **R-308 User-mode networking and port forwarding**
+- [x] **R-308 User-mode networking and port forwarding**
   Default NIC `-netdev user` with `hostfwd` for SSH (an ephemeral localhost port recorded in
   `runtime.sshPort`) and for every `net_port_forward` entry in the request (`guest:host` pairs,
   host port 0 for ephemeral; the result records the chosen ports). `net_none` omits the NIC.
   **Verify:** command-line snapshot; integration: `ssh -p <port>` reaches the Debian guest with the
   generated key.
 
-- [ ] **R-309 vmnet fast networking (conditional)**
+- [x] **R-309 vmnet fast networking (conditional)**
   When running as root or `qemu_vmnet` probes `yes`, `net_fast` uses `-netdev vmnet-shared`. The
   probe tries `vmnet-shared` on a throwaway guest and records the answer; everywhere else the
   feature is `.no("needs root or an entitlement")`.
   **Verify:** command-line snapshot for both cases; the matrix row flips with the fact.
 
-- [ ] **R-310 TCG profile for x86_64 and other architectures**
+- [x] **R-310 TCG profile for x86_64 and other architectures**
   `qemu-tcg` selects `qemu-system-x86_64` (`-machine q35`, `-cpu max`, edk2 x86 firmware) or
   `qemu-system-<arch>` for `riscv64` (`-machine virt`) and `other(String)` with no defaults beyond
   `-machine virt` and a warning in the plan. TCG profile applies `-smp` up to 8 and warns in the
@@ -1107,9 +1108,9 @@ six 4 GB guests with the default reserve; macOS 26.6 → VZ save/restore APIs pr
 | `macos-base` | macos | arm64 | `ghcr.io/cirruslabs/macos-tahoe-base:latest` via `tart pull`; if it does not boot on this host, `macos-sequoia-base:latest` (record which in `docs/FEATURES.md`) | Tart VM | `admin` / `admin`, SSH and Screen Sharing enabled by the image |
 
 The Debian kernel and initrd for direct boot are extracted from the pulled raw image
-(`images extract-kernel`: mount with `hdiutil attach -imagekey diskimage-class=CRawDiskImage` or
-read the ext4 partition with a small reader in `VMLabCore/Ext4.swift` if `hdiutil` cannot mount
-ext4; decide in R-305 and record it).
+(`images extract-kernel`). Decided in R-305: `hdiutil` attaches the raw disk but macOS has no ext4
+driver to mount the partition, so `VMLabCore/Ext4.swift` reads GPT and ext4 read-only. Debian's
+`/boot/System.map-*` is a stub naming the `-dbg` package; symbol lookups need another source.
 
 ## Appendix I — Selection algorithm and worked examples
 

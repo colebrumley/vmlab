@@ -11,7 +11,8 @@ extension ToolSpec {
     inputSchema: Schema.input(["vm": Schema.vm], required: ["vm"]),
     outputShape: """
       { vm: { id, name }, record: VMRecord, plan: Plan, features: [feature],
-        endpoints: { ssh?, ip?, serial?, display?: { kind, hostSide }, gdb? },
+        endpoints: { ssh?, ip?, serial?, display?: { kind, hostSide }, gdb?,
+          forwards?: [ { guest, host: "127.0.0.1:port" } ] },
         segments: [ { name, ip } ], events: [ Event ], panic?: { line, offset, at }, warnings }
       """,
     errors: [.vmNotFound])

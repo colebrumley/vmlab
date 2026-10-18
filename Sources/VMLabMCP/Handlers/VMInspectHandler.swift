@@ -48,6 +48,15 @@ struct VMInspectHandler: ToolHandler {
     var endpoints: [String: JSONValue] = [:]
     if let port = runtime.sshPort { endpoints["ssh"] = .string("127.0.0.1:\(port)") }
     if let ip = runtime.ip { endpoints["ip"] = .string(ip) }
+    if let forwards = runtime.forwards, !forwards.isEmpty {
+      endpoints["forwards"] = .array(
+        forwards.map { forward in
+          .object([
+            "guest": .number(Double(forward.guest)),
+            "host": forward.host.map { .string("127.0.0.1:\($0)") } ?? .null,
+          ])
+        })
+    }
     if let serial = runtime.serialSocket { endpoints["serial"] = .string(serial) }
     if let vnc = runtime.vncSocket {
       endpoints["display"] = .object(["kind": .string("vnc"), "hostSide": .string(vnc)])

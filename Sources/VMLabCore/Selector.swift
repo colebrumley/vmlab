@@ -7,6 +7,11 @@ public struct Plan: Codable, Sendable, Hashable {
   /// Every required feature plus every other feature that is `yes` for the profile on this host,
   /// in catalogue order.
   public var features: [Feature]
+  /// The features the request asked for (required, implied or preferred) that the profile grants,
+  /// in catalogue order. `features` also holds every other `yes`; what is provisioned for the guest
+  /// (the in-guest desktop, R-504; the VZ display, R-503) follows this list. Empty in plans stored
+  /// before it existed.
+  public var requested: [Feature]
   /// Preferred features the profile does not provide.
   public var preferredDenied: [Feature]
   /// Requested features whose answer on this host rests on a slow probe that is still `unknown`.
@@ -18,13 +23,14 @@ public struct Plan: Codable, Sendable, Hashable {
 
   public init(
     profile: Profile, guest: GuestSpec, resources: ResourceSpec, features: [Feature],
-    preferredDenied: [Feature] = [], unverified: [Feature] = [], allowUnverified: Bool = false,
-    estimatedStartupSeconds: Int, notes: [String] = []
+    requested: [Feature] = [], preferredDenied: [Feature] = [], unverified: [Feature] = [],
+    allowUnverified: Bool = false, estimatedStartupSeconds: Int, notes: [String] = []
   ) {
     self.profile = profile
     self.guest = guest
     self.resources = resources
     self.features = features
+    self.requested = requested
     self.preferredDenied = preferredDenied
     self.unverified = unverified
     self.allowUnverified = allowUnverified
@@ -33,6 +39,28 @@ public struct Plan: Codable, Sendable, Hashable {
   }
 
   public func grants(_ feature: Feature) -> Bool { features.contains(feature) }
+
+  /// Whether the request asked for `feature` and the profile grants it.
+  public func requests(_ feature: Feature) -> Bool { requested.contains(feature) }
+
+  enum CodingKeys: String, CodingKey {
+    case profile, guest, resources, features, requested, preferredDenied, unverified
+    case allowUnverified, estimatedStartupSeconds, notes
+  }
+
+  public init(from decoder: any Decoder) throws {
+    let c = try decoder.container(keyedBy: CodingKeys.self)
+    profile = try c.decode(Profile.self, forKey: .profile)
+    guest = try c.decode(GuestSpec.self, forKey: .guest)
+    resources = try c.decode(ResourceSpec.self, forKey: .resources)
+    features = try c.decode([Feature].self, forKey: .features)
+    requested = try c.decodeIfPresent([Feature].self, forKey: .requested) ?? []
+    preferredDenied = try c.decodeIfPresent([Feature].self, forKey: .preferredDenied) ?? []
+    unverified = try c.decodeIfPresent([Feature].self, forKey: .unverified) ?? []
+    allowUnverified = try c.decodeIfPresent(Bool.self, forKey: .allowUnverified) ?? false
+    estimatedStartupSeconds = try c.decode(Int.self, forKey: .estimatedStartupSeconds)
+    notes = try c.decodeIfPresent([String].self, forKey: .notes) ?? []
+  }
 }
 
 /// Why no profile can run a request (Appendix I steps 5 and 6). `error` is what the model sees.
@@ -231,6 +259,7 @@ public enum ProfileSelector {
 
     // 8. Plan.
     let features = Feature.allCases.filter { required.contains($0) || has(profile, $0) }
+    let requested = features.filter { required.contains($0) || preferred.contains($0) }
     let preferredDenied = preferred.filter { !has(profile, $0) }
     var unverified: [Feature] = []
     for feature in Feature.allCases where required.contains(feature) || preferred.contains(feature)
@@ -241,10 +270,14 @@ public enum ProfileSelector {
       }
       if onChosen || onEliminated { unverified.append(feature) }
     }
+    var planned = resources
+    if profile == .qemuTCG, let cpus = planned.cpus, cpus > maxTCGCPUs {
+      planned.cpus = maxTCGCPUs
+    }
     return .success(
       Plan(
-        profile: profile, guest: r.guest, resources: resources, features: features,
-        preferredDenied: preferredDenied, unverified: unverified,
+        profile: profile, guest: r.guest, resources: planned, features: features,
+        requested: requested, preferredDenied: preferredDenied, unverified: unverified,
         allowUnverified: allowUnverified,
         estimatedStartupSeconds: estimatedStartupSeconds(profile, features: features, r: r),
         notes: notes(
@@ -295,6 +328,9 @@ public enum ProfileSelector {
     return out
   }
 
+  /// The most virtual CPUs a `qemu-tcg` guest gets (R-310): emulated CPUs past this add little.
+  public static let maxTCGCPUs = 8
+
   /// A rough figure for the model: time from start to a reachable guest.
   static func estimatedStartupSeconds(_ profile: Profile, features: [Feature], r: Requirements)
     -> Int
@@ -320,6 +356,16 @@ public enum ProfileSelector {
       notes.append(
         "qemu-tcg emulates the guest CPU: slow, expect many times the run time of hardware "
           + "virtualization")
+    }
+    if profile == .qemuTCG, let cpus = ResourceLimits.resolve(r.resources, for: r.guest.os).cpus,
+      cpus > maxTCGCPUs
+    {
+      notes.append("qemu-tcg runs at most \(maxTCGCPUs) virtual CPUs; \(cpus) were asked for")
+    }
+    if case .other(let arch) = r.guest.arch {
+      notes.append(
+        "vmlab has no defaults for \(arch) beyond -machine virt: give boot (kernel, firmware or "
+          + "binary) and any devices in extra.qemuArgs")
     }
     if profile == .qemuTCG, asked.contains(.nestedVirt) {
       var note = "nested virtualization is emulated under qemu-tcg and very slow"
