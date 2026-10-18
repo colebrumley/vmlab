@@ -53,6 +53,15 @@ public struct VZControlClient: Sendable, Hashable {
     if let reason = connection.deadPeerReason {
       throw DeadPeer.error(channel: "control", endpoint: path, reason: reason)
     }
+    // CX-31 (R-1101): a command no probe watches (status, short ones) that met silence for the
+    // whole window is a dead peer too, unless the runner is verifiably gone.
+    if case .failure(let error) = result, error.code == .timeout, !watchdog,
+      limit >= deadPeerWindow, Self.runnerMayBeAlive(socketPath: path)
+    {
+      throw DeadPeer.error(
+        channel: "control", endpoint: path,
+        reason: DeadPeer.silence(limit, waitingFor: "a \(request.command.rawValue) reply"))
+    }
     let response = try result.get()
     guard response.ok else {
       throw response.error
@@ -107,7 +116,7 @@ public struct VZControlClient: Sendable, Hashable {
       do { try await Task.sleep(for: probeInterval) } catch { return }
       do {
         _ = try await probe.send(ControlRequest(.status), timeout: deadPeerWindow)
-      } catch  where error.code == .timeout {
+      } catch  where error.code == .timeout || DeadPeer.isDeadPeer(error) {
         guard !Task.isCancelled else { return }
         connection.abandon(DeadPeer.silence(deadPeerWindow, waitingFor: "a status probe"))
         return
@@ -194,6 +203,16 @@ public struct VZControlClient: Sendable, Hashable {
     } catch {
       throw unreachable(path, "\(error)")
     }
+  }
+
+  /// False only when the runner's `vz.pid` beside the socket names no live runner of that
+  /// directory (`EngineProcess`); without a pid file a socket that accepted is taken as alive.
+  static func runnerMayBeAlive(socketPath: String) -> Bool {
+    let directory = URL(filePath: socketPath).deletingLastPathComponent()
+    guard let pid = VZRunnerPaths(vmDirectory: directory).recordedPID(), pid > 0 else {
+      return true
+    }
+    return EngineProcess.isRunning(pid, vmDirectory: directory)
   }
 
   static func unreachable(_ path: String, _ reason: String) -> VMLabError {

@@ -8,8 +8,11 @@ final class FakeRunner: Sendable {
   let path: String
   let fd: Int32
 
-  init(answer: @escaping @Sendable (ControlRequest) -> ControlResponse?) throws {
-    path = "/tmp/vmlab-cc-\(getpid())-\(UInt32.random(in: 0...UInt32.max)).sock"
+  init(path: String? = nil, answer: @escaping @Sendable (ControlRequest) -> ControlResponse?)
+    throws
+  {
+    self.path = path ?? "/tmp/vmlab-cc-\(getpid())-\(UInt32.random(in: 0...UInt32.max)).sock"
+    let path = self.path
     unlink(path)
     fd = try UnixStream.listen(path: path)
     let fd = fd
@@ -72,6 +75,30 @@ final class FakeRunner: Sendable {
       try await VZControlClient(socketPath: runner.path).send(
         ControlRequest(.status), timeout: .milliseconds(200))
     } throws: { ($0 as? VMLabError)?.code == .timeout }
+  }
+
+  /// CX-31: silence on `status` for the dead-peer window was a plain timeout, so a hung runner
+  /// was never marked broken. It is a dead peer now, unless `vz.pid` shows the runner gone.
+  @Test func statusSilenceForTheWindowIsADeadPeer() async throws {
+    let dir = URL(filePath: "/tmp/vmlab-cs-\(getpid())-\(UInt32.random(in: 0...UInt32.max))")
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let runner = try FakeRunner(path: dir.appending(path: "control.sock").path) { _ in nil }
+    let client = VZControlClient(socketPath: runner.path, deadPeerWindow: .milliseconds(200))
+    await #expect {
+      try await client.send(ControlRequest(.status), timeout: .milliseconds(300))
+    } throws: { error in
+      guard let error = error as? VMLabError else { return false }
+      return DeadPeer.isDeadPeer(error) && error.data["channel"] == .string("control")
+    }
+    // A pid file naming no runner: the runner is gone, not hung.
+    try "999999\n".write(to: dir.appending(path: "vz.pid"), atomically: true, encoding: .utf8)
+    await #expect {
+      try await client.send(ControlRequest(.status), timeout: .milliseconds(300))
+    } throws: { error in
+      guard let error = error as? VMLabError else { return false }
+      return error.code == .timeout && !DeadPeer.isDeadPeer(error)
+    }
   }
 
   @Test func attachReportsPidAndState() async throws {
