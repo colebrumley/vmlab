@@ -320,6 +320,9 @@ enum ConfigurationBuilder {
     return VMLabError(
       code: .engineError, message: "\(what): \(ns.localizedDescription)",
       hint: "Check <vm>/vz.log.",
-      data: ["domain": .string(ns.domain), "errorCode": .number(Double(ns.code))])
+      data: [
+        "engine": .string("vz"), "raw": .string("\(error)"), "domain": .string(ns.domain),
+        "errorCode": .number(Double(ns.code)),
+      ])
   }
 }
