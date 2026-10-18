@@ -27,7 +27,7 @@ import VMLabCore
     | `pause` | Y | Y | Y | Y |
     | `net_nat` | Y | Y | Y | Y |
     | `net_fast` | Y | Y | C `root` or `qemu_vmnet` | C same |
-    | `net_segment` | Y (static, R-901) | Y | Y | Y |
+    | `net_segment` | Y (static, R-901) | Y (socketpair to vmlab-switch) | Y (-netdev dgram unix, verified on QEMU 11.1) | Y (same) |
     | `net_port_forward` | Y (host-reachable address) | Y (same) | Y (hostfwd) | Y (hostfwd) |
     | `net_none` | Y | Y | Y | Y |
     | `rosetta` | N | C `rosetta_installed` | N | N |

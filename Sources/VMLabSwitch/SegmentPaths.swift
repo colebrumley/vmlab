@@ -35,6 +35,9 @@ public struct SegmentPaths: Sendable, Equatable {
   /// A connection here receives one JSON `SwitchStats` object (unix stream).
   public var statsSocket: URL { directory.appending(path: "stats.sock") }
   public var pidFile: URL { directory.appending(path: "switch.pid") }
+  /// A connection here hands the switch one end of a datagram `socketpair` with `SCM_RIGHTS`
+  /// (VZ guests, R-901); the switch answers `ok` once the port is added.
+  public var attachSocket: URL { directory.appending(path: "attach.sock") }
   /// Where guests' port sockets are bound (R-901).
   public var portsDirectory: URL { directory.appending(path: "ports") }
 }

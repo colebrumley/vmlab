@@ -68,3 +68,61 @@ public enum UnixSocket {
     setsockopt(fd, SOL_SOCKET, option, &value, socklen_t(MemoryLayout<Int32>.size))
   }
 }
+
+extension UnixSocket {
+  /// `CMSG_SPACE(sizeof(int))` and `CMSG_LEN(sizeof(int))` on Darwin: a 12-byte `cmsghdr`
+  /// (4-byte aligned) followed by the descriptor.
+  static let controlHeader = MemoryLayout<cmsghdr>.size
+  static let controlLength = controlHeader + MemoryLayout<Int32>.size
+
+  /// Sends `descriptor` over the connected unix stream `socket` with one byte of data
+  /// (`SCM_RIGHTS`). The caller still owns its copy.
+  public static func sendDescriptor(_ descriptor: Int32, over socket: Int32) throws {
+    var byte: UInt8 = 0x2A
+    var control = [UInt8](repeating: 0, count: controlLength)
+    control.withUnsafeMutableBytes { raw in
+      let header = raw.baseAddress!.assumingMemoryBound(to: cmsghdr.self)
+      header.pointee.cmsg_len = socklen_t(controlLength)
+      header.pointee.cmsg_level = SOL_SOCKET
+      header.pointee.cmsg_type = SCM_RIGHTS
+      raw.storeBytes(of: descriptor, toByteOffset: controlHeader, as: Int32.self)
+    }
+    let sent = withUnsafeMutablePointer(to: &byte) { bytePointer in
+      control.withUnsafeMutableBytes { raw in
+        var vector = iovec(iov_base: UnsafeMutableRawPointer(bytePointer), iov_len: 1)
+        return withUnsafeMutablePointer(to: &vector) { vectorPointer in
+          var message = msghdr(
+            msg_name: nil, msg_namelen: 0, msg_iov: vectorPointer, msg_iovlen: 1,
+            msg_control: raw.baseAddress, msg_controllen: socklen_t(controlLength), msg_flags: 0)
+          return sendmsg(socket, &message, 0)
+        }
+      }
+    }
+    guard sent == 1 else { throw SwitchError.system(call: "sendmsg", errno: errno) }
+  }
+
+  /// Receives one descriptor sent by `sendDescriptor`; nil when the peer sent none.
+  public static func receiveDescriptor(from socket: Int32) throws -> Int32? {
+    var byte: UInt8 = 0
+    var control = [UInt8](repeating: 0, count: controlLength + 16)
+    let (received, length) = withUnsafeMutablePointer(to: &byte) { bytePointer in
+      control.withUnsafeMutableBytes { raw in
+        var vector = iovec(iov_base: UnsafeMutableRawPointer(bytePointer), iov_len: 1)
+        return withUnsafeMutablePointer(to: &vector) { vectorPointer in
+          var message = msghdr(
+            msg_name: nil, msg_namelen: 0, msg_iov: vectorPointer, msg_iovlen: 1,
+            msg_control: raw.baseAddress, msg_controllen: socklen_t(raw.count), msg_flags: 0)
+          let count = recvmsg(socket, &message, 0)
+          return (count, Int(message.msg_controllen))
+        }
+      }
+    }
+    guard received >= 0 else { throw SwitchError.system(call: "recvmsg", errno: errno) }
+    guard length >= controlLength else { return nil }
+    return control.withUnsafeBytes { raw in
+      let header = raw.load(as: cmsghdr.self)
+      guard header.cmsg_level == SOL_SOCKET, header.cmsg_type == SCM_RIGHTS else { return nil }
+      return raw.load(fromByteOffset: controlHeader, as: Int32.self)
+    }
+  }
+}

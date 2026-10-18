@@ -741,11 +741,11 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   **Verify:** unit test with three in-process ports: unicast is delivered to the learned port only,
   broadcast to all others; a malformed frame is counted and dropped.
 
-- [ ] **R-901 Segment attachment per engine**
+- [x] **R-901 Segment attachment per engine**
   `net_segment` adds a second NIC: QEMU via `-netdev dgram,local.type=unix,local.path=<port>,
-  remote.type=unix,remote.path=<switch>` [VERIFY on the Homebrew QEMU; fallback: `-netdev
-  socket,mcast=230.0.0.<n>:<port>` for QEMU-only segments with the switch absent, recorded in
-  `docs/FEATURES.md`]; VZ via `VZFileHandleNetworkDeviceAttachment` on a `socketpair` whose other
+  remote.type=unix,remote.path=<switch>` [VERIFY on the Homebrew QEMU: **yes** on QEMU 11.1.2,
+  2026-10-18, two guests pinged through `vmlab-switch`, so the `-netdev socket,mcast` fallback was
+  not built; recorded in `docs/FEATURES.md`]; VZ via `VZFileHandleNetworkDeviceAttachment` on a `socketpair` whose other
   end the runner hands to the switch over `control.sock`. Addresses: segment `n` is `10.n.0.0/24`,
   guests get `.10` upward by join order, set by cloud-init on Linux; macOS guests get a static
   address via `networksetup` in provisioning. `net_segment create|list|destroy`.
@@ -942,7 +942,7 @@ that was `unknown` when this was written (`[VERIFY]`; the item that owns it is n
 | `pause` | Y | Y | Y | Y |
 | `net_nat` | Y | Y | Y | Y |
 | `net_fast` | Y | Y | C `root` or `qemu_vmnet` | C same |
-| `net_segment` | Y (static, R-901) | Y | Y | Y |
+| `net_segment` | Y (static, R-901) | Y (socketpair to vmlab-switch) | Y (-netdev dgram unix, verified on QEMU 11.1) | Y (same) |
 | `net_port_forward` | Y (host-reachable address) | Y (same) | Y (hostfwd) | Y (hostfwd) |
 | `net_none` | Y | Y | Y | Y |
 | `rosetta` | N | C `rosetta_installed` | N | N |
@@ -1070,7 +1070,7 @@ six 4 GB guests with the default reserve; macOS 26.6 → VZ save/restore APIs pr
     serial.log, vz.log, console.log, qemu.log, provision.log, provision.json
     checkpoints.json, checkpoints/<id>/ (VZ state files and disk clones)
     manifests/<id>.json, exec/<job>.log, dumps/, pulled/, screenshots/
-  segments/<name>/             switch.sock, stats.sock, switch.pid, ports/
+  segments/<name>/             segment.json, switch.sock, stats.sock, attach.sock, switch.pid, switch.log, ports/
   fleets/<name>.json
   locks/
 ```

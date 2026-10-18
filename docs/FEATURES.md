@@ -28,7 +28,7 @@ column is what the development host recorded (`docs/dev-host-facts.json`, refres
 | `pause` | Y | Y | Y | Y |  |
 | `net_nat` | Y | Y | Y | Y |  |
 | `net_fast` | Y | Y | C `root` or `qemu_vmnet` | C `root` or `qemu_vmnet` | `qemu_vmnet`: no, 2026-10-18 |
-| `net_segment` | Y (static, R-901) | Y | Y | Y |  |
+| `net_segment` | Y (static, R-901) | Y (socketpair to vmlab-switch) | Y (-netdev dgram unix, verified on QEMU 11.1) | Y (-netdev dgram unix, verified on QEMU 11.1) |  |
 | `net_port_forward` | Y (host-reachable address) | Y (host-reachable address) | Y (hostfwd) | Y (hostfwd) |  |
 | `net_none` | Y | Y | Y | Y |  |
 | `rosetta` | N | C `rosetta_installed` | N | N |  |

@@ -20,11 +20,13 @@ public struct QEMULaunchOptions: Sendable, Hashable {
   /// `net_fast` (R-309): the NIC is `vmnet-shared` (root or the `qemu_vmnet` probe) instead of
   /// user-mode networking. The guest is then reached on its own address; nothing is forwarded.
   public var vmnet: Bool
+  /// The second NIC on a segment (R-901): `-netdev dgram` between its port socket and the switch.
+  public var segment: QEMUSegmentNIC?
 
   public init(
     boot: BootSpec = BootSpec(), firmware: QEMUFirmware? = nil, disk: Bool = true,
     seed: Bool = false, gdbPort: Int? = nil, sshHostPort: Int? = nil,
-    forwards: [PortForward]? = nil, vmnet: Bool = false
+    forwards: [PortForward]? = nil, vmnet: Bool = false, segment: QEMUSegmentNIC? = nil
   ) {
     self.boot = boot
     self.firmware = firmware
@@ -34,6 +36,21 @@ public struct QEMULaunchOptions: Sendable, Hashable {
     self.sshHostPort = sshHostPort
     self.forwards = forwards
     self.vmnet = vmnet
+    self.segment = segment
+  }
+}
+
+/// A guest's NIC on a segment: QEMU binds `portSocket` and sends to the switch's `switchSocket`
+/// (both unix datagram sockets; the switch learns the port from the first frame).
+public struct QEMUSegmentNIC: Sendable, Hashable {
+  public var portSocket: String
+  public var switchSocket: String
+  public var mac: String
+
+  public init(portSocket: String, switchSocket: String, mac: String) {
+    self.portSocket = portSocket
+    self.switchSocket = switchSocket
+    self.mac = mac
   }
 }
 
@@ -156,6 +173,15 @@ public enum QEMUCommandLine {
       }
       args += [
         "-netdev", netdev, "-device", "virtio-net-pci,netdev=net0,mac=\(mac(for: record.id))",
+      ]
+    }
+
+    if let segment = options.segment, record.network.mode != .disabled {
+      args += [
+        "-netdev",
+        "dgram,id=net1,local.type=unix,local.path=\(escape(segment.portSocket)),"
+          + "remote.type=unix,remote.path=\(escape(segment.switchSocket))",
+        "-device", "virtio-net-pci,netdev=net1,mac=\(segment.mac)",
       ]
     }
 

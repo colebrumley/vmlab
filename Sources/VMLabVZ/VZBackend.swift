@@ -65,6 +65,11 @@ public struct VZBackend: Backend {
       dhcpIdentifierMAC: record.network.mode == .disabled
         ? nil : VZRunnerConfig.stableMAC(for: record.id))
     seed.applyTemplate(pulled.template)
+    if let segment = record.segment, record.network.mode != .disabled {
+      seed.segment = SegmentNIC(
+        primaryMAC: VZRunnerConfig.stableMAC(for: record.id), mac: segment.mac,
+        address: segment.address, prefixLength: segment.prefixLength)
+    }
     do {
       try CloudInit.makeSeed(
         seed, directory: dir.appending(path: "seed"), iso: dir.appending(path: "seed.iso"),
@@ -110,7 +115,10 @@ public struct VZBackend: Backend {
     let dir = store.directory(of: record.id)
     let config = try VZRunnerConfig.linux(
       record: record, vmDirectory: dir,
-      seed: FileManager.default.fileExists(atPath: dir.appending(path: "seed.iso").path))
+      seed: FileManager.default.fileExists(atPath: dir.appending(path: "seed.iso").path),
+      segmentAttachSocket: record.segment.map {
+        SegmentStore(home: store.home).attachSocket(of: $0.segment).path
+      })
     let handle = try await launcher.launch(vmDirectory: dir, config: config)
     var runtime = handle.runtime
     if case .nat(let mac?) = config.network.first {

@@ -47,6 +47,18 @@ public struct VZMachineDecisions: Codable, Sendable, Hashable {
     public init(mac: String?) { self.mac = mac }
   }
 
+  /// A `VZVirtioNetworkDeviceConfiguration` on a `VZFileHandleNetworkDeviceAttachment` over a
+  /// datagram `socketpair`; the runner sends the other end to the switch at `attachSocket`.
+  public struct SegmentDevice: Codable, Sendable, Hashable {
+    public var mac: String
+    public var attachSocket: String
+
+    public init(mac: String, attachSocket: String) {
+      self.mac = mac
+      self.attachSocket = attachSocket
+    }
+  }
+
   /// A `VZVirtioConsoleDeviceSerialPortConfiguration` on a `VZFileHandleSerialPortAttachment`
   /// over two pipes the runner owns; it appends guest output to `log`.
   public struct Console: Codable, Sendable, Hashable {
@@ -75,6 +87,8 @@ public struct VZMachineDecisions: Codable, Sendable, Hashable {
   public var bootLoader: BootLoader
   public var storage: [BlockDevice]
   public var network: [NATDevice]
+  /// The segment NIC (R-901), after the NAT NIC; absent off a segment.
+  public var segment: SegmentDevice?
   public var console: Console?
   /// `VZVirtioEntropyDeviceConfiguration` (virtio-rng); always present.
   public var entropy: Bool
@@ -94,16 +108,22 @@ extension VZRunnerConfig {
       case .linuxKernel(let kernel, let initrd, let line):
         .linux(kernel: kernel, initrd: initrd, commandLine: line)
       }
-    let nics = try network.map { network throws(VMLabError) in
-      switch network {
+    func normalized(_ mac: String) throws(VMLabError) -> String {
+      guard let normalized = MACAddress.normalize(mac) else {
+        throw VMLabError.invalidRequest(
+          field: "network.macAddress", reason: "\(mac) is not a MAC address",
+          hint: "Use six colon-separated hex octets.")
+      }
+      return normalized
+    }
+    var nics: [VZMachineDecisions.NATDevice] = []
+    var segment: VZMachineDecisions.SegmentDevice?
+    for nic in network {
+      switch nic {
       case .nat(let mac):
-        guard let mac else { return VZMachineDecisions.NATDevice(mac: nil) }
-        guard let normalized = MACAddress.normalize(mac) else {
-          throw VMLabError.invalidRequest(
-            field: "network.macAddress", reason: "\(mac) is not a MAC address",
-            hint: "Use six colon-separated hex octets.")
-        }
-        return VZMachineDecisions.NATDevice(mac: normalized)
+        nics.append(VZMachineDecisions.NATDevice(mac: try mac.map(normalized)))
+      case .segment(let mac, let socket):
+        segment = VZMachineDecisions.SegmentDevice(mac: try normalized(mac), attachSocket: socket)
       }
     }
     return VZMachineDecisions(
@@ -113,6 +133,7 @@ extension VZRunnerConfig {
       bootLoader: loader,
       storage: disks.map { .init(path: $0.path, readOnly: $0.readOnly) },
       network: nics,
+      segment: segment,
       console: consoleLog.map { .init(log: $0) },
       entropy: true,
       memoryBalloon: memoryBalloon,

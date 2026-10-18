@@ -18,6 +18,8 @@ public actor VMManager {
   public nonisolated let readiness: any GuestReadiness
   /// Runs `ssh-keygen` for a new VM's key pair.
   public nonisolated let keygen: any CommandRunning
+  /// The segments VMs join (R-901) and their switch processes.
+  public nonisolated let segments: SegmentStore
 
   private var busy: Set<String> = []
   private var waiters: [String: [CheckedContinuation<Void, Never>]] = [:]
@@ -25,8 +27,9 @@ public actor VMManager {
   public init(
     store: Store, backends: BackendRegistry = Backends.shared,
     readiness: any GuestReadiness = SSHReadiness(), keygen: any CommandRunning = ProcessRunner(),
-    manifests: (any GuestManifestTaker)? = nil
+    manifests: (any GuestManifestTaker)? = nil, segments: SegmentStore? = nil
   ) {
+    self.segments = segments ?? SegmentStore(home: store.home)
     self.store = store
     self.backends = backends
     self.readiness = readiness
@@ -62,8 +65,12 @@ public actor VMManager {
     new.runtime = nil
     new.checkpoints = []
     new.plan = plan
-    let stored = try store.create(new)
+    var stored = try store.create(new)
     do throws(VMLabError) {
+      if let name = Self.segmentName(of: stored) {
+        let attachment = try segments.join(name, vm: stored)
+        stored = try store.update(id: stored.id) { $0.segment = attachment }
+      }
       try await SSHKeys.generateDetached(
         in: store.directory(of: stored.id), comment: "vmlab-\(stored.id)", runner: keygen)
       try await backend.create(stored, plan: plan)
@@ -71,9 +78,12 @@ public actor VMManager {
     } catch {
       // In a task of its own, which a cancelled caller does not cancel, so the cleanup runs whole.
       let store = store
+      let segments = segments
+      let failed = stored
       await Task {
-        try? await backend.destroy(stored)
-        try? store.remove(id: stored.id)
+        try? await backend.destroy(failed)
+        if let name = Self.segmentName(of: failed) { try? segments.leave(name, vm: failed.id) }
+        try? store.remove(id: failed.id)
       }.value
       throw error
     }
@@ -128,6 +138,7 @@ public actor VMManager {
     var runtime = record.runtime
     switch action {
     case .start:
+      if let segment = record.segment { try await segments.startSwitch(segment.segment) }
       runtime = try await backend.start(record)
       if record.state == .suspended, let started = runtime {
         try await resumeSuspended(record, runtime: started, with: backend)
@@ -140,6 +151,7 @@ public actor VMManager {
     case .destroy:
       if record.state.isLive || record.runtime != nil { try await backend.kill(record) }
       try await backend.destroy(record)
+      if let segment = record.segment { try? segments.leave(segment.segment, vm: record.id) }
       try store.remove(id: record.id)
       return nil
     case .checkpointStop:
@@ -168,6 +180,12 @@ public actor VMManager {
     }
     let target = SSHTarget(record: record, endpoint: endpoint, store: store)
     return await readiness.wait(for: target, timeout: timeout)
+  }
+
+  /// The segment a new VM joins: its request's `network.segment`, unless networking is off.
+  static func segmentName(of record: VMRecord) -> String? {
+    guard record.network.mode != .disabled else { return nil }
+    return record.network.segment
   }
 
   static func noEndpoint(_ id: String) -> String {

@@ -310,3 +310,26 @@ import VMLabCore
     #expect(mac.hasPrefix("52:54:00:") && mac.count == 17)
   }
 }
+
+extension QEMUCommandLineTests {
+  /// R-901: the segment NIC is `-netdev dgram` from the guest's port socket to the switch.
+  @Test func segmentNICIsADgramNetdev() throws {
+    let record = try Self.record("hvf")
+    let options = QEMULaunchOptions(
+      firmware: Self.firmware, gdbPort: 41234, sshHostPort: 2222,
+      segment: QEMUSegmentNIC(
+        portSocket: "/h/segments/lab/ports/\(record.id).sock",
+        switchSocket: "/h/segments/lab/switch.sock", mac: "52:54:5e:01:02:03"))
+    let args = try QEMUCommandLine.arguments(
+      record: record, plan: Self.plan(for: record), layout: Self.layout(record), options: options)
+    let netdev = try #require(
+      args.firstIndex(
+        of:
+          "dgram,id=net1,local.type=unix,local.path=/h/segments/lab/ports/\(record.id).sock,remote.type=unix,remote.path=/h/segments/lab/switch.sock"
+      ))
+    #expect(args[netdev - 1] == "-netdev")
+    #expect(args[netdev + 2] == "virtio-net-pci,netdev=net1,mac=52:54:5e:01:02:03")
+    // After the NAT NIC.
+    #expect(args.firstIndex(of: "-netdev")! < netdev - 1)
+  }
+}

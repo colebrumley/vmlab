@@ -44,6 +44,9 @@ public struct VZRunnerConfig: Codable, Sendable, Hashable {
   public enum Network: Codable, Sendable, Hashable {
     /// `VZNATNetworkDeviceAttachment`; nil MAC means a random locally administered one.
     case nat(macAddress: String?)
+    /// `VZFileHandleNetworkDeviceAttachment` on one end of a datagram `socketpair` whose other
+    /// end the runner hands to the segment's switch over `attachSocket` (R-901).
+    case segment(macAddress: String, attachSocket: String)
   }
 
   public enum Boot: Codable, Sendable, Hashable {
@@ -102,7 +105,8 @@ public struct VZRunnerConfig: Codable, Sendable, Hashable {
   /// NIC with `stableMAC(for:)` unless the network is `none`, the console appended to
   /// `<vm>/console.log`, the balloon, and graphics only when `gui` was granted.
   public static func linux(
-    record: VMRecord, vmDirectory: URL, boot: BootSpec? = nil, seed: Bool = true
+    record: VMRecord, vmDirectory: URL, boot: BootSpec? = nil, seed: Bool = true,
+    segmentAttachSocket: String? = nil
   ) throws(VMLabError) -> VZRunnerConfig {
     let resources = ResourceLimits.resolve(record.resources, for: .linux)
     let loader: Boot
@@ -128,13 +132,17 @@ public struct VZRunnerConfig: Codable, Sendable, Hashable {
     if seed {
       disks.append(Disk(path: vmDirectory.appending(path: "seed.iso").path, readOnly: true))
     }
+    var network: [Network] =
+      record.network.mode == .disabled ? [] : [.nat(macAddress: stableMAC(for: record.id))]
+    if let segment = record.segment, let socket = segmentAttachSocket, !network.isEmpty {
+      network.append(.segment(macAddress: segment.mac, attachSocket: socket))
+    }
     return VZRunnerConfig(
       cpus: resources.cpus ?? 2,
       memoryBytes: UInt64(resources.memoryGB ?? 4) << 30,
       boot: loader,
       disks: disks,
-      network: record.network.mode == .disabled
-        ? [] : [.nat(macAddress: stableMAC(for: record.id))],
+      network: network,
       consoleLog: vmDirectory.appending(path: "console.log").path,
       memoryBalloon: true,
       graphics: record.features.contains(.gui) ? Graphics() : nil)

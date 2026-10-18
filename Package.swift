@@ -45,7 +45,7 @@ let package = Package(
     .executableTarget(
       name: "vmlab-vz",
       dependencies: [
-        "VMLabCore", "VMLabVZ",
+        "VMLabCore", "VMLabVZ", "VMLabSwitch",
         .product(name: "ArgumentParser", package: "swift-argument-parser"),
       ],
       exclude: ["vmlab-vz.entitlements"]

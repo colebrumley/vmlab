@@ -18,6 +18,7 @@ struct LabHome {
   let registry: BackendRegistry
   let manager: VMManager
   let qemu: QEMUBackend
+  let segments: SegmentStore
 
   init(tag: String = "h") throws {
     let n = Self.counterLock.withLock {
@@ -44,7 +45,10 @@ struct LabHome {
           store: store, launcher: VZRunnerLauncher(runnerPath: VZRunnerIntegrationTests.runner),
           leaseTimeout: .seconds(90)))
     }
-    manager = VMManager(store: store, backends: registry)
+    segments = SegmentStore(
+      home: home,
+      switchBinary: VZRunnerIntegrationTests.root.appending(path: ".build/debug/vmlab-switch").path)
+    manager = VMManager(store: store, backends: registry, segments: segments)
   }
 
   static func plan(
@@ -80,6 +84,7 @@ struct LabHome {
       }
       if let pid = record.runtime?.pid, pid > 0 { Darwin.kill(pid, SIGKILL) }
     }
+    for segment in segments.list() { segments.stopSwitch(segment.name) }
     try? FileManager.default.removeItem(at: home)
   }
 }
