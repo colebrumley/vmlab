@@ -390,7 +390,8 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   on a running guest via QMP `snapshot-save` (memory and disk) when the host fact
   `qemu_hvf_live_snapshot` is `yes`, else `wrong_state` with the hint to stop first. The slow probe
   (`doctor --probe`): boot a tiny guest under HVF, `snapshot-save`, `snapshot-load`, confirm the
-  guest resumes (serial responds) [VERIFY]; record the answer. Under TCG live snapshots are always
+  guest resumes (serial responds) [VERIFY: **yes** on QEMU 11.1.2, macOS 26.6.2, 2026-10-18, once
+  daemonized QEMU gets `OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES`]; record the answer. Under TCG live snapshots are always
   on. Restore: `qemu-img snapshot -a` (stopped) or `snapshot-load` (live). Delete: `snapshot -d`.
   **Verify:** integration: stopped checkpoint, write a file in the guest, restore, file gone; the
   probe runs and writes `host-facts.json`; if it says `yes`, a live checkpoint and restore keep an
@@ -406,7 +407,9 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
 - [x] **R-309 vmnet fast networking (conditional)**
   When running as root or `qemu_vmnet` probes `yes`, `net_fast` uses `-netdev vmnet-shared`. The
   probe tries `vmnet-shared` on a throwaway guest and records the answer; everywhere else the
-  feature is `.no("needs root or an entitlement")`.
+  feature is `no`, the reason saying it needs root or the `com.apple.vm.networking` entitlement.
+  Probe on the development host: **no** (QEMU 11.1.2: cannot create vmnet interface, not enough
+  privileges), so `net_fast` on QEMU profiles is off there unless vmlab runs as root.
   **Verify:** command-line snapshot for both cases; the matrix row flips with the fact.
 
 - [x] **R-310 TCG profile for x86_64 and other architectures**
@@ -611,7 +614,8 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   auxiliary storage beside it; `restore(path)`: `restoreMachineStateFrom` on a configuration built
   from the checkpoint's clones. `CheckpointProvider` for VZ: `disk` mode clones the disk of a
   stopped guest; `live` mode uses save/restore. The slow probes `vz_linux_live_snapshot` and
-  `vz_macos_live_snapshot` try one save and restore each on a throwaway guest [VERIFY]; a `no`
+  `vz_macos_live_snapshot` try one save and restore each on a throwaway guest [VERIFY: both
+  **yes** on macOS 26.6.2, 2026-10-18]; a `no`
   turns `checkpoint_live` off for that profile with the reason.
   **Verify:** integration: a live checkpoint of a Linux guest with a running `yes > /dev/null`
   restores with that process still running (`pgrep yes`); the probe writes `host-facts.json`.
@@ -649,7 +653,8 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
 
 - [x] **R-702 GDB under HVF probe**
   The slow probe `qemu_hvf_gdb`: boot a throwaway guest under HVF with `-gdb`, halt, read
-  registers, set a software breakpoint at the current `pc` + 4, continue, expect the stop [VERIFY].
+  registers, set a software breakpoint at the current `pc` + 4, continue, expect the stop [VERIFY:
+  **yes** on QEMU 11.1.2, macOS 26.6.2, 2026-10-18].
   `yes` keeps `gdb` on `qemu-hvf`; `no` turns it off with "GDB under HVF unsupported by this QEMU;
   use arch x86_64 or `prefer: [tcg]`" and the selector then offers `qemu-tcg` for arm64 guests (an
   arm64 TCG guest is legal, only slow).
@@ -839,7 +844,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   **Verify:** unit tests for the path policy and a grep test that no `Process` in the tree is
   given a `/bin/sh -c` with interpolated input.
 
-- [ ] **R-1103 `docs/FEATURES.md` verified column**
+- [x] **R-1103 `docs/FEATURES.md` verified column**
   After the slow probes have run on the dev host, the generated matrix shows the verified state of
   every `[VERIFY]` row; this document's Appendix B is updated to agree (constraint C7).
   **Verify:** `scripts/gen-docs.sh` output has no `unknown` on the dev host; the C7 check passes.
@@ -918,8 +923,11 @@ starts), state (saving and restoring), net, compute.
 
 ## Appendix B — Capability matrix
 
-Y yes; N no (reason in code); C conditional on a host fact (named); ? conditional on a slow probe
-that was `unknown` when this was written (`[VERIFY]`; the item that owns it is named).
+Y yes; N no (reason in code); C conditional on a host fact (named) checked at every server start;
+? conditional on a slow probe (`[VERIFY]`; the item that owns it is named). A `?` stays a `?`
+here because each host runs its own probes and `unknown` counts as no; what the development host
+answered is listed under the table. `Capabilities.swift` is the authority (C7) and
+`CapabilitiesTests` reads this appendix, so a disagreement fails `scripts/check.sh`.
 
 | Feature | vz-macos | vz-linux | qemu-hvf (arm64) | qemu-tcg (any arch) |
 |---|---|---|---|---|
@@ -955,6 +963,13 @@ that was `unknown` when this was written (`[VERIFY]`; the item that owns it is n
 | Performance tier (1 best) | 1 | 1 | 2 | 4 |
 | Energy tier (1 best) | 1 | 1 | 2 | 3 |
 | Startup tier (1 best) | 2 | 1 | 1 | 3 |
+
+Slow probes on the development host (Apple M1 Max, macOS 26.6.2, QEMU 11.1.2), as committed in
+`docs/dev-host-facts.json` and shown in the last column of `docs/FEATURES.md` (R-1103):
+
+- `gdb`: `qemu_hvf_gdb`: yes, 2026-10-18
+- `checkpoint_live`: `vz_macos_live_snapshot`: yes, 2026-10-18; `vz_linux_live_snapshot`: yes, 2026-10-18; `qemu_hvf_live_snapshot`: yes, 2026-10-18
+- `net_fast`: `qemu_vmnet`: no, 2026-10-18
 
 ## Appendix C — MCP tools
 
