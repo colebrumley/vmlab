@@ -110,3 +110,25 @@ func decode(_ data: Data) throws -> (width: Int, height: Int, type: String, topL
     }
   }
 }
+
+/// Rectangle arithmetic on model-supplied corners saturates instead of trapping.
+@Suite struct PixelRectOverflowTests {
+  @Test func extremeCornersDoNotTrap() async {
+    await #expect(processExitsWith: .success) {
+      let wide = PixelRect(corners: -9_000_000_000_000_000_000, 0, 9_000_000_000_000_000_000, 10)
+      let screen = PixelRect(x: 0, y: 0, width: 100, height: 100)
+      _ = wide.intersection(screen)
+      _ = PixelRect(corners: Int.min, Int.min, Int.max, Int.max).intersection(screen)
+      _ = PixelRect(x: Int.max - 1, y: 0, width: 10, height: 10).intersection(screen)
+      _ = screen.intersection(PixelRect(x: Int.max, y: Int.max, width: Int.max, height: Int.max))
+    }
+  }
+
+  @Test func extremeCornersClipToTheScreen() {
+    let screen = PixelRect(x: 0, y: 0, width: 100, height: 100)
+    let wide = PixelRect(corners: -9_000_000_000_000_000_000, 0, 9_000_000_000_000_000_000, 10)
+    #expect(wide.width == Int.max)
+    #expect(wide.intersection(screen) == PixelRect(x: 0, y: 0, width: 100, height: 10))
+    #expect(PixelRect(x: Int.max - 1, y: 0, width: 10, height: 10).intersection(screen).isEmpty)
+  }
+}
