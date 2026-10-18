@@ -71,6 +71,8 @@ extension QEMUBackend {
       try Self.cloneFile(from.disk, to: frozen)
     }
 
+    // APFS clones keep the source's dates; `vmlab gc` spares backing files younger than its grace.
+    try? FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: frozen.path)
     do {
       try FileManager.default.createDirectory(at: to.directory, withIntermediateDirectories: true)
     } catch {

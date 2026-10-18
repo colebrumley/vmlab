@@ -722,7 +722,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   **Verify:** integration: template from a provisioned Debian, create from it, SSH works with the
   child's key and the parent's key is refused.
 
-- [ ] **R-805 Garbage collection**
+- [x] **R-805 Garbage collection**
   `vmlab gc`: removes orphaned runner processes (pid files whose record is gone), dumps and exec
   logs older than 7 days, checkpoints marked `temporary`, unused template backing files; reports
   bytes freed. `vm_lifecycle destroy` refuses when another VM's backing chain depends on this disk

@@ -134,4 +134,19 @@ import VMLabCore
       ["vm": .string("web"), "action": .string("clone")], in: f)
     #expect(unnamed.value["vm"]?["name"] == unnamed.value["vm"]?["id"])
   }
+
+  /// R-805: destroy refuses while a clone's disk reads this one, unless force.
+  @Test func destroyNeedsForceWhileAClonesDiskDependsOnIt() async throws {
+    let f = try Fixture()
+    defer { f.cleanUp() }
+    _ = try await f.create(["autostart": .bool(false)])
+    _ = try await Self.lifecycle(
+      ["vm": .string("web"), "action": .string("clone"), "name": .string("copy")], in: f)
+    let refused = await #expect(throws: VMLabError.self) { try await Self.act("destroy", in: f) }
+    #expect(refused?.code == .invalidRequest)
+    let forced = try await Self.lifecycle(
+      ["vm": .string("web"), "action": .string("destroy"), "force": .bool(true)], in: f)
+    #expect(forced.value["state"] == .string("destroyed"))
+    #expect(forced.warnings.contains { $0.hasPrefix("destroyed with force") })
+  }
 }

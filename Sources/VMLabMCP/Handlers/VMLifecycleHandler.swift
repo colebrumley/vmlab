@@ -22,9 +22,7 @@ struct VMLifecycleHandler: ToolHandler {
     if try arguments.int("timeoutSeconds") != nil {
       warnings.append("timeoutSeconds is not honoured yet; the backend's default applies")
     }
-    if try arguments.bool("force") {
-      warnings.append("force has no effect yet: no VM's disk is backed by another's")
-    }
+    let force = try arguments.bool("force")
 
     let record = try context.store.find(vm)
     let started = ContinuousClock.now
@@ -36,11 +34,13 @@ struct VMLifecycleHandler: ToolHandler {
       warnings += started.warnings
     default:
       let manager = context.manager
-      after = try await context.progress.during(
+      let outcome = try await context.progress.during(
         "\(action.rawValue) \(record.id)", every: context.heartbeat
-      ) { () throws(VMLabError) -> VMRecord? in
-        try await manager.perform(action, on: record.id)
+      ) { () throws(VMLabError) -> VMManager.Outcome in
+        try await manager.run(action, on: record.id, force: force)
       }
+      after = outcome.record
+      warnings += outcome.warnings
     }
     let elapsed = ContinuousClock.now - started
     let ms = (elapsed / .milliseconds(1)).rounded()
