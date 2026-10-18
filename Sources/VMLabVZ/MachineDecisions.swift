@@ -63,11 +63,16 @@ public struct VZMachineDecisions: Codable, Sendable, Hashable {
   }
 
   /// A `VZVirtioConsoleDeviceSerialPortConfiguration` on a `VZFileHandleSerialPortAttachment`
-  /// over two pipes the runner owns; it appends guest output to `log`.
+  /// over two pipes the runner owns; it appends guest output to `log` and bridges both pipes to
+  /// the unix socket `socket` when set (`SerialBridge`, R-602).
   public struct Console: Codable, Sendable, Hashable {
     public var log: String
+    public var socket: String?
 
-    public init(log: String) { self.log = log }
+    public init(log: String, socket: String? = nil) {
+      self.log = log
+      self.socket = socket
+    }
   }
 
   /// A `VZVirtioGraphicsDeviceConfiguration` with one scanout (a `VZMacGraphicsDeviceConfiguration`
@@ -85,11 +90,32 @@ public struct VZMachineDecisions: Codable, Sendable, Hashable {
     }
   }
 
+  /// A `VZVirtioFileSystemDeviceConfiguration`: a `VZSingleDirectoryShare` of `path`, or with
+  /// `rosetta` a `VZLinuxRosettaDirectoryShare` (and no path).
+  public struct FileSystemDevice: Codable, Sendable, Hashable {
+    public var tag: String
+    public var path: String?
+    public var readOnly: Bool
+    public var rosetta: Bool
+
+    public init(tag: String, path: String?, readOnly: Bool, rosetta: Bool = false) {
+      self.tag = tag
+      self.path = path
+      self.readOnly = readOnly
+      self.rosetta = rosetta
+    }
+  }
+
   public var cpus: Int
   /// Rounded down to a whole MiB, then clamped.
   public var memoryBytes: UInt64
   /// `generic` (`VZGenericPlatformConfiguration`) for Linux, `mac` for `.macOS` boot.
   public var platform: String
+  /// The file holding the platform's `VZGenericMachineIdentifier`, created when absent; nil is a
+  /// fresh identifier per machine.
+  public var machineIdentifier: String?
+  /// `isNestedVirtualizationEnabled` on the generic platform (R-609).
+  public var nestedVirtualization: Bool
   public var bootLoader: BootLoader
   public var storage: [BlockDevice]
   public var network: [NATDevice]
@@ -101,6 +127,8 @@ public struct VZMachineDecisions: Codable, Sendable, Hashable {
   /// `VZVirtioTraditionalMemoryBalloonDeviceConfiguration`.
   public var memoryBalloon: Bool
   public var graphics: Graphics?
+  /// virtiofs devices: the shares in order, then Rosetta.
+  public var fileSystems: [FileSystemDevice]
 }
 
 extension VZRunnerConfig {
@@ -140,16 +168,23 @@ extension VZRunnerConfig {
       cpus: min(max(cpus, limits.minCPUs), limits.maxCPUs),
       memoryBytes: min(max(memoryBytes / mib * mib, limits.minMemoryBytes), limits.maxMemoryBytes),
       platform: platform,
+      machineIdentifier: machineIdentifier,
+      nestedVirtualization: nestedVirtualization,
       bootLoader: loader,
       storage: disks.map { .init(path: $0.path, readOnly: $0.readOnly) },
       network: nics,
       segment: segment,
-      console: consoleLog.map { .init(log: $0) },
+      console: consoleLog.map { .init(log: $0, socket: serialSocket) },
       entropy: true,
       memoryBalloon: memoryBalloon,
       graphics: graphics.map {
         .init(width: $0.width, height: $0.height, pixelsPerInch: $0.pixelsPerInch)
-      })
+      },
+      fileSystems: directoryShares.map {
+        .init(tag: $0.tag, path: $0.path, readOnly: $0.readOnly)
+      }
+        + (rosetta
+          ? [.init(tag: VZRunnerConfig.rosettaTag, path: nil, readOnly: true, rosetta: true)] : []))
   }
 }
 

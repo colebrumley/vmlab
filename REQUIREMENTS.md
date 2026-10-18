@@ -559,12 +559,12 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   SSH to the leased IP; with `gui` required, a screenshot through the in-guest VNC server (R-504
   provisioning) shows a desktop.
 
-- [ ] **R-602 Serial on VZ Linux**
+- [x] **R-602 Serial on VZ Linux**
   The runner bridges the console pipes to `<vm>/serial.sock` with the same wire behaviour as
   R-303 so `SerialChannel` is shared; cloud-init sets `console=hvc0` and a getty on it.
   **Verify:** integration: `vm_serial wait "login:"`, `write "root\n"`, and the prompt appears.
 
-- [ ] **R-603 virtiofs shares and Rosetta**
+- [x] **R-603 virtiofs shares and Rosetta**
   `shared_dir` → `VZVirtioFileSystemDeviceConfiguration` with tag `share0`, mounted by cloud-init.
   `rosetta` → `VZLinuxRosettaDirectoryShare` (host fact `rosetta_installed` must be `yes`, else
   the feature is `.no("softwareupdate --install-rosetta")`) plus the binfmt registration lines in
@@ -572,7 +572,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   **Verify:** integration: a host file appears in the guest; an `x86_64` static `hello` binary
   (fixture) runs in the arm64 guest and prints its greeting.
 
-- [ ] **R-604 Direct kernel boot on VZ Linux**
+- [x] **R-604 Direct kernel boot on VZ Linux**
   `.kernel(kernel, initrd?, cmdline)` → `VZLinuxBootLoader` (uncompressed arm64 `Image`; a gzip
   kernel is decompressed on registration). `custom_firmware` and `custom_devices` stay `.no` with
   the reason "Virtualization.framework boots only Apple EFI or a Linux kernel".
@@ -606,7 +606,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   **Verify:** integration: `key cmd+space`, `type "Terminal"`, `key Return`, screenshot contains a
   new window (bounding-box diff non-empty).
 
-- [ ] **R-608 Save and restore on VZ (live checkpoints)**
+- [x] **R-608 Save and restore on VZ (live checkpoints)**
   Runner `save(path)`: pause, `saveMachineStateTo`, APFS-clone the disk (`clonefile(2)`) and the
   auxiliary storage beside it; `restore(path)`: `restoreMachineStateFrom` on a configuration built
   from the checkpoint's clones. `CheckpointProvider` for VZ: `disk` mode clones the disk of a
@@ -616,7 +616,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   **Verify:** integration: a live checkpoint of a Linux guest with a running `yes > /dev/null`
   restores with that process still running (`pgrep yes`); the probe writes `host-facts.json`.
 
-- [ ] **R-609 Nested virtualization (conditional)**
+- [x] **R-609 Nested virtualization (conditional)**
   `nested_virt` → `VZGenericPlatformConfiguration.isNestedVirtualizationEnabled = true` when
   `VZGenericPlatformConfiguration.isNestedVirtualizationSupported`; otherwise `.no("needs an M3 or
   newer and macOS 15")`. On the dev host this is `.no`.

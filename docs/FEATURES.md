@@ -24,7 +24,7 @@ column is what the development host recorded (`docs/dev-host-facts.json`, refres
 | `custom_devices` | N | N | Y | Y |  |
 | `halt_at_start` | N | N | Y | Y |  |
 | `checkpoint_disk` | Y | Y | Y | Y |  |
-| `checkpoint_live` | ? `vz_macos_live_snapshot` (R-608) | ? `vz_linux_live_snapshot` (R-608) | ? `qemu_hvf_live_snapshot` (R-307) | Y | `vz_macos_live_snapshot`: unknown; `vz_linux_live_snapshot`: unknown; `qemu_hvf_live_snapshot`: yes, 2026-10-18 |
+| `checkpoint_live` | ? `vz_macos_live_snapshot` (R-608) | ? `vz_linux_live_snapshot` (R-608) | ? `qemu_hvf_live_snapshot` (R-307) | Y | `vz_macos_live_snapshot`: yes, 2026-10-18; `vz_linux_live_snapshot`: yes, 2026-10-18; `qemu_hvf_live_snapshot`: yes, 2026-10-18 |
 | `pause` | Y | Y | Y | Y |  |
 | `net_nat` | Y | Y | Y | Y |  |
 | `net_fast` | Y | Y | C `root` or `qemu_vmnet` | C `root` or `qemu_vmnet` | `qemu_vmnet`: no, 2026-10-18 |
@@ -58,10 +58,10 @@ column is what the development host recorded (`docs/dev-host-facts.json`, refres
 - `memory_dump` on `vz-macos`: Virtualization.framework has no public API for it.
 - `memory_dump` on `vz-linux`: Virtualization.framework has no public API for it.
 - `direct_kernel_boot` on `vz-macos`: macOS guests boot only from their own disk.
-- `custom_firmware` on `vz-macos`: Virtualization.framework boots its own firmware; no public API replaces it.
-- `custom_firmware` on `vz-linux`: Virtualization.framework boots its own firmware; no public API replaces it.
-- `custom_devices` on `vz-macos`: Virtualization.framework offers a fixed set of public device types.
-- `custom_devices` on `vz-linux`: Virtualization.framework offers a fixed set of public device types.
+- `custom_firmware` on `vz-macos`: Virtualization.framework boots only Apple EFI or a Linux kernel.
+- `custom_firmware` on `vz-linux`: Virtualization.framework boots only Apple EFI or a Linux kernel.
+- `custom_devices` on `vz-macos`: Virtualization.framework boots only Apple EFI or a Linux kernel.
+- `custom_devices` on `vz-linux`: Virtualization.framework boots only Apple EFI or a Linux kernel.
 - `halt_at_start` on `vz-macos`: Virtualization.framework exposes no public GDB stub.
 - `halt_at_start` on `vz-linux`: Virtualization.framework exposes no public GDB stub.
 - `rosetta` on `vz-macos`: Rosetta for Linux is offered only to Linux guests under VZ.

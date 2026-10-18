@@ -46,6 +46,7 @@ import VMLabVZ
       ])
     #expect(decisions.network.map(\.mac) == [VZRunnerConfig.stableMAC(for: "vm-test01")])
     #expect(decisions.console?.log == "/vmlab/vms/vm-test01/console.log")
+    #expect(decisions.console?.socket == "/vmlab/vms/vm-test01/serial.sock")
     #expect(decisions.entropy && decisions.memoryBalloon)
     #expect(decisions.graphics == nil)
   }
@@ -61,6 +62,55 @@ import VMLabVZ
     let desktopOnly = try VZRunnerConfig.linux(
       record: Self.record(features: [.guiDesktop]), vmDirectory: Self.dir)
     #expect(try desktopOnly.decisions(limits: Self.limits).graphics == nil)
+  }
+
+  /// R-603: the share becomes the virtiofs device `share0`; Rosetta only when the plan asked.
+  @Test func sharesAndRosettaAreVirtiofsDevices() throws {
+    var record = Self.record(features: [.execSSH, .serial, .sharedDir, .rosetta])
+    record.share = SharedDirSpec(host: "/Users/me/src", guest: "/src")
+    #expect(
+      try VZRunnerConfig.linux(record: record, vmDirectory: Self.dir).decisions(limits: Self.limits)
+        .fileSystems == [
+          .init(tag: "share0", path: "/Users/me/src", readOnly: false)
+        ])
+    record.plan = Plan(
+      profile: .vzLinux, guest: record.guest, resources: record.resources,
+      features: record.features, requested: [.sharedDir, .rosetta], estimatedStartupSeconds: 30)
+    let decisions = try VZRunnerConfig.linux(record: record, vmDirectory: Self.dir)
+      .decisions(limits: Self.limits)
+    try Self.assertSnapshot(decisions, "decisions-linux-share-rosetta.json")
+    #expect(
+      decisions.fileSystems.last == .init(tag: "rosetta", path: nil, readOnly: true, rosetta: true))
+  }
+
+  /// R-609: nested virtualization only when the plan asked for `nested_virt`.
+  @Test func nestedVirtualizationOnlyWhenRequested() throws {
+    var record = Self.record(features: [.execSSH, .nestedVirt])
+    #expect(
+      !(try VZRunnerConfig.linux(record: record, vmDirectory: Self.dir).decisions(
+        limits: Self.limits
+      ).nestedVirtualization))
+    record.plan = Plan(
+      profile: .vzLinux, guest: record.guest, resources: record.resources,
+      features: record.features, requested: [.nestedVirt], estimatedStartupSeconds: 30)
+    #expect(
+      try VZRunnerConfig.linux(record: record, vmDirectory: Self.dir).decisions(
+        limits: Self.limits
+      ).nestedVirtualization)
+  }
+
+  /// A config written before R-603 (no share keys) still decodes.
+  @Test func olderConfigDecodes() throws {
+    let config = try VZRunnerConfig.linux(record: Self.record(), vmDirectory: Self.dir)
+    let encoder = JSONEncoder()
+    var object = try #require(
+      try JSONSerialization.jsonObject(with: encoder.encode(config)) as? [String: Any])
+    object["directoryShares"] = nil
+    object["rosetta"] = nil
+    object["serialSocket"] = nil
+    let old = try JSONDecoder().decode(
+      VZRunnerConfig.self, from: JSONSerialization.data(withJSONObject: object))
+    #expect(old.directoryShares.isEmpty && !old.rosetta && old.serialSocket == nil)
   }
 
   @Test func kernelBootUsesTheLinuxLoader() throws {

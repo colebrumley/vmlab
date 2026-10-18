@@ -255,4 +255,43 @@ struct Ext4Fixture {
     }
     #expect(bad?.code == .invalidRequest)
   }
+
+  /// R-604: a gzip kernel (`Image.gz`) is stored uncompressed for `VZLinuxBootLoader`.
+  @Test(.enabled(if: FileManager.default.isExecutableFile(atPath: GzipTests.gzip)))
+  func registerKernelDecompressesAGzipKernel() async throws {
+    let home = FileManager.default.temporaryDirectory.appending(path: "vmlab-kernel-\(UUID())")
+    defer { try? FileManager.default.removeItem(at: home) }
+    try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+    let kernel = home.appending(path: "Image.gz")
+    try GzipTests.compressed(GzipTests.payload, name: "Image").write(to: kernel)
+    let files = try await ImageStore(home: home).registerKernel("gz", kernel: kernel)
+    #expect(try Data(contentsOf: files.kernel) == GzipTests.payload)
+  }
+
+  /// A kernel boot without a kernel path takes the image's kernel and initrd; paths are checked.
+  @Test func resolvingBootFillsTheImageKernel() async throws {
+    let home = FileManager.default.temporaryDirectory.appending(path: "vmlab-kernel-\(UUID())")
+    defer { try? FileManager.default.removeItem(at: home) }
+    try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+    let kernel = home.appending(path: "Image")
+    let initrd = home.appending(path: "initrd")
+    try Data("kernel".utf8).write(to: kernel)
+    try Data("initrd".utf8).write(to: initrd)
+    let store = ImageStore(home: home)
+    let files = try await store.registerKernel("k", kernel: kernel, initrd: initrd)
+
+    let boot = try await store.resolvingBoot(
+      BootSpec(mode: .kernel, cmdline: "console=hvc0"), image: "k")
+    #expect(boot.kernel == files.kernel.path && boot.initrd == files.initrd?.path)
+    #expect(boot.cmdline == "console=hvc0")
+    #expect(try await store.resolvingBoot(nil, image: nil) == BootSpec())
+    let noImage = await #expect(throws: VMLabError.self) {
+      try await store.resolvingBoot(BootSpec(mode: .kernel), image: nil)
+    }
+    #expect(noImage?.data["field"] == .string("boot.kernel"))
+    let missing = await #expect(throws: VMLabError.self) {
+      try await store.resolvingBoot(BootSpec(mode: .kernel, kernel: "/no/such/Image"), image: nil)
+    }
+    #expect(missing?.code == .invalidRequest)
+  }
 }

@@ -127,6 +127,8 @@ public struct VZMacBackend: Backend {
         hint: "Destroy it and create it again.",
         data: ["engine": .string("tart"), "vm": .string(record.id)])
     }
+    // A suspended guest comes back from its checkpoint (R-608): a held runner to restore into.
+    if let held = try await runner.startSuspended(record) { return held }
     let clone = TartVMFiles(directory: URL(filePath: path))
     let tartConfig = try TartVMConfig.read(from: clone.directory)
     let config = VZRunnerConfig.macOS(
@@ -220,6 +222,12 @@ public struct VZMacBackend: Backend {
       SSHTarget(record: record, endpoint: $0, store: store)
     }
     return VZRunningVM(
-      id: record.id, profile: profile, features: record.features, handle: handle, ssh: ssh)
+      id: record.id, profile: profile, features: record.features, handle: handle, ssh: ssh,
+      checkpoints: VZCheckpoints(backend: runner, record: record))
+  }
+
+  /// Checkpoints in any state (R-608), through the shared runner plumbing.
+  public func checkpoints(_ record: VMRecord) async throws(VMLabError) -> any CheckpointProvider {
+    VZCheckpoints(backend: runner, record: record)
   }
 }

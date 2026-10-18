@@ -15,6 +15,8 @@ public struct VZRunnerPaths: Sendable, Hashable {
   public var pidFile: URL { vmDirectory.appending(path: "vz.pid") }
   /// The runner's stdout and stderr, appended to across runs.
   public var log: URL { vmDirectory.appending(path: "vz.log") }
+  /// The guest's virtio console as a unix stream socket (R-602), read by `SerialChannel`.
+  public var serialSocket: URL { vmDirectory.appending(path: "serial.sock") }
   /// The `VZRunnerConfig` the runner builds its machine from.
   public var config: URL { vmDirectory.appending(path: "vz-config.json") }
 
@@ -40,6 +42,23 @@ public struct VZRunnerConfig: Codable, Sendable, Hashable {
       self.readOnly = readOnly
     }
   }
+
+  /// A host directory shared over virtiofs (`VZVirtioFileSystemDeviceConfiguration` with a
+  /// `VZSingleDirectoryShare`), mounted in the guest by cloud-init.
+  public struct DirectoryShare: Codable, Sendable, Hashable {
+    public var tag: String
+    public var path: String
+    public var readOnly: Bool
+
+    public init(tag: String, path: String, readOnly: Bool = false) {
+      self.tag = tag
+      self.path = path
+      self.readOnly = readOnly
+    }
+  }
+
+  /// The virtiofs tag of the Rosetta share (`VZLinuxRosettaDirectoryShare`).
+  public static let rosettaTag = "rosetta"
 
   public enum Network: Codable, Sendable, Hashable {
     /// `VZNATNetworkDeviceAttachment`; nil MAC means a random locally administered one.
@@ -82,15 +101,30 @@ public struct VZRunnerConfig: Codable, Sendable, Hashable {
   public var disks: [Disk]
   public var network: [Network]
   /// Where the runner appends the guest's virtio console output, which it reads from the console
-  /// pipe; nil attaches no console. R-602 adds the `serial.sock` bridge on the same pipes.
+  /// pipe; nil attaches no console.
   public var consoleLog: String?
+  /// Where the runner serves the same console as a unix stream socket (`SerialBridge`, R-602);
+  /// nil serves none. Only meaningful with `consoleLog`.
+  public var serialSocket: String?
   public var memoryBalloon: Bool
   public var graphics: Graphics?
+  /// Host directories shared over virtiofs (R-603).
+  public var directoryShares: [DirectoryShare]
+  /// Whether to share Rosetta for Linux with the guest under `rosettaTag` (R-603).
+  public var rosetta: Bool
+  /// Where the `VZGenericMachineIdentifier` is kept (created on first use), so every machine
+  /// built for the VM is the same one: a saved state restores only into its own machine (R-608).
+  public var machineIdentifier: String?
+  /// `VZGenericPlatformConfiguration.isNestedVirtualizationEnabled` (R-609): the guest can run
+  /// KVM. Only on hosts where the framework supports it (M3 or newer, macOS 15).
+  public var nestedVirtualization: Bool
 
   public init(
     cpus: Int, memoryBytes: UInt64, boot: Boot, disks: [Disk],
     network: [Network] = [.nat(macAddress: nil)], consoleLog: String? = nil,
-    memoryBalloon: Bool = true, graphics: Graphics? = nil
+    serialSocket: String? = nil, memoryBalloon: Bool = true, graphics: Graphics? = nil,
+    directoryShares: [DirectoryShare] = [], rosetta: Bool = false,
+    machineIdentifier: String? = nil, nestedVirtualization: Bool = false
   ) {
     self.cpus = cpus
     self.memoryBytes = memoryBytes
@@ -98,8 +132,35 @@ public struct VZRunnerConfig: Codable, Sendable, Hashable {
     self.disks = disks
     self.network = network
     self.consoleLog = consoleLog
+    self.serialSocket = serialSocket
     self.memoryBalloon = memoryBalloon
     self.graphics = graphics
+    self.directoryShares = directoryShares
+    self.rosetta = rosetta
+    self.machineIdentifier = machineIdentifier
+    self.nestedVirtualization = nestedVirtualization
+  }
+
+  enum CodingKeys: String, CodingKey {
+    case cpus, memoryBytes, boot, disks, network, consoleLog, serialSocket, memoryBalloon
+    case graphics, directoryShares, rosetta, machineIdentifier, nestedVirtualization
+  }
+
+  public init(from decoder: any Decoder) throws {
+    let c = try decoder.container(keyedBy: CodingKeys.self)
+    cpus = try c.decode(Int.self, forKey: .cpus)
+    memoryBytes = try c.decode(UInt64.self, forKey: .memoryBytes)
+    boot = try c.decode(Boot.self, forKey: .boot)
+    disks = try c.decode([Disk].self, forKey: .disks)
+    network = try c.decode([Network].self, forKey: .network)
+    consoleLog = try c.decodeIfPresent(String.self, forKey: .consoleLog)
+    serialSocket = try c.decodeIfPresent(String.self, forKey: .serialSocket)
+    memoryBalloon = try c.decode(Bool.self, forKey: .memoryBalloon)
+    graphics = try c.decodeIfPresent(Graphics.self, forKey: .graphics)
+    directoryShares = try c.decodeIfPresent([DirectoryShare].self, forKey: .directoryShares) ?? []
+    rosetta = try c.decodeIfPresent(Bool.self, forKey: .rosetta) ?? false
+    machineIdentifier = try c.decodeIfPresent(String.self, forKey: .machineIdentifier)
+    nestedVirtualization = try c.decodeIfPresent(Bool.self, forKey: .nestedVirtualization) ?? false
   }
 
   /// The guest command line for `.kernel` boot without one: the root on the first virtio disk and
@@ -110,7 +171,8 @@ public struct VZRunnerConfig: Codable, Sendable, Hashable {
   /// for the rest), `.disk` boot (default) through EFI with `<vm>/efi-vars.bin` or `.kernel` boot
   /// through `VZLinuxBootLoader`, `<vm>/disk.raw`, `<vm>/seed.iso` read-only when `seed`, one NAT
   /// NIC with `stableMAC(for:)` unless the network is `none`, the console appended to
-  /// `<vm>/console.log`, the balloon, and graphics only when `gui` was granted.
+  /// `<vm>/console.log` and served on `<vm>/serial.sock`, the record's share (`SharedDirSpec.of`) over virtiofs
+  /// as `share0`, Rosetta when the plan asked for `rosetta`, the balloon, and graphics only when `gui` was granted.
   public static func linux(
     record: VMRecord, vmDirectory: URL, boot: BootSpec? = nil, seed: Bool = true,
     segmentAttachSocket: String? = nil
@@ -151,8 +213,25 @@ public struct VZRunnerConfig: Codable, Sendable, Hashable {
       disks: disks,
       network: network,
       consoleLog: vmDirectory.appending(path: "console.log").path,
+      serialSocket: vmDirectory.appending(path: "serial.sock").path,
       memoryBalloon: true,
-      graphics: record.features.contains(.gui) ? Graphics() : nil)
+      graphics: record.features.contains(.gui) ? Graphics() : nil,
+      directoryShares: SharedDirSpec.of(record).map {
+        [
+          DirectoryShare(
+            tag: SharedDirSpec.tag, path: $0.hostDirectory(vmDirectory: vmDirectory).path)
+        ]
+      } ?? [],
+      rosetta: wantsRosetta(record),
+      machineIdentifier: vmDirectory.appending(path: "machine-id.bin").path,
+      nestedVirtualization: record.features.contains(.nestedVirt)
+        && (record.plan?.requested.contains(.nestedVirt) ?? false))
+  }
+
+  /// Whether the guest gets the Rosetta share: only when the request asked for `rosetta`
+  /// (required or preferred), not merely because the profile offers it.
+  public static func wantsRosetta(_ record: VMRecord) -> Bool {
+    record.features.contains(.rosetta) && (record.plan?.requested.contains(.rosetta) ?? false)
   }
 
   /// A locally administered unicast MAC derived from the VM's id, so the guest keeps its NIC (and

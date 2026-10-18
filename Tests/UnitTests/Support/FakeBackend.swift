@@ -44,6 +44,10 @@ final class FakeBackend: Backend {
     state.withLock { $0.failures[operation] = error }
   }
 
+  /// The serial channel `attach` hands out (default: a fresh, unconnected one per call).
+  private let serialOverride = Mutex<SerialChannel?>(nil)
+  func useSerial(_ channel: SerialChannel) { serialOverride.withLock { $0 = channel } }
+
   /// Makes `create` sleep, so a test can cancel it.
   func delayCreate(_ duration: Duration) { state.withLock { $0.delay = duration } }
 
@@ -110,7 +114,7 @@ final class FakeBackend: Backend {
     let dir = store.directory(of: record.id)
     return FakeRunningVM(
       id: record.id, profile: record.profile, features: record.features,
-      serial: SerialChannel(vmDirectory: dir),
+      serial: serialOverride.withLock { $0 } ?? SerialChannel(vmDirectory: dir),
       display: DisplayEndpoint(
         address: .unixSocket(path: dir.appending(path: "vnc.sock").path), hostSide: true),
       gdb: GDBEndpoint(host: "127.0.0.1", port: 1234),

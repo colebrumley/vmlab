@@ -5,13 +5,15 @@ import VMLabVZ
 @preconcurrency import Virtualization
 
 /// The guest's virtio console: two pipes the runner owns. Guest output is appended to the console
-/// log; the input pipe's write end stays open for R-602's `serial.sock` bridge.
+/// log and, when a socket is configured, bridged to `serial.sock` (`SerialBridge`, R-602), whose
+/// clients' bytes are written to the guest's input pipe.
 final class ConsolePipes: Sendable {
   let guestInput = Pipe()
   let guestOutput = Pipe()
   let log: FileHandle
+  let bridge: SerialBridge?
 
-  init(log path: String) throws(VMLabError) {
+  init(log path: String, socket: String?) throws(VMLabError) {
     let fd = open(path, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0o644)
     guard fd >= 0 else {
       throw VMLabError(
@@ -20,6 +22,19 @@ final class ConsolePipes: Sendable {
         hint: "Check that the VM directory is writable.")
     }
     log = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+    if let socket {
+      do {
+        bridge = try SerialBridge(
+          path: socket, guestInput: guestInput.fileHandleForWriting.fileDescriptor)
+      } catch {
+        throw VMLabError(
+          code: .internal, message: "Cannot listen on \(socket): \(error)",
+          hint: "Check the VM directory and that the path is under 104 bytes.",
+          data: ["socket": .string(socket)])
+      }
+    } else {
+      bridge = nil
+    }
   }
 
   var attachment: VZFileHandleSerialPortAttachment {
@@ -28,15 +43,18 @@ final class ConsolePipes: Sendable {
       fileHandleForWriting: guestOutput.fileHandleForWriting)
   }
 
-  /// Starts copying guest output to the log.
+  /// Starts copying guest output to the log and the bridge, and accepting bridge clients.
   func start() {
     let log = log
+    let bridge = bridge
+    bridge?.start()
     guestOutput.fileHandleForReading.readabilityHandler = { handle in
       let data = handle.availableData
       if data.isEmpty {
         handle.readabilityHandler = nil
       } else {
         try? log.write(contentsOf: data)
+        bridge?.guestOutput([UInt8](data))
       }
     }
   }
@@ -65,7 +83,22 @@ enum ConfigurationBuilder {
     let machine = VZVirtualMachineConfiguration()
     machine.cpuCount = plan.cpus
     machine.memorySize = plan.memoryBytes
-    machine.platform = VZGenericPlatformConfiguration()
+    let platform = VZGenericPlatformConfiguration()
+    if let path = plan.machineIdentifier {
+      platform.machineIdentifier = try machineIdentifier(at: URL(filePath: path))
+    }
+    if plan.nestedVirtualization {
+      guard VZGenericPlatformConfiguration.isNestedVirtualizationSupported else {
+        throw VMLabError(
+          code: .capabilityMissing,
+          message: "This host cannot give VZ guests nested virtualization",
+          hint: "Nested virtualization needs an M3 or newer and macOS 15; recreate the VM "
+            + "without nested_virt.",
+          data: ["feature": .string("nested_virt")])
+      }
+      platform.isNestedVirtualizationEnabled = true
+    }
+    machine.platform = platform
 
     switch plan.bootLoader {
     case .macOS(let model, let identifier, let auxiliary):
@@ -121,11 +154,31 @@ enum ConfigurationBuilder {
 
     var pipes: ConsolePipes? = nil
     if let console = plan.console {
-      let console = try ConsolePipes(log: console.log)
+      let console = try ConsolePipes(log: console.log, socket: console.socket)
       let port = VZVirtioConsoleDeviceSerialPortConfiguration()
       port.attachment = console.attachment
       machine.serialPorts = [port]
       pipes = console
+    }
+    machine.directorySharingDevices = try plan.fileSystems.map { fs throws(VMLabError) in
+      let device = VZVirtioFileSystemDeviceConfiguration(tag: fs.tag)
+      if fs.rosetta {
+        guard VZLinuxRosettaDirectoryShare.availability == .installed else {
+          throw VMLabError(
+            code: .hostMissingTool, message: "Rosetta for Linux is not installed on this host",
+            hint: "Run softwareupdate --install-rosetta, then start the VM again.",
+            data: ["tool": .string("rosetta")])
+        }
+        do {
+          device.share = try VZLinuxRosettaDirectoryShare()
+        } catch {
+          throw engineError("Cannot share Rosetta", error)
+        }
+      } else {
+        device.share = VZSingleDirectoryShare(
+          directory: VZSharedDirectory(url: URL(filePath: fs.path ?? "/"), readOnly: fs.readOnly))
+      }
+      return device
     }
     if plan.entropy { machine.entropyDevices = [VZVirtioEntropyDeviceConfiguration()] }
     if plan.memoryBalloon {
@@ -202,6 +255,20 @@ enum ConfigurationBuilder {
       code: .engineError, message: "Cannot attach to the segment switch: \(why)",
       hint: "Check that the segment's vmlab-switch runs (net_segment list).",
       data: ["engine": .string("vmlab-switch"), "raw": .string(segment.attachSocket)])
+  }
+
+  /// The identifier stored at `url`, or a new one written there.
+  static func machineIdentifier(at url: URL) throws(VMLabError) -> VZGenericMachineIdentifier {
+    if let data = try? Data(contentsOf: url),
+      let stored = VZGenericMachineIdentifier(dataRepresentation: data)
+    {
+      return stored
+    }
+    let fresh = VZGenericMachineIdentifier()
+    do { try fresh.dataRepresentation.write(to: url, options: .atomic) } catch {
+      throw engineError("Cannot write the machine identifier \(url.path)", error)
+    }
+    return fresh
   }
 
   /// A `VZMacPlatformConfiguration` from a Tart clone's hardware model, machine identifier (base64
