@@ -117,7 +117,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   and that `Sources/VMLabMCP` and `Sources/vmlab` import no backend module directly (only Core and
   the `Backends` registry in Core). Test passes on the tree.
 
-- [ ] **R-002 Process scripts and skills**
+- [x] **R-002 Process scripts and skills**
   Adapt `scripts/board.mjs`, `scripts/tidy.mjs` and `scripts/review.mjs` from the owner's repository
   at `~/Documents/lib/new-world/scripts/` (same owner, same process), replacing the `npm run` names
   with `scripts/*.sh` and dropping the public-repo word guard. Copy and adapt the `plan`, `build`,
