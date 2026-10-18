@@ -646,7 +646,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   **Verify:** integration on `qemu-tcg` x86_64: halt at start, read `rip`, set a breakpoint at the
   kernel entry from the extracted `System.map` (R-305), continue, `wait` stops there.
 
-- [ ] **R-702 GDB under HVF probe**
+- [x] **R-702 GDB under HVF probe**
   The slow probe `qemu_hvf_gdb`: boot a throwaway guest under HVF with `-gdb`, halt, read
   registers, set a software breakpoint at the current `pc` + 4, continue, expect the stop [VERIFY].
   `yes` keeps `gdb` on `qemu-hvf`; `no` turns it off with "GDB under HVF unsupported by this QEMU;

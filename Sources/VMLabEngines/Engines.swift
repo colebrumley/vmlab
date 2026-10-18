@@ -11,12 +11,14 @@ public enum Engines {
   public static let profiles: [Profile] = [.qemuHVF, .qemuTCG, .vzLinux]
 
   /// Registers QEMU for `qemu-hvf` and `qemu-tcg` and VZ for `vz-linux`, all on `store`, and the
-  /// GDB client as the connector of `vm_debug`'s sessions.
+  /// GDB client as the connector of `vm_debug`'s sessions, plus the slow probes the engines own
+  /// (`qemu_hvf_gdb`, R-702).
   public static func registerAll(
     store: Store, into registry: BackendRegistry = Backends.shared,
-    debug: DebugSessions = .shared
+    debug: DebugSessions = .shared, probes: SlowProbeRegistry = SlowProbeRunners.shared
   ) {
     debug.register(GDBDebugConnector())
+    probes.register(HVFGDBProbe())
     registry.register(QEMUBackend(profile: .qemuHVF, store: store))
     registry.register(QEMUBackend(profile: .qemuTCG, store: store))
     registry.register(VZBackend(store: store))

@@ -166,7 +166,12 @@ go to stderr. Built: `facts`, `doctor`, `plan`, `create` (the `plan` flags plus 
 **`VMLabEngines`** (library). The engine wiring, and the only module that imports both Core and the
 backends for that purpose: `Engines.registerAll(store:into:)` registers `QEMUBackend` for `qemu-hvf`
 and `qemu-tcg` and `VZBackend` for `vz-linux` in `Backends.shared` (or a given `BackendRegistry`),
-and `GDBDebugConnector` as the connector of `DebugSessions.shared`.
+and `GDBDebugConnector` as the connector of `DebugSessions.shared`, and the slow probes it owns in
+`SlowProbeRunners.shared`: `HVFGDBProbe` (`qemu_hvf_gdb`, R-702) starts a diskless, firmware-less
+arm64 `virt` machine under HVF halted with `-gdb`, writes a `nop; nop; b` loop at 0x40000000,
+points `pc` at it, continues, halts, reads the registers, sets a software breakpoint at `pc + 4`
+and expects the stop there (`unknown` without QEMU or HVF; a `no` makes `gdb` on `qemu-hvf` refuse
+with `SlowProbe.noReason`, and arm64 guests that need gdb go to `qemu-tcg`).
 `vmlab` calls it once in `main`, before any command runs, so `serve` and every tool subcommand can
 create and start guests. `vz-macos` joins `Engines.profiles` when `VZBackend` runs macOS guests.
 `BoundariesTests` checks that it imports only Core, QEMU, VZ and GDB and that no library imports it.

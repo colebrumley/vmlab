@@ -70,7 +70,9 @@ let package = Package(
     ),
     .testTarget(
       name: "IntegrationTests",
-      dependencies: ["VMLabCore", "VMLabQEMU", "VMLabVZ", "VMLabRFB", "VMLabGDB", "VMLabMCP"]
+      dependencies: [
+        "VMLabCore", "VMLabQEMU", "VMLabVZ", "VMLabRFB", "VMLabGDB", "VMLabMCP", "VMLabEngines",
+      ]
     ),
   ]
 )
