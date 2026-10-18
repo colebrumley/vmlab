@@ -52,6 +52,15 @@ when `user` is not the login user; at the deadline the channel ends the local `s
 connection runs `RemoteShell.kill` (TERM, then KILL, of the group), and the refusal is `timeout`
 with the partial output. `ExecOutput` keeps each stream inline up to 64 KB, else its first 16 KB
 and last 48 KB around a marker, with the whole output moved to `<vm>/exec/<job>.log`.
+`ExecJobs.swift` (R-402) is the process-wide actor of background jobs (`ExecJobs.shared`): a job
+(`ExecJob`, kept in `<vm>/exec/<job>.json` with its read offset and status) runs in the guest under
+`nohup` in its own process group, output to `/tmp/vmlab-exec-<uid>/<job>/out`, status to `rc`
+(`RemoteShell.background`). A reader (`RemoteShell.follow`: `tail -c +<n> -f` until `rc` exists,
+replacing any reader an earlier server left) appends to `<vm>/exec/<job>.log` (`O_APPEND`); when
+it reports the status, `RemoteShell.collect` fetches what it had not passed on and removes the
+guest's files. `read` returns up to 64 KB of log past the offset (on a UTF-8 boundary), starting a
+reader when this process has none, which is how a job survives a server restart; `wait` polls;
+`kill` runs `RemoteShell.kill` (status 143). `stopReaders()` drops this process's readers.
 `HostProcess` runs one host subprocess asynchronously (stdin bytes, output to file handles, a
 deadline that sends `SIGTERM` then `SIGKILL`, cancellation likewise).
 `Capabilities` is the Appendix B matrix: `Capabilities.entry(feature, on: profile)` gives the unresolved cell (`Availability.yes`, `.no(reason)` or `.conditional(Condition)`, where a `Condition` names a fast fact such as `root` or a `SlowProbe`, plus the note and the item that verifies a `?`), and `capabilities(of:host:allowUnverified:)` resolves every cell to yes or no against `HostFacts` (an `unknown` probe is no unless `allowUnverified`); `unverifiedProbes` says which probes a plan reports as unverified, and `supports(_:on:)` is the guest OS and arch filter.
@@ -164,7 +173,9 @@ start unless `autostart: false`; all or nothing: a cancelled or failed call dest
 `ssh_unreachable` warning comes from `VMManager.Outcome`), `vm_exec` (R-401: validates the
 request into an `ExecRequest`, picks the channel by `via` (`Channel.execSSH`, `.execAgent`,
 `.exec`) on `VMManager.attach`, runs it under a heartbeat and returns `exitCode`, `stdout`,
-`stderr`, `durationMs`, `truncated`, `logPath`) and `images` (list/pull/remove). Long calls (R-205) go through `Handlers/LongOperation.swift`: an image pull and
+`stderr`, `durationMs`, `truncated`, `logPath`; `background: true` starts an `ExecJobs` job over
+the VM's `SSHExecChannel` and returns `{ job }`), `vm_job` (read/wait/kill: `output`, `finished`,
+`exitCode`, `more`, `logPath`) and `images` (list/pull/remove). Long calls (R-205) go through `Handlers/LongOperation.swift`: an image pull and
 a start under `StartGate.withStart`, each wrapped in `ToolProgress.during`, which reports a step
 when the work begins and a heartbeat every `ToolContext.heartbeat` (5 s) until it ends; a
 cancelled task becomes `timeout` with `data.cancelled: true`. `VMLabMCP.version` is the package version.
@@ -187,8 +198,8 @@ it turns its flags into the tool's JSON arguments and calls the same `ToolHandle
 to stderr (the Appendix D object with `--json`) with exit status 1; a long call's progress messages
 go to stderr. Built: `facts`, `doctor`, `plan`, `create` (the `plan` flags plus `--name`,
 `--no-start`), `list`, `inspect`, `logs`, `start`, `stop`, `kill`, `pause`, `resume`, `reset`,
-`destroy`, `exec` (`Sources/vmlab/ExecCommands.swift`: stdout to stdout, stderr and a non-zero
-status to stderr), `images pull|list|remove`, `serve`, `--version`. It bootstraps logging and hands off to Core and `VMLabMCP`.
+`destroy`, `exec` and `job` (`Sources/vmlab/ExecCommands.swift`: stdout to stdout, stderr and a
+non-zero status to stderr), `images pull|list|remove`, `serve`, `--version`. It bootstraps logging and hands off to Core and `VMLabMCP`.
 
 **`VMLabEngines`** (library). The engine wiring, and the only module that imports both Core and the
 backends for that purpose: `Engines.registerAll(store:into:)` registers `QEMUBackend` for `qemu-hvf`

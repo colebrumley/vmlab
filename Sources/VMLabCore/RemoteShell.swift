@@ -73,6 +73,56 @@ public enum RemoteShell {
     exit 0
     """
 
+  /// The stderr line a reader ends with once the job's status exists.
+  public static let exitMarker = "vmlab-exit="
+  /// The stderr line of a reader that found no job directory.
+  public static let missingMarker = "vmlab-missing"
+
+  /// What a background job's `nohup` runs (`$1` is the job directory): the prepared command in
+  /// its own group, then its status to `rc` (written whole, by rename).
+  static let backgroundRunner = """
+    d=$1
+    if command -v setsid >/dev/null 2>&1; then
+      setsid -w /bin/sh -c 'echo $$ > "$0/pgid"; . "$0/cmd.sh"' "$d"
+    else
+      perl -e 'setpgrp(0, 0); exec @ARGV' /bin/sh -c 'echo $$ > "$0/pgid"; . "$0/cmd.sh"' "$d"
+    fi
+    echo $? > "$d/rc.tmp" && mv "$d/rc.tmp" "$d/rc"
+    """
+
+  /// Starts a background job (`$2` the prepared command, `$3` the runner) under `nohup` with
+  /// output to `out`, and says `vmlab-started`.
+  static let background = """
+    \(jobDirectory)
+    mkdir -p "$d" && chmod 700 "$d" || exit 125
+    printf '%s\\n' "$2" > "$d/cmd.sh" && printf '%s\\n' "$3" > "$d/run.sh" || exit 125
+    nohup /bin/sh "$d/run.sh" "$d" > "$d/out" 2>&1 < /dev/null &
+    echo vmlab-started
+    """
+
+  /// Streams `out` from byte `$2` (0-based) until `rc` exists, then prints the status on stderr.
+  /// A reader left by an earlier server (its pids in `reader`) is ended first, so one stream
+  /// feeds the local log.
+  static let follow = """
+    \(jobDirectory)
+    [ -d "$d" ] || { echo \(missingMarker) >&2; exit 3; }
+    [ -f "$d/reader" ] && kill $(cat "$d/reader") 2>/dev/null
+    tail -c +$(($2 + 1)) -f "$d/out" &
+    t=$!
+    echo "$$ $t" > "$d/reader"
+    while [ ! -f "$d/rc" ]; do sleep 1; done
+    kill $t 2>/dev/null
+    wait $t 2>/dev/null
+    echo "\(exitMarker)$(cat "$d/rc")" >&2
+    """
+
+  /// The rest of `out` from byte `$2`, then the job's files are removed.
+  static let collect = """
+    \(jobDirectory)
+    [ -f "$d/out" ] && tail -c +$(($2 + 1)) "$d/out"
+    rm -rf "$d"
+    """
+
   /// The remote command line: `script` run by `/bin/sh` with the job id and `extra` arguments,
   /// under `sudo -n -u <user> -H` when `user` is not the login user.
   static func command(
@@ -89,6 +139,27 @@ public enum RemoteShell {
   public static func foreground(_ request: ExecRequest, job: String, loginUser: String) -> String {
     command(
       foreground, job: job, extra: [prepared(request)], user: request.user, loginUser: loginUser)
+  }
+
+  /// The ssh remote command that starts `request` in the background as job `job`.
+  public static func background(_ request: ExecRequest, job: String, loginUser: String) -> String {
+    command(
+      background, job: job, extra: [prepared(request), backgroundRunner], user: request.user,
+      loginUser: loginUser)
+  }
+
+  /// The ssh remote command of a background job's reader, from byte `offset` of its output.
+  public static func follow(job: String, offset: UInt64, user: String?, loginUser: String)
+    -> String
+  {
+    command(follow, job: job, extra: [String(offset)], user: user, loginUser: loginUser)
+  }
+
+  /// The ssh remote command that prints a finished job's output from `offset` and removes it.
+  public static func collect(job: String, offset: UInt64, user: String?, loginUser: String)
+    -> String
+  {
+    command(collect, job: job, extra: [String(offset)], user: user, loginUser: loginUser)
   }
 
   /// The ssh remote command that kills job `job`'s process group.

@@ -89,4 +89,65 @@ import VMLabQEMU
     }
     await guest.shutdown()
   }
+
+  /// R-402 Verify (integration): a background loop is read incrementally and finishes with exit
+  /// 0; its reader is dropped midway (as a server restart would) and a fresh one resumes.
+  @Test(.enabled(if: integrationEnabled), .timeLimit(.minutes(5)))
+  func backgroundJobOnDebian() async throws {
+    let guest = try await QEMUGuest.boot(features: Self.features)
+    let registry = BackendRegistry()
+    registry.register(guest.backend)
+    let context = ToolContext(home: guest.home, backends: registry)
+    func call(_ tool: String, _ arguments: [String: JSONValue]) async throws(VMLabError)
+      -> JSONValue
+    {
+      var arguments = arguments
+      arguments["vm"] = .string(guest.record.id)
+      return try await ToolHandlers.call(tool, arguments: .object(arguments), context: context)
+        .value
+    }
+    do {
+      let started = try await call(
+        "vm_exec",
+        [
+          "command": .string("for i in $(seq 1 5); do echo $i; sleep 1; done"),
+          "background": .bool(true),
+        ])
+      let job = try #require(started["job"]?.stringValue)
+      var output = ""
+      var reads = 0
+      var finished = false
+      var exitCode: JSONValue?
+      var dropped = false
+      let deadline = ContinuousClock.now + .seconds(60)
+      while !finished, ContinuousClock.now < deadline {
+        let read = try await call("vm_job", ["job": .string(job), "action": .string("read")])
+        let text = read["output"]?.stringValue ?? ""
+        if !text.isEmpty { reads += 1 }
+        output += text
+        finished = read["finished"] == .bool(true)
+        exitCode = read["exitCode"]
+        if reads == 1, !dropped {
+          await ExecJobs.shared.stopReaders()
+          dropped = true
+        }
+        try await Task.sleep(for: .milliseconds(500))
+      }
+      #expect(finished)
+      #expect(exitCode == .number(0))
+      #expect(output == "1\n2\n3\n4\n5\n", "\(output)")
+      #expect(reads >= 2)
+
+      let slow = try await call(
+        "vm_exec", ["command": .string("sleep 300"), "background": .bool(true)])
+      let slowJob = try #require(slow["job"]?.stringValue)
+      let killed = try await call("vm_job", ["job": .string(slowJob), "action": .string("kill")])
+      #expect(killed["finished"] == .bool(true))
+      #expect(killed["exitCode"] == .number(143))
+    } catch {
+      await guest.shutdown()
+      throw error
+    }
+    await guest.shutdown()
+  }
 }

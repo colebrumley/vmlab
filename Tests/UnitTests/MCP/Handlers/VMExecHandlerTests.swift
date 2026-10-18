@@ -70,4 +70,44 @@ import VMLabCore
       #expect(error?.data["field"] == .string(field), "\(arguments)")
     }
   }
+
+  @Test func backgroundNeedsAnSSHChannel() async throws {
+    let f = try Fixture()
+    defer { f.cleanUp() }
+    _ = try await f.create()
+    // The fake backend's exec channel is not SSH.
+    let error = await #expect(throws: VMLabError.self) {
+      try await Self.exec(["command": .string("sleep 1"), "background": .bool(true)], in: f)
+    }
+    #expect(error?.code == .guestUnreachable)
+    let stdin = await #expect(throws: VMLabError.self) {
+      try await Self.exec(
+        ["command": .string("cat"), "background": .bool(true), "stdin": .string("x")], in: f)
+    }
+    #expect(stdin?.data["field"] == .string("stdin"))
+  }
+
+  @Test func vmJobChecksItsArguments() async throws {
+    let f = try Fixture()
+    defer { f.cleanUp() }
+    _ = try await f.create()
+    let cases: [([String: JSONValue], String)] = [
+      (["job": .string("../x"), "action": .string("read")], "job"),
+      (["job": .string("j-0123456789ab"), "action": .string("tail")], "action"),
+      (
+        [
+          "job": .string("j-0123456789ab"), "action": .string("wait"), "timeoutSeconds": .number(0),
+        ],
+        "timeoutSeconds"
+      ),
+    ]
+    for (arguments, field) in cases {
+      var arguments = arguments
+      arguments["vm"] = .string("web")
+      let error = await #expect(throws: VMLabError.self) {
+        try await ToolHandlers.call("vm_job", arguments: .object(arguments), context: f.context)
+      }
+      #expect(error?.data["field"] == .string(field))
+    }
+  }
 }

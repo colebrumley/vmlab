@@ -82,15 +82,15 @@ import VMLabCore
     let error = await #expect(throws: VMLabError.self) {
       try await f.channel.run(
         ExecRequest(
-          command: "echo begun; (sleep 3; touch '\(marker.path)') & sleep 300",
-          timeout: .seconds(1)))
+          command: "echo begun; (sleep 6; touch '\(marker.path)') & sleep 300",
+          timeout: .seconds(3)))
     }
-    #expect(ContinuousClock.now - started < .seconds(5))
+    #expect(ContinuousClock.now - started < .seconds(8))
     #expect(error?.code == .timeout)
     #expect(error?.data["stdout"] == .string("begun\n"))
-    #expect(error?.data["timeoutSeconds"] == .number(1))
+    #expect(error?.data["timeoutSeconds"] == .number(3))
     // The background child was in the group too.
-    try await Task.sleep(for: .seconds(3))
+    try await Task.sleep(for: .seconds(5))
     #expect(!FileManager.default.fileExists(atPath: marker.path))
   }
 

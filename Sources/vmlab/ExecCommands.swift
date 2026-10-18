@@ -58,3 +58,36 @@ struct ExecCommand: ToolCommand {
     return out
   }
 }
+
+/// `vmlab job`: the vm_job tool.
+struct JobCommand: ToolCommand {
+  static let configuration = CommandConfiguration(
+    commandName: "job",
+    abstract: "Read, wait for or kill a background command (the vm_job tool).")
+  static let toolName = "vm_job"
+
+  @Argument(help: "The VM's id or name.") var vm: String
+  @Argument(help: "The job id vmlab exec --background printed.") var job: String
+  @Argument(help: "read, wait or kill.") var action: String
+  @Option(help: "wait: the longest to block, in seconds (default 60).") var timeoutSeconds: Int?
+  @Flag(help: "Print the result object as JSON.") var json = false
+
+  func arguments() throws -> JSONValue {
+    var object: [String: JSONValue] = [
+      "vm": .string(vm), "job": .string(job), "action": .string(action),
+    ]
+    if let timeoutSeconds { object["timeoutSeconds"] = .number(Double(timeoutSeconds)) }
+    return .object(object)
+  }
+
+  /// The new output; whether the job finished goes to stderr.
+  func render(_ result: ToolResult) -> String {
+    let status =
+      result.value["finished"] == .bool(true)
+      ? "finished, exit \(Int(result.value["exitCode"]?.numberValue ?? -1))" : "running"
+    FileHandle.standardError.write(Data("job \(job): \(status)\n".utf8))
+    var out = result.value["output"]?.stringValue ?? ""
+    if out.hasSuffix("\n") { out.removeLast() }
+    return out
+  }
+}

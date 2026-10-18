@@ -14,12 +14,24 @@ struct VMExecHandler: ToolHandler {
   {
     let request = try Self.request(arguments)
     let record = try context.store.find(try arguments.string("vm") ?? "")
-    if try arguments.bool("background") {
-      throw VMLabError.invalidRequest(
-        field: "background", reason: "background jobs are not built yet (R-402)",
-        hint: "Run the command in the foreground with a larger timeoutSeconds.")
-    }
     let vm = try await context.manager.attach(record.id)
+    if try arguments.bool("background") {
+      guard request.stdin == nil else {
+        throw VMLabError.invalidRequest(
+          field: "stdin", reason: "a background job takes no stdin",
+          hint: "Write the input to a file in the guest first, or run in the foreground.")
+      }
+      guard request.via != .agent else {
+        throw VMLabError.invalidRequest(
+          field: "via", reason: "background jobs run over SSH",
+          hint: "Use via: ssh or auto with background: true.")
+      }
+      let job = try await ExecJobs.shared.start(request, on: try Self.sshChannel(of: vm))
+      return ToolResult([
+        "vm": .object(["id": .string(record.id), "name": .string(record.name)]),
+        "job": .string(job.id),
+      ])
+    }
     let channel = try Self.channel(of: vm, via: request.via)
     let result = try await context.progress.during(
       "running a command in \(record.id)", every: context.heartbeat
@@ -81,6 +93,18 @@ struct VMExecHandler: ToolHandler {
       command: command, stdin: try arguments.string("stdin").map { Data($0.utf8) },
       timeout: .seconds(seconds), cwd: try arguments.string("cwd"), env: env, user: user,
       via: via)
+  }
+
+  /// The VM's SSH channel, which background jobs need: `capability_missing` without `exec_ssh`,
+  /// `guest_unreachable` when the backend offers no SSH for it.
+  static func sshChannel(of vm: any RunningVM) throws(VMLabError) -> SSHExecChannel {
+    guard let ssh = try vm.channel(.execSSH) as? SSHExecChannel else {
+      throw VMLabError(
+        code: .guestUnreachable, message: "VM \(vm.id) offers no SSH channel for background jobs",
+        hint: "Check that the guest has networking; vm_inspect shows its endpoints.",
+        data: ["vm": .string(vm.id), "tried": .array([.string("ssh")])])
+    }
+    return ssh
   }
 
   /// The channel `via` names, refused with `capability_missing` when the plan did not grant it.

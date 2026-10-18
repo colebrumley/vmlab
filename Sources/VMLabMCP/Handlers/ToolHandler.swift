@@ -155,7 +155,8 @@ public protocol ToolHandler: Sendable {
 public enum ToolHandlers {
   public static let all: [any ToolHandler] = [
     HostFactsHandler(), HostDoctorHandler(), VMPlanHandler(), VMCreateHandler(), VMListHandler(),
-    VMInspectHandler(), VMLifecycleHandler(), VMExecHandler(), VMLogsHandler(), ImagesHandler(),
+    VMInspectHandler(), VMLifecycleHandler(), VMExecHandler(), VMJobHandler(), VMLogsHandler(),
+    ImagesHandler(),
   ]
 
   private static let byName: [String: any ToolHandler] = Dictionary(

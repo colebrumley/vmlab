@@ -449,7 +449,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   **Verify:** integration on Debian: exit codes, stderr separation, a 200 KB output is truncated
   with the log path present, `sleep 300` with `timeout: 2` returns within 5 s.
 
-- [ ] **R-402 Background jobs**
+- [x] **R-402 Background jobs**
   `vm_exec` with `background: true` returns a job id at once; the remote runs under `nohup` with
   output to `<vm>/exec/<job>.log` streamed back by a reader. `vm_job read` returns new output since
   the last read and whether it finished; `wait(timeout)`; `kill`. Jobs survive a server restart
