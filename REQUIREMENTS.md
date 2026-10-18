@@ -599,7 +599,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   **Verify:** integration: after create, `vm_exec "sw_vers"` works with the key and a screenshot
   through the guest's VNC is non-blank.
 
-- [ ] **R-607 GUI on macOS guests**
+- [x] **R-607 GUI on macOS guests**
   `DisplayEndpoint` for `vz-macos` is the guest's Screen Sharing (`hostSide: false`), RFB security
   type VNC with the password from R-606. `vm_computer` works end to end; `key` maps `cmd` to
   `Super_L` and the result notes that.

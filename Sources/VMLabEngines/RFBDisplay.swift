@@ -28,6 +28,8 @@ public actor RFBDisplaySession: DisplaySession {
   public let endpoint: DisplayEndpoint
   let firstFrameTimeout: Duration
   private var client: RFBClient?
+  /// When the current connection was made.
+  private var connectedAt = ContinuousClock.now
   private var cache = ScreenshotCache()
 
   public init(endpoint: DisplayEndpoint, firstFrameTimeout: Duration = .seconds(10)) {
@@ -54,11 +56,41 @@ public actor RFBDisplaySession: DisplaySession {
       fresh = try await RFBClient.connect(Self.rfbEndpoint(endpoint), password: try password())
       await fresh.start()
       try await fresh.waitForUpdateCount(1, timeout: firstFrameTimeout)
+      // macOS Screen Sharing answers the first request with an all-black frame and sends the
+      // screen a moment later; give a uniform first frame a few more updates to fill in.
+      var updates = await fresh.updateCount
+      let clock = ContinuousClock()
+      let deadline = clock.now.advanced(by: Self.uniformFrameGrace)
+      while Self.isUniform(await fresh.framebuffer.pixels), clock.now < deadline {
+        updates += 1
+        try? await fresh.waitForUpdateCount(updates, timeout: .milliseconds(500))
+      }
     } catch {
       throw Self.map(error, endpoint: endpoint)
     }
     client = fresh
+    connectedAt = .now
+    inputReady = nil
     return fresh
+  }
+
+  /// The pause between key events: macOS Screen Sharing drops a stroke whose press and release
+  /// arrive in one burst (QEMU's VNC does not mind).
+  static let keyHold = Duration.milliseconds(20)
+
+  /// How long a new connection waits for a uniform first frame to change.
+  static let uniformFrameGrace = Duration.seconds(3)
+
+  /// Whether every sampled pixel of 32-bit `pixels` has the same colour.
+  static func isUniform(_ pixels: [UInt8]) -> Bool {
+    guard pixels.count >= 4 else { return true }
+    let first = (pixels[0], pixels[1], pixels[2])
+    var index = 0
+    while index + 2 < pixels.count {
+      if (pixels[index], pixels[index + 1], pixels[index + 2]) != first { return false }
+      index += 4 * 31
+    }
+    return true
   }
 
   private func run<T: Sendable>(_ body: (RFBClient) async throws -> T) async throws(VMLabError)
@@ -99,7 +131,27 @@ public actor RFBDisplaySession: DisplaySession {
       }, unchanged: shot.unchanged)
   }
 
+  /// When input may be sent on the current connection: macOS Screen Sharing ignores key events
+  /// for a moment after a viewer connects ("ignore key event" in its log).
+  private var inputReady: ContinuousClock.Instant?
+
+  /// The quiet period after connecting to macOS Screen Sharing before input is sent.
+  static let screenSharingWarmup = Duration.seconds(3)
+  static let screenSharingVersion = "RFB 003.889"
+
+  /// Waits out the warm-up of a fresh Screen Sharing connection.
+  private func awaitInputReady() async throws(VMLabError) {
+    let client = try await reconnectIfNeeded()
+    if inputReady == nil {
+      let warmup =
+        client.serverVersion == Self.screenSharingVersion ? Self.screenSharingWarmup : .zero
+      inputReady = connectedAt.advanced(by: warmup)
+    }
+    if let inputReady, inputReady > .now { try? await Task.sleep(until: inputReady) }
+  }
+
   public func pointer(x: Int, y: Int, buttons: DisplayButtons) async throws(VMLabError) {
+    try await awaitInputReady()
     try await run {
       try await $0.pointer(x: x, y: y, buttons: PointerButtons(rawValue: buttons.rawValue))
     }
@@ -112,11 +164,13 @@ public actor RFBDisplaySession: DisplaySession {
     } catch {
       throw Self.map(error, endpoint: endpoint)
     }
-    try await run { try await $0.press(parsed) }
+    try await awaitInputReady()
+    try await run { try await $0.press(parsed, hold: Self.keyHold) }
   }
 
   public func type(_ text: String) async throws(VMLabError) {
-    try await run { try await $0.type(text) }
+    try await awaitInputReady()
+    try await run { try await $0.type(text, gap: Self.keyHold, hold: Self.keyHold) }
   }
 
   public func close() async {

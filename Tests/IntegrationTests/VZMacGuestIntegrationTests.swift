@@ -1,8 +1,11 @@
 import Foundation
 import Testing
 import VMLabCore
+import VMLabEngines
 import VMLabRFB
 import VMLabVZ
+
+@testable import VMLabMCP
 
 /// R-605 to R-607 Verify (integration): a `tart clone` of the pulled `macos-base` image boots in
 /// our own runner. Needs `tart`, the image pulled into `~/.vmlab/images` (`vmlab images pull
@@ -106,6 +109,10 @@ import VMLabVZ
     await guest.teardown()
   }
 
+  static func point(_ x: Int, _ y: Int) -> JSONValue {
+    .array([.number(Double(x)), .number(Double(y))])
+  }
+
   static func keySSH(_ guest: Guest, host: String, command: String) -> CommandOutput? {
     ProcessRunner().run(
       "/usr/bin/ssh",
@@ -158,6 +165,87 @@ import VMLabVZ
         to: URL(filePath: NSTemporaryDirectory()).appending(path: "vmlab-macos-r606.png"))
       await client.close()
       #expect(colours > 4, "the Screen Sharing frame is blank (\(colours) colours)")
+    } catch {
+      await guest.teardown()
+      throw error
+    }
+    await guest.teardown()
+  }
+
+  /// R-607: `vm_computer` drives the guest's Screen Sharing end to end: `key cmd+space` (noted as
+  /// Super_L), `type "Terminal"`, `key Return`, and the screen then shows a new window (the
+  /// bounding box of the change against the screenshot before is non-empty and window-sized).
+  @Test(.enabled(if: ready && hostHasRoom()), .timeLimit(.minutes(12)))
+  func vmComputerOpensTerminalThroughSpotlight() async throws {
+    let guest = try await Self.makeGuest(features: [.execSSH, .gui, .guiDesktop], suffix: "g")
+    do {
+      let started = try #require(try await guest.manager.perform(.start, on: guest.record.id))
+      let ip = try #require(started.runtime?.ip)
+      // The image restores a Terminal window at login; quit it so the new one is new.
+      _ = Self.keySSH(guest, host: ip, command: "pkill -x Terminal")
+      try await Task.sleep(for: .seconds(5))
+
+      var context = ToolContext(
+        home: guest.home,
+        displays: DisplaySessions(connectors: DisplayConnectorRegistry(RFBDisplayConnector())))
+      context.progress = .none
+      func computer(_ arguments: [String: JSONValue]) async throws -> ToolResult {
+        var arguments = arguments
+        arguments["vm"] = .string(guest.record.id)
+        return try await ToolHandlers.call(
+          "vm_computer", arguments: .object(arguments), context: context)
+      }
+      let debug = ProcessInfo.processInfo.environment["VMLAB_DEBUG_DIR"].map { URL(filePath: $0) }
+      func save(_ result: ToolResult, _ name: String) {
+        if let debug, let image = result.images.first {
+          try? image.data.write(to: debug.appending(path: name))
+        }
+      }
+
+      let before = try await computer(["action": .string("screenshot")])
+      save(before, "macos-0-before.png")
+      #expect(before.images.count == 1)
+      let spotlight = try await computer([
+        "action": .string("key"), "text": .string("cmd+space"), "settleMs": .number(1500),
+      ])
+      save(spotlight, "macos-1-spotlight.png")
+      #expect(spotlight.warnings.contains(Computer.commandNote))
+      // A fresh image greets the first Spotlight with an introduction that takes the keyboard
+      // until its Continue button is clicked. Click where it sits, close Spotlight, and open it
+      // again (without the introduction the click just lands on the desktop).
+      _ = try await computer([
+        "action": .string("left_click"), "coordinate": Self.point(512, 490),
+        "settleMs": .number(1500),
+      ])
+      _ = try await computer([
+        "action": .string("key"), "text": .string("Escape"), "settleMs": .number(1000),
+      ])
+      let again = try await computer([
+        "action": .string("key"), "text": .string("cmd+space"), "settleMs": .number(1500),
+      ])
+      save(again, "macos-1b-spotlight.png")
+      let typed = try await computer([
+        "action": .string("type"), "text": .string("Terminal"), "settleMs": .number(1500),
+      ])
+      save(typed, "macos-2-typed.png")
+      let opened = try await computer([
+        "action": .string("key"), "text": .string("Return"), "settleMs": .number(5000),
+      ])
+      save(opened, "macos-3-opened.png")
+
+      let diff = try await computer([
+        "action": .string("screenshot"), "diffFrom": before.value["id"] ?? .null,
+      ])
+      save(diff, "macos-4-diff.png")
+      #expect(diff.value["unchanged"] == .bool(false))
+      let region = try #require(diff.value["changedRegion"])
+      let width = region["width"]?.numberValue ?? 0
+      let height = region["height"]?.numberValue ?? 0
+      #expect(width > 200 && height > 150, "changed region \(region)")
+      // And the guest agrees: Terminal runs again, as the frontmost app.
+      let front = Self.keySSH(
+        guest, host: ip, command: "lsappinfo info -only name `lsappinfo front`")
+      #expect(front?.output.contains("Terminal") == true, "front app: \(front?.output ?? "none")")
     } catch {
       await guest.teardown()
       throw error

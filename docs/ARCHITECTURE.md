@@ -165,7 +165,10 @@ is known and `<vm>/provisioned` is absent: over `PasswordSSH` with the image log
 sshd, appends `<vm>/id_ed25519.pub` (made at create by `VMManager`, R-400) to `~/.ssh/authorized_keys`,
 sets the hostname with `scutil` (through `sudo -S`, the password on stdin), and when a GUI feature was
 granted sets the legacy VNC password from `<vm>/vnc.pass` (eight letters and digits, made at
-create) with ARD's `kickstart`, enables Screen Sharing and checks that port 5900 answers RFB. Steps
+create) with ARD's `kickstart`, sets `VNCAlwaysStartOnConsole` (without it macOS 26 shows a
+password-only VNC viewer a lock screen of its own instead of the logged-in console), enables and
+restarts Screen Sharing and checks that port 5900 answers RFB. The display is then the guest's
+Screen Sharing (`DisplayEndpoint.forVM`, `hostSide: false`, R-607). Steps
 go to `<vm>/provision.log`; a failure is `provision_failed` naming the step, and the runner is
 killed. Password authentication stays enabled.
 
@@ -178,7 +181,9 @@ requests keeps a `Framebuffer` current; `snapshot()` returns a `CGImage` and `Fr
 encodes PNG with ImageIO. Input (`RFBInput.swift`, `Keysym.swift`): `pointer(x:y:buttons:)` with a
 `PointerButtons` mask, `key(_:down:)`, `press(_:)` for a `KeyChord` parsed from `cmd+shift+4`-style
 text (`cmd` is `Super_L`), and `type(_:gap:)`, which strikes each character with Shift where a US
-layout needs it, 10 ms apart. Screenshots (`ScreenshotEncoder.swift`, `ScreenshotCache.swift`):
+layout needs it, 10 ms apart; with a `hold`, `press` and `type` send each key event on its own,
+`hold` apart (macOS Screen Sharing drops strokes whose press and release arrive together).
+`serverVersion` is the server's ProtocolVersion (`RFB 003.889` is Screen Sharing). Screenshots (`ScreenshotEncoder.swift`, `ScreenshotCache.swift`):
 `ScreenshotEncoder` crops a `Framebuffer` to a `PixelRect` region, scales its long edge to `maxEdge`
 (default 1280, never upscaling) and encodes PNG or JPEG with a quality; `ScreenshotCache`, one per VM
 held by its owner, keeps the last 20 frames LZFSE-compressed under ids so a later capture with
@@ -226,10 +231,11 @@ the VM's `SSHExecChannel` and returns `{ job }`), `vm_job` (read/wait/kill: `out
 `exitCode`, `more`, `logPath`), `images`
 (list/pull/remove), `vm_computer` (`Handlers/VMComputerHandler.swift`, R-502: resolves the VM's
 `DisplayEndpoint`, gets its session from `ToolContext.displays`, and maps the computer-use actions
-onto pointer, key and type events; clicks move first, double and triple clicks repeat 60 ms apart,
+onto pointer, key and type events; clicks move first and hold the button 30 ms, double and triple clicks repeat 60 ms apart,
 drags hold the left button over eight steps, scroll strikes wheel buttons; coordinates are checked
 against the screen and, with `scaled: true`, mapped through the last screenshot as origin +
-pixel / scale; every acting action sleeps `settleMs` and returns a fresh screenshot), `vm_introspect` (an `IntrospectionQuery` to the attached VM's `introspection`
+pixel / scale; every acting action sleeps `settleMs` and returns a fresh screenshot; on `vz-macos`
+a `key` chord with `cmd` adds the warning that it went out as `Super_L`, R-607), `vm_introspect` (an `IntrospectionQuery` to the attached VM's `introspection`
 channel; `raw` takes exactly one of `qmp`/`hmp`; returns `{ query, json | text }`) and
 `vm_memory_dump` (the `memory_dump` channel writes to `<vm>/dumps/<UTC time>-0x<addr>-<size>.raw`
 or `<UTC time>.elf`; a range over 256 MB without `confirm: true` is `confirm_required` with
@@ -261,16 +267,18 @@ non-zero status to stderr), `images pull|list|remove`, `computer <vm> <action>` 
 
 **`VMLabEngines`** (library). The engine wiring, and the only module that imports both Core and the
 backends for that purpose: `Engines.registerAll(store:into:displays:)` registers `QEMUBackend` for `qemu-hvf`
-and `qemu-tcg` and `VZBackend` for `vz-linux` in `Backends.shared` (or a given `BackendRegistry`),
+and `qemu-tcg`, `VZBackend` for `vz-linux` and `VZMacBackend` for `vz-macos` in `Backends.shared` (or a given `BackendRegistry`),
 and `RFBDisplayConnector` in `Displays.shared`. `RFBDisplay.swift` is Core's `DisplaySession` over
 `VMLabRFB`: `RFBDisplaySession` (an actor) connects with the endpoint's password file, waits for the
-first frame, keeps the VM's `ScreenshotCache` across reconnects (a dropped connection is reopened on
+first frame (and up to 3 s more while it is one colour: Screen Sharing opens with a black frame),
+sends keys with a 20 ms hold, waits 3 s after connecting to Screen Sharing before the first input
+(it ignores key events while a viewer settles in), keeps the VM's `ScreenshotCache` across reconnects (a dropped connection is reopened on
 the next call) and maps `RFBError` to Appendix D codes (bad requests and key names
 `invalid_request`, unreachable or refused displays `guest_unreachable`, protocol trouble
 `engine_error`).
 `vmlab` calls it once in `main`, before any command runs, so `serve` and every tool subcommand can
 create and start guests; `Engines.registerProbes(into:)` likewise fills `SlowProbeRunners.shared`
-with the engines' slow probes (`VMLabQEMU.probeRunners`). `vz-macos` joins `Engines.profiles` when `VZBackend` runs macOS guests.
+with the engines' slow probes (`VMLabQEMU.probeRunners`).
 `BoundariesTests` checks that it imports only Core, QEMU, VZ and RFB and that no library imports it.
 
 **`vmlab-vz`** (executable). The VZ runner: one process per Virtualization.framework guest, so a

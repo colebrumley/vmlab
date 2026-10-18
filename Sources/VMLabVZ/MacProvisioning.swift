@@ -3,7 +3,9 @@ import VMLabCore
 
 /// First boot of a `vz-macos` guest (R-606), over SSH with the image's password: install the VM's
 /// public key, set the hostname, and when `gui` was granted turn on Screen Sharing with the legacy
-/// VNC password from `<vm>/vnc.pass` (and check that port 5900 answers RFB). Every step is logged
+/// VNC password from `<vm>/vnc.pass`, sending VNC viewers straight to the console session
+/// (`VNCAlwaysStartOnConsole`; otherwise macOS 26 shows a password-only viewer a lock screen of its
+/// own), and check that port 5900 answers RFB. Every step is logged
 /// to `<vm>/provision.log`; success writes `<vm>/provisioned`, so later starts skip it. Password
 /// authentication stays on (the images are disposable).
 public struct MacProvisioner: Sendable {
@@ -73,9 +75,11 @@ public struct MacProvisioner: Sendable {
           "screen_sharing",
           "sudo -S -p '' /bin/sh -c '\(Self.kickstart) -configure -clientopts -setvnclegacy "
             + "-vnclegacy yes -setvncpw -vncpw \(vncPassword) && "
+            + "defaults write /Library/Preferences/com.apple.RemoteManagement.plist "
+            + "VNCAlwaysStartOnConsole -bool true && "
             + "launchctl enable system/com.apple.screensharing && "
             + "(launchctl bootstrap system /System/Library/LaunchDaemons/com.apple.screensharing.plist"
-            + " 2>/dev/null; true)'",
+            + " 2>/dev/null; true) && launchctl kickstart -k system/com.apple.screensharing'",
           sudoInput
         ))
     }
