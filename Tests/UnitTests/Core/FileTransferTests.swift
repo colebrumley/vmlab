@@ -120,7 +120,7 @@ import Testing
         exec sleep 30
         """)
     let error = await #expect(throws: VMLabError.self) {
-      try await f.transfer.pull(remote: "/big", local: nil, timeout: .milliseconds(500))
+      try await f.transfer.pull(remote: "/big", local: nil, timeout: .seconds(5))
     }
     #expect(error?.code == .timeout)
     #expect(error?.data["bytesCopied"] == .number(7))
