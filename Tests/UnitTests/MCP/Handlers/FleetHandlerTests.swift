@@ -231,6 +231,12 @@ import VMLabCore
     #expect(f.context.manager.segments.list().isEmpty)
   }
 
+  /// CX-20: a large-image fleet's confirm_required can be answered: the schema takes confirm.
+  @Test func schemaTakesConfirm() {
+    #expect(ToolSpec.fleet.inputSchema["properties"]?["confirm"]?["type"] == .string("boolean"))
+    #expect(ToolSpec.fleet.errors.contains(.confirmRequired))
+  }
+
   @Test func netSegmentCreateListDestroy() async throws {
     let f = try Fixture()
     defer { f.cleanUp() }

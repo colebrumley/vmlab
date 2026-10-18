@@ -511,7 +511,7 @@ list: { segments: [ { name, subnet, members } ] }
 
 Run several identical VMs as a group. create makes count members named <name>-1 to <name>-n from one plan of requirements (or image, a template), joins them to segment (auto makes one) and waits for SSH on each; some members may fail and are listed with their error. status reports each member; list shows fleets; exec runs command on every member, or on members, in parallel, with vm_exec's options, and returns each member's result and allSucceeded; destroy removes the fleet and its VMs, keeping (and listing in failed) any member it could not destroy, such as one whose disk backs another VM.
 
-**Errors:** `invalid_request`, `unsatisfiable`, `unverified_capability`, `limit_macos_guests`, `limit_memory`, `image_not_found`, `vm_not_found`, `timeout`, `wrong_state`
+**Errors:** `invalid_request`, `unsatisfiable`, `unverified_capability`, `limit_macos_guests`, `limit_memory`, `image_not_found`, `confirm_required`, `vm_not_found`, `timeout`, `wrong_state`
 
 **Input**
 
@@ -520,6 +520,7 @@ Run several identical VMs as a group. create makes count members named <name>-1 
 | `action` | `create` \| `list` \| `status` \| `exec` \| `destroy` | yes | What to do. |
 | `allowUnverified` | boolean, default `false` |  | Treat features whose slow probe has not run on this host as available, instead of failing with unverified_capability. |
 | `command` | string |  | exec: the command, as for vm_exec. |
+| `confirm` | boolean, default `false` |  | create: allow a large image pull the server asks to confirm. |
 | `count` | integer, ≥ 1 |  | create: how many members. |
 | `cwd` | string |  | exec: working directory in each guest. |
 | `env` | object |  | exec: extra environment variables. |
