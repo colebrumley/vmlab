@@ -1,8 +1,9 @@
 import VMLabCore
 
-/// `vm_inspect`: the record, the plan it was created from (null for a record older than the
-/// plan field), its resolved features, the runtime endpoints and the last 20 events, so a model
-/// can rediscover what a VM has after a context reset. Segments and panics join when Phases 9 and 3 record them.
+/// `vm_inspect`: the record, the plan it was created from (null for a record older than the plan
+/// field), its resolved features, the runtime endpoints, the last 20 events and the latest panic
+/// (R-304; null when none), so a model can rediscover a VM after a context reset. Segments join
+/// when Phase 9 records them.
 struct VMInspectHandler: ToolHandler {
   static let eventCount = 20
 
@@ -15,9 +16,11 @@ struct VMInspectHandler: ToolHandler {
     var warnings: [String] = []
     let log = EventLog(vmDirectory: context.store.directory(of: record.id))
     var events: [VMEvent] = []
+    var panic: VMEvent?
     do {
       let contents = try await log.read()
       events = Array(contents.events.suffix(Self.eventCount))
+      panic = contents.events.last(where: EventLog.isPanic)
       if !contents.skippedLines.isEmpty {
         warnings.append(
           "events.jsonl has \(contents.skippedLines.count) malformed line(s), skipped")
@@ -25,6 +28,7 @@ struct VMInspectHandler: ToolHandler {
     } catch {
       warnings.append("events.jsonl could not be read: \(error)")
     }
+    let panicValue: JSONValue = if let panic { try JSONValue(encoding: panic) } else { .null }
     return ToolResult(
       [
         "vm": .object(["id": .string(record.id), "name": .string(record.name)]),
@@ -35,6 +39,7 @@ struct VMInspectHandler: ToolHandler {
         "endpoints": .object(Self.endpoints(record.runtime)),
         "segments": .array([]),
         "events": try JSONValue(encoding: events),
+        "panic": panicValue,
       ], warnings: warnings)
   }
 

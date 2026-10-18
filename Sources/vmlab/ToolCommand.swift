@@ -326,6 +326,35 @@ struct InspectCommand: ToolCommand {
         "\(event["ts"]?.stringValue ?? "") \(event["kind"]?.stringValue ?? "") "
           + (event["message"]?.stringValue ?? ""))
     }
+    if let panic = v["panic"], panic != .null {
+      lines.append(
+        "latest panic: \(panic["ts"]?.stringValue ?? "") \(panic["message"]?.stringValue ?? "")")
+    }
     return lines.joined(separator: "\n")
+  }
+}
+
+// MARK: logs
+
+struct LogsCommand: ToolCommand {
+  static let configuration = CommandConfiguration(
+    commandName: "logs",
+    abstract: "Show a VM's event, serial and provision logs (the vm_logs tool).")
+  static let toolName = "vm_logs"
+
+  @Argument(help: "The VM's id or name.") var vm: String
+  @Option(help: "events, serial, provision or all.") var source: String?
+  @Option(help: "Only the last N lines of each log.") var tail: Int?
+  @Flag(help: "Print the result object as JSON.") var json = false
+
+  func arguments() throws -> JSONValue {
+    var object: [String: JSONValue] = ["vm": .string(vm)]
+    if let source { object["source"] = .string(source) }
+    if let tail { object["tail"] = .number(Double(tail)) }
+    return .object(object)
+  }
+
+  func render(_ result: ToolResult) -> String {
+    (result.value["lines"]?.arrayValue ?? []).compactMap(\.stringValue).joined(separator: "\n")
   }
 }

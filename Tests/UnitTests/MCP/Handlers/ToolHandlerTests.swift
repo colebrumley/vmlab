@@ -52,7 +52,7 @@ import VMLabMCP
   @Test func registryHoldsBuiltToolsInCatalogOrder() {
     #expect(
       ToolHandlers.specs.map(\.name) == [
-        "host_facts", "host_doctor", "vm_plan", "vm_list", "vm_inspect",
+        "host_facts", "host_doctor", "vm_plan", "vm_list", "vm_inspect", "vm_logs",
       ])
     for handler in ToolHandlers.all {
       #expect(ToolCatalog.spec(named: handler.spec.name) == handler.spec)
@@ -188,8 +188,58 @@ import VMLabMCP
     #expect(inspect.value["endpoints"]?["ssh"] == .string("127.0.0.1:2222"))
     #expect(inspect.value["endpoints"]?["serial"] == .string("/tmp/s.sock"))
     #expect(inspect.value["features"] == .array([.string("exec_ssh"), .string("serial")]))
+    #expect(inspect.value["panic"] == .null)
 
     let missing = await Self.refusal("vm_inspect", .object(["vm": .string("nope")]), in: context)
+    #expect(missing?.code == .vmNotFound)
+  }
+
+  @Test func logsListPanicsAndInspectSurfacesTheLatest() async throws {
+    let context = try Self.context()
+    defer { try? FileManager.default.removeItem(at: context.home) }
+    let record = try context.store.create(Self.record("web"))
+    let directory = context.store.directory(of: record.id)
+    let log = EventLog(vmDirectory: directory)
+    try await log.append(.lifecycle, "started")
+    let detector = PanicDetector(log: log)
+    detector.observe(
+      SerialLine(
+        text: "[ 2.5] Kernel panic - not syncing: Attempted to kill init!", start: 812, end: 870))
+    await detector.finish()
+    try await log.append(.lifecycle, "stopped")
+    try Data("login: root\r\nPassword:\nKernel panic - not syncing: Attempted to kill init!\n".utf8)
+      .write(to: directory.appending(path: "serial.log"))
+
+    let inspect = try await Self.call("vm_inspect", .object(["vm": .string("web")]), in: context)
+    #expect(inspect.value["panic"]?["kind"] == .string("panic"))
+    #expect(inspect.value["panic"]?["data"]?["offset"] == .number(812))
+
+    let events = try await Self.call(
+      "vm_logs", .object(["vm": .string("web"), "source": .string("events")]), in: context)
+    let lines = events.value["lines"]?.arrayValue?.compactMap(\.stringValue) ?? []
+    #expect(lines.count == 3)
+    #expect(lines[1].contains("critical panic: [ 2.5] Kernel panic - not syncing"))
+    #expect(lines[1].contains("\"offset\":812"))
+
+    let serial = try await Self.call(
+      "vm_logs", .object(["vm": .string("web"), "source": .string("serial"), "tail": .number(2)]),
+      in: context)
+    #expect(
+      serial.value["lines"]
+        == .array([
+          .string("Password:"), .string("Kernel panic - not syncing: Attempted to kill init!"),
+        ]))
+
+    let all = try await Self.call("vm_logs", .object(["vm": .string("web")]), in: context)
+    let allLines = all.value["lines"]?.arrayValue?.compactMap(\.stringValue) ?? []
+    #expect(allLines.count == 6)
+    #expect(allLines.first?.hasPrefix("[events] ") == true)
+    #expect(allLines.last == "[serial] Kernel panic - not syncing: Attempted to kill init!")
+
+    let badTail = await Self.refusal(
+      "vm_logs", .object(["vm": .string("web"), "tail": .number(0)]), in: context)
+    #expect(badTail?.code == .invalidRequest)
+    let missing = await Self.refusal("vm_logs", .object(["vm": .string("nope")]), in: context)
     #expect(missing?.code == .vmNotFound)
   }
 
