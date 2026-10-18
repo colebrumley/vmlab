@@ -589,7 +589,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   **Verify:** unit test parses a fixture `config.json`; integration: a cloned macOS guest boots,
   `tart ip`-equivalent lease lookup finds it, and `ssh admin@<ip>` with the image password works.
 
-- [ ] **R-606 macOS guest provisioning**
+- [x] **R-606 macOS guest provisioning**
   First boot of a macOS guest runs over SSH with the image's password: install the VM's public key
   in `~/.ssh/authorized_keys`, set the hostname, confirm Screen Sharing is on and set the legacy VNC
   password (`/System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart
