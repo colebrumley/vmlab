@@ -51,6 +51,24 @@ public struct CheckpointRef: Codable, Sendable, Hashable {
   }
 }
 
+/// Where a cloned VM's disk came from (R-803): the source VM and, when cloned from one, the
+/// checkpoint (its id and name at the time).
+public struct CloneOrigin: Codable, Sendable, Hashable {
+  public var vm: String
+  public var checkpoint: String?
+  public var checkpointName: String?
+  public var at: Date
+
+  public init(
+    vm: String, checkpoint: String? = nil, checkpointName: String? = nil, at: Date = Date()
+  ) {
+    self.vm = vm
+    self.checkpoint = checkpoint
+    self.checkpointName = checkpointName
+    self.at = at
+  }
+}
+
 /// The contents of `vms/<id>/vm.json` (constraint C4). `features` is the resolved feature set the
 /// plan granted.
 public struct VMRecord: Codable, Sendable, Hashable {
@@ -74,10 +92,20 @@ public struct VMRecord: Codable, Sendable, Hashable {
   /// The plan the selector made when the VM was created, so `vm_inspect` can show it after a
   /// context reset. Absent from records written before it existed (additive: schema 1 still).
   public var plan: Plan?
+  /// The VM this one was cloned from (R-803); nil for a VM made from an image.
+  public var clonedFrom: CloneOrigin?
+  /// The files the VM's disk reads through, nearest first (absolute paths): for a qcow2 clone the
+  /// frozen layer in the source's `backing/` directory, then that layer's own backing files. Nil
+  /// when none were recorded. `vm_lifecycle destroy` and `vmlab gc` read it (R-805).
+  public var backingChain: [String]?
   /// How the guest boots (the request's `boot`); nil is from its disk. Additive: schema 1 still.
   public var boot: BootSpec?
   /// The request's `extra` (R-306: `qemuArgs`); nil when it had none. Additive: schema 1 still.
   public var extra: ExtraSpec?
+  /// The request's `provision` (R-1001); nil when it had none. Additive: schema 1 still.
+  public var provision: ProvisionSpec?
+  /// The request's `share` (R-404); nil when it had none. Additive: schema 1 still.
+  public var share: SharedDirSpec?
   /// For a `vz-macos` guest, the directory of its Tart clone (`~/.tart/vms/<id>/`, holding
   /// `config.json`, `disk.img` and `nvram.bin`); its last component is the Tart VM name. Absent
   /// for other profiles (additive: schema 1 still).
@@ -88,7 +116,8 @@ public struct VMRecord: Codable, Sendable, Hashable {
     resources: ResourceSpec = ResourceSpec(), image: String? = nil,
     network: NetworkSpec = NetworkSpec(), createdAt: Date = Date(), state: VMState = .created,
     runtime: VMRuntime? = nil, checkpoints: [CheckpointRef] = [], plan: Plan? = nil,
-    boot: BootSpec? = nil, extra: ExtraSpec? = nil,
+    boot: BootSpec? = nil, extra: ExtraSpec? = nil, provision: ProvisionSpec? = nil,
+    share: SharedDirSpec? = nil,
     tartClone: String? = nil
   ) {
     self.schemaVersion = Self.currentSchemaVersion
@@ -107,12 +136,15 @@ public struct VMRecord: Codable, Sendable, Hashable {
     self.plan = plan
     self.boot = boot
     self.extra = extra
+    self.provision = provision
+    self.share = share
     self.tartClone = tartClone
   }
 
   enum CodingKeys: String, CodingKey {
     case schemaVersion, id, name, profile, guest, features, resources, image, network, createdAt
-    case state, runtime, checkpoints, plan, boot, extra, tartClone
+    case state, runtime, checkpoints, plan, boot, extra, provision, share, clonedFrom, backingChain,
+      tartClone
   }
 
   public init(from decoder: any Decoder) throws {
@@ -132,7 +164,11 @@ public struct VMRecord: Codable, Sendable, Hashable {
     checkpoints = try c.decodeIfPresent([CheckpointRef].self, forKey: .checkpoints) ?? []
     plan = try c.decodeIfPresent(Plan.self, forKey: .plan)
     boot = try c.decodeIfPresent(BootSpec.self, forKey: .boot)
+    clonedFrom = try c.decodeIfPresent(CloneOrigin.self, forKey: .clonedFrom)
+    backingChain = try c.decodeIfPresent([String].self, forKey: .backingChain)
     extra = try c.decodeIfPresent(ExtraSpec.self, forKey: .extra)
+    provision = try c.decodeIfPresent(ProvisionSpec.self, forKey: .provision)
+    share = try c.decodeIfPresent(SharedDirSpec.self, forKey: .share)
     tartClone = try c.decodeIfPresent(String.self, forKey: .tartClone)
   }
 
@@ -403,14 +439,21 @@ public struct Store: Sendable {
   }
 
   /// Writes `vm.json` through a temporary file in the same directory, `fsync`, then `rename(2)`.
-  private func writeRecord(_ record: VMRecord) throws(VMLabError) {
+  /// The caller holds the VM's lock.
+  func writeRecord(_ record: VMRecord) throws(VMLabError) {
     let url = recordURL(of: record.id)
     let data: Data
     do { data = try Self.encoder.encode(record) } catch {
       throw Self.ioError("encode \(url.path)", error)
     }
+    try Self.writeAtomically(data, to: url)
+  }
+
+  /// Writes `data` to `url` through a temporary file in the same directory, `fsync`, then
+  /// `rename(2)`, so a reader sees the old or the new file, never a torn one.
+  static func writeAtomically(_ data: Data, to url: URL) throws(VMLabError) {
     let temp = url.deletingLastPathComponent().appending(
-      path: ".\(Self.recordFileName).\(getpid()).\(UUID().uuidString).tmp")
+      path: ".\(url.lastPathComponent).\(getpid()).\(UUID().uuidString).tmp")
     let fd = open(temp.path, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0o644)
     guard fd >= 0 else { throw Self.posixError("create \(temp.path)") }
     let written = data.withUnsafeBytes { write(fd, $0.baseAddress, $0.count) }
@@ -428,8 +471,9 @@ public struct Store: Sendable {
     }
   }
 
-  /// Runs `body` holding an exclusive `flock` on `locks/<name>.lock`.
-  private func withLock<T>(
+  /// Runs `body` holding an exclusive `flock` on `locks/<name>.lock` (a VM's id, or `store`).
+  /// Not reentrant: `body` must not take the same lock again.
+  func withLock<T>(
     _ name: String, _ body: () throws(VMLabError) -> T
   ) throws(VMLabError) -> T {
     do {

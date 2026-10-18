@@ -18,6 +18,8 @@ extension ToolSpec {
         "paths": Schema.array(
           Schema.string("A directory or file in the guest."), "Roots to walk for files."),
       ], required: ["vm"]),
-    outputShape: "{ id, path, counts: { files, packages, services, defaults, users, loginItems } }",
+    outputShape:
+      "{ id, path, profile, counts: { files, packages, services, defaults, users, loginItems, "
+      + "profiles } }",
     errors: [.vmNotFound, .wrongState, .capabilityMissing, .guestUnreachable, .timeout])
 }

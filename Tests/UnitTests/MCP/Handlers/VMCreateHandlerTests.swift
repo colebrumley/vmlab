@@ -14,11 +14,11 @@ import VMLabCore
     let backend: FakeBackend
     let progress = ProgressLog()
 
-    init(heartbeat: Duration = .milliseconds(40)) throws {
+    init(heartbeat: Duration = .milliseconds(40), catalogue: ImageCatalogue? = nil) throws {
       let base = try ToolHandlerTests.context()
       let (_, bin) = try ImagesTests.sandbox()
       let images = ImageStore(
-        home: base.home, catalogue: try ImagesTests.catalogue(),
+        home: base.home, catalogue: try catalogue ?? ImagesTests.catalogue(),
         downloader: ImagesTests.downloader(), runner: ConvertRunner(), searchPaths: [bin.path])
       let registry = BackendRegistry()
       let backend = FakeBackend(profile: .qemuHVF, store: base.store)
@@ -168,6 +168,32 @@ import VMLabCore
     }
     #expect(error?.code == .imageNotFound)
     #expect(f.vmDirectories().isEmpty)
+  }
+
+  /// R-1000: an amd64 image named for an arm64 guest is refused before anything is created.
+  @Test func imageForAnotherGuestIsInvalidRequest() throws {
+    let arm = try Requirements(
+      guest: GuestSpec(os: .linux, arch: .arm64), image: "ubuntu-24.04-amd64")
+    let error = #expect(throws: VMLabError.self) {
+      try VMCreateHandler.image(for: arm, catalogue: .builtin)
+    }
+    #expect(error?.code == .invalidRequest)
+    #expect(error?.data["field"] == .string("image"))
+    #expect(error?.hint.contains("x86_64") == true)
+    let x86 = try Requirements(
+      guest: GuestSpec(os: .linux, arch: .x86_64), image: "ubuntu-24.04-amd64")
+    #expect(try VMCreateHandler.image(for: x86, catalogue: .builtin) == "ubuntu-24.04-amd64")
+    // A pulled record's guest wins over the catalogue's.
+    let registered = try Requirements(guest: GuestSpec(os: .linux, arch: .arm64), image: "mine")
+    #expect(
+      try VMCreateHandler.image(
+        for: registered, catalogue: .builtin,
+        guestOf: { _ in GuestSpec(os: .linux, arch: .arm64) }) == "mine")
+    #expect(throws: VMLabError.self) {
+      try VMCreateHandler.image(
+        for: registered, catalogue: .builtin,
+        guestOf: { _ in GuestSpec(os: .linux, arch: .riscv64) })
+    }
   }
 
   @Test func defaultImageIsTheFirstForTheGuest() throws {

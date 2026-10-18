@@ -2,8 +2,10 @@ import VMLabCore
 
 /// `vm_inspect`: the record, the plan it was created from (null for a record older than the plan
 /// field), its resolved features, the runtime endpoints, the last 20 events and the latest panic
-/// (R-304; null when none), so a model can rediscover a VM after a context reset. Segments join
-/// when Phase 9 records them.
+/// (R-304; null when none), so a model can rediscover a VM after a context reset, and its
+/// first-boot report (R-1004): a failed step is a `provision_failed` warning, and a requested
+/// provisioning that was never collected (SSH never answered) says so instead of leaving only
+/// `ssh_unreachable`. Segments join when Phase 9 records them.
 struct VMInspectHandler: ToolHandler {
   static let eventCount = 20
 
@@ -29,6 +31,19 @@ struct VMInspectHandler: ToolHandler {
       warnings.append("events.jsonl could not be read: \(error)")
     }
     let panicValue: JSONValue = if let panic { try JSONValue(encoding: panic) } else { .null }
+    let directory = context.store.directory(of: record.id)
+    let report = ProvisionReport.load(from: directory)
+    if let warning = report?.warning(vmDirectory: directory) {
+      warnings.append(warning)
+    } else if report == nil, let spec = record.provision, !spec.isEmpty,
+      events.contains(where: { $0.message.hasPrefix("ssh_unreachable") })
+    {
+      warnings.append(
+        "provision_unknown: \(record.id) never answered SSH, so its first-boot provisioning was "
+          + "not collected; read vm_serial for cloud-init's output")
+    }
+    let provisionValue: JSONValue =
+      if let report { try JSONValue(encoding: report) } else { .null }
     return ToolResult(
       [
         "vm": .object(["id": .string(record.id), "name": .string(record.name)]),
@@ -40,6 +55,7 @@ struct VMInspectHandler: ToolHandler {
         "segments": .array([]),
         "events": try JSONValue(encoding: events),
         "panic": panicValue,
+        "provision": provisionValue,
       ], warnings: warnings)
   }
 
@@ -63,6 +79,12 @@ struct VMInspectHandler: ToolHandler {
       endpoints["display"] = display.json
     }
     if let gdb = runtime.gdbEndpoint { endpoints["gdb"] = .string(gdb) }
+    if let share = SharedDirSpec.of(record) {
+      endpoints["share"] = .object([
+        "host": .string(share.hostDirectory(vmDirectory: store.directory(of: record.id)).path),
+        "guest": .string(share.guestPath),
+      ])
+    }
     return endpoints
   }
 }

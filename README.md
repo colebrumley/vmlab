@@ -24,3 +24,47 @@ scripts/build.sh              # swift build + sign the VZ runner
 .build/debug/vmlab doctor     # what works on this host
 .build/debug/vmlab install-mcp --client claude-code
 ```
+
+### Connect a client
+
+`vmlab install-mcp` prints the MCP configuration that runs `vmlab serve` (the executable you ran
+it from, unless `--command` names another) with `VMLAB_HOME` (from the environment, else
+`~/.vmlab`, or `--vmlab-home`). It changes nothing unless you pass `--write`.
+
+```bash
+vmlab install-mcp --client claude-code             # JSON for ~/.claude.json and the `claude mcp add` line
+vmlab install-mcp --client claude-code --write     # merge it into ~/.claude.json (user scope)
+vmlab install-mcp --client claude-desktop --write  # ~/Library/Application Support/Claude/claude_desktop_config.json
+claude mcp list                                    # vmlab: ... serve - Connected
+```
+
+`--write` keeps every other key and server in the file and replaces only `mcpServers.vmlab`
+(`--name` picks another key). Restart Claude Desktop after writing its file.
+
+### Without Homebrew
+
+QEMU (and Tart, for macOS guests) still come from Homebrew; vmlab itself needs only the Xcode
+toolchain:
+
+```bash
+swift build -c release
+scripts/sign.sh release                     # the VZ runner's virtualization entitlement
+mkdir -p ~/.local/bin
+cp .build/release/vmlab .build/release/vmlab-vz .build/release/vmlab-switch ~/.local/bin/
+~/.local/bin/vmlab doctor
+~/.local/bin/vmlab install-mcp --client claude-code --write
+```
+
+Keep the three binaries in one directory: `vmlab` looks for `vmlab-vz` next to itself.
+
+### Release tarball
+
+```bash
+scripts/release.sh                          # version from `git describe --tags`
+VMLAB_VERSION=0.0.0-dry scripts/release.sh  # a dry run without a tag
+```
+
+It builds in release, signs `vmlab-vz`, and writes `dist/vmlab-<version>-arm64.tar.gz` (`vmlab`,
+`vmlab-vz`, `vmlab-switch`, this README) with a `.sha256` beside it; `vmlab --version` prints that
+version. It then unpacks the tarball into a temp directory and checks that the unpacked `vmlab doctor` finds its
+signed `vmlab-vz`. Unpack it anywhere and put the directory on `PATH`.

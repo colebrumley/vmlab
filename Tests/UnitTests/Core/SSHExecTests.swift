@@ -52,6 +52,29 @@ import VMLabCore
     #expect(result.stdout.hasSuffix("tmp\nit's here\nfrom stdin\n"), "\(result.stdout)")
   }
 
+  /// R-403: an `ssh` that never connected says so (`connected: false`), so `via: auto` may take
+  /// the agent; one that dropped mid-command does not.
+  @Test(arguments: [
+    ("ssh: connect to host 127.0.0.1 port 1: Connection refused", false),
+    ("kex_exchange_identification: read: Connection reset by peer", false),
+    ("Connection closed by 127.0.0.1 port 2222", false),
+    ("Connection reset by 127.0.0.1 port 2222", true),
+    ("client_loop: send disconnect: Broken pipe", true),
+  ])
+  func unreachableSaysWhetherItConnected(stderr: String, connected: Bool) async throws {
+    let f = try Fixture()
+    let ssh = f.dir.appending(path: "ssh-fails")
+    try "#!/bin/sh\necho '\(stderr)' >&2\nexit 255\n".write(
+      to: ssh, atomically: true, encoding: .utf8)
+    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: ssh.path)
+    let channel = SSHExecChannel(target: f.channel.target, ssh: ssh.path)
+    let error = await #expect(throws: VMLabError.self) {
+      try await channel.run(ExecRequest(command: "true"))
+    }
+    #expect(error?.code == .guestUnreachable)
+    #expect(error?.data[ExecFallback.connectedKey] == .bool(connected), "\(stderr)")
+  }
+
   @Test func missingCwdExits126() async throws {
     let f = try Fixture()
     let result = try await f.channel.run(ExecRequest(command: "true", cwd: "/no/such/dir"))

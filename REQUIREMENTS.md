@@ -458,13 +458,13 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   **Verify:** integration: a background `for i in $(seq 1 5); do echo $i; sleep 1; done` is read
   incrementally and finishes with exit 0.
 
-- [ ] **R-403 Agent exec for QEMU guests**
+- [x] **R-403 Agent exec for QEMU guests**
   `via: agent` uses `qemu-guest-agent` through QMP (`guest-exec`, `guest-exec-status`, polling)
   when `exec_agent` was granted; it works with no guest networking and before SSH is up. `auto`
   prefers SSH when reachable, else the agent.
   **Verify:** integration: with `net_none`, `vm_exec "id"` via agent returns `uid=0`.
 
-- [ ] **R-404 File push, pull and shared directories**
+- [x] **R-404 File push, pull and shared directories**
   `vm_file push|pull` via `scp` (or `sftp` batch) with size reporting; directories recursively;
   `pull` to `<vm>/pulled/` when no local path is given. `shared_dir` grants mount a host directory
   read-write at a guest path: QEMU via 9p (`-virtfs local,...`, mounted by cloud-init `mounts`),
@@ -636,7 +636,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   **Verify:** unit tests against fixture transcripts for every packet; a fake stub in tests serves
   `target.xml` and a `g` reply, and the client names `pc`, `sp`, `x0` with the right values.
 
-- [ ] **R-701 `vm_debug` tool**
+- [x] **R-701 `vm_debug` tool**
   Actions of Appendix C: `info` (endpoint for a human's lldb or gdb, attached state), `halt`,
   `continue`, `step`, `wait(timeout)` (block until stop), `breakpoint_add(address|symbol?,
   hardware)`, `breakpoint_remove`, `breakpoints`, `registers`, `read_memory(address, size)` (hex
@@ -647,7 +647,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   **Verify:** integration on `qemu-tcg` x86_64: halt at start, read `rip`, set a breakpoint at the
   kernel entry from the extracted `System.map` (R-305), continue, `wait` stops there.
 
-- [ ] **R-702 GDB under HVF probe**
+- [x] **R-702 GDB under HVF probe**
   The slow probe `qemu_hvf_gdb`: boot a throwaway guest under HVF with `-gdb`, halt, read
   registers, set a software breakpoint at the current `pc` + 4, continue, expect the stop [VERIFY].
   `yes` keeps `gdb` on `qemu-hvf`; `no` turns it off with "GDB under HVF unsupported by this QEMU;
@@ -655,19 +655,19 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   arm64 TCG guest is legal, only slow).
   **Verify:** the probe runs from `doctor --probe` and writes the fact; the matrix row follows it.
 
-- [ ] **R-703 Halt at start and reset**
+- [x] **R-703 Halt at start and reset**
   `boot.haltAtStart: true` starts QEMU with `-S` so the first instruction can be stepped;
   `vm_lifecycle action: reset` (QEMU `system_reset`; VZ: stop and start) returns the guest to its
   first instruction with breakpoints kept.
   **Verify:** integration: halt at start, `registers` shows the reset `pc`, `continue`, serial shows
   firmware output.
 
-- [ ] **R-704 Watchpoints**
+- [x] **R-704 Watchpoints**
   `Z2`/`Z3`/`Z4` write/read/access watchpoints in the client and `breakpoint_add(kind: watch_write|
   watch_read|watch_access, size)`.
   **Verify:** unit test packets; integration under TCG: a watchpoint on a stack address stops.
 
-- [ ] **R-705 Debug session durability**
+- [x] **R-705 Debug session durability**
   The GDB connection is owned by the server, not the request; it reconnects after a server restart
   if the stub is still listening, and `vm_debug info` reports `attached: false` with the endpoint
   when a human has the stub (QEMU allows one client; the tool says so instead of hanging).
@@ -677,7 +677,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
 
 ## Phase 8 — Checkpoints and manifests
 
-- [ ] **R-800 Checkpoint tree**
+- [x] **R-800 Checkpoint tree**
   `<vm>/checkpoints.json`: nodes with `id`, `name`, `parent`, `mode: disk|live`, `createdAt`,
   `state at creation`, `manifestPath?`, `note`. `vm_checkpoint create(name, mode: auto|disk|live,
   manifest: bool, note)`: `auto` picks `live` if granted and the guest is running, else `disk`
@@ -688,7 +688,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   **Verify:** unit tests of the tree with the fake provider; integration on QEMU and VZ Linux:
   create A, change, create B, restore A, state matches A, restore B, matches B.
 
-- [ ] **R-801 Guest manifests**
+- [x] **R-801 Guest manifests**
   `vm_manifest(profile: linux|macos|custom, paths)` runs a script over SSH that writes a JSON
   manifest: files under the given roots (path, size, mode, mtime, sha256 for files ≤ 8 MB), and
   per profile: Linux: `dpkg -l`/`rpm -qa`, `systemctl list-unit-files --state=enabled`, users,
@@ -699,7 +699,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   **Verify:** unit test parses fixture outputs for both profiles; integration: a Debian manifest
   lists `/etc/hostname` with the expected hash; a macOS manifest lists `com.apple.dock`.
 
-- [ ] **R-802 Checkpoint and manifest diff**
+- [x] **R-802 Checkpoint and manifest diff**
   `vm_checkpoint diff(from, to)` where each side is a checkpoint with a manifest, `@now` (take a
   manifest now), or a manifest id: returns added, removed and changed files (with what changed:
   size, mode, hash), packages, services, defaults keys (old and new values), users, login items.
@@ -707,7 +707,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   **Verify:** unit test over two fixture manifests; integration on macOS: run `defaults write
   com.apple.dock autohide -bool true` and the diff shows the key with `0 → 1`.
 
-- [ ] **R-803 Clone from checkpoint**
+- [x] **R-803 Clone from checkpoint**
   `vm_lifecycle clone(from: checkpoint?, name)`: a new VM from the current disk or a named
   checkpoint (APFS clone for raw images, `qemu-img create -b` backing file for qcow2 with the
   backing chain recorded), new MAC and SSH key, same plan.
@@ -722,7 +722,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   **Verify:** integration: template from a provisioned Debian, create from it, SSH works with the
   child's key and the parent's key is refused.
 
-- [ ] **R-805 Garbage collection**
+- [x] **R-805 Garbage collection**
   `vmlab gc`: removes orphaned runner processes (pid files whose record is gone), dumps and exec
   logs older than 7 days, checkpoints marked `temporary`, unused template backing files; reports
   bytes freed. `vm_lifecycle destroy` refuses when another VM's backing chain depends on this disk
@@ -787,28 +787,28 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
 
 ## Phase 10 — Images and provisioning
 
-- [ ] **R-1000 Ubuntu images and the amd64 catalogue**
+- [x] **R-1000 Ubuntu images and the amd64 catalogue**
   Add `ubuntu-24.04-arm64`, `ubuntu-24.04-amd64`, `debian-13-amd64` with their checksum URLs;
   amd64 images select `qemu-tcg` only.
   **Verify:** catalogue test; integration: Ubuntu arm64 boots under both engines.
 
-- [ ] **R-1001 Custom user-data and packages**
+- [x] **R-1001 Custom user-data and packages**
   `Requirements.provision: { packages: [String], userData: String?, runCommands: [String] }` merged
   into the cloud-init seed; for macOS guests `runCommands` run over SSH after R-606.
   **Verify:** integration: a Debian guest created with `packages: [jq]` has `jq --version` working.
 
-- [ ] **R-1002 Register a local disk image or installer**
+- [x] **R-1002 Register a local disk image or installer**
   `images register <name> --disk <path> --guest linux --arch arm64 [--format raw|qcow2]` and
   `images register --ipsw <path>` (hands off to `tart create --from-ipsw` for a macOS base built
   locally; the attended install is the user's, documented in `docs/AGENT.md`).
   **Verify:** unit test for `image.json`; integration: a registered raw image boots.
 
-- [ ] **R-1003 Image cache policy**
+- [x] **R-1003 Image cache policy**
   `~/.vmlab/images` reports size in `host_facts`; `images prune` removes images no VM or template
   references; pulls over 10 GB (macOS) require `confirm: true` from the tool with the size stated.
   **Verify:** unit tests for the reference check and the confirm gate.
 
-- [ ] **R-1004 Reproducible first boot**
+- [x] **R-1004 Reproducible first boot**
   Every provisioning step (cloud-init, macOS SSH steps) writes `<vm>/provision.log` and a
   `provision.json` with each step's command, duration and exit; `vm_inspect` surfaces failures as
   a `provision_failed` warning rather than hiding them behind `ssh_unreachable`.
@@ -855,13 +855,13 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   calls with the expected result shapes, verified against the server.
   **Verify:** every tool call in the five sessions is also a test in `Tests/IntegrationTests/AgentGuideTests.swift` that runs it and checks the result shape.
 
-- [ ] **R-1105 Claude Code and Claude Desktop installation**
+- [x] **R-1105 Claude Code and Claude Desktop installation**
   `vmlab install-mcp --client claude-code|claude-desktop` writes or prints the MCP configuration
   (command, args, env `VMLAB_HOME`) for the client; README documents it and the Homebrew-less
   install (`swift build -c release`, `scripts/sign.sh`, copy to `~/.local/bin`).
   **Verify:** unit test of the generated configuration JSON; manual: Claude Code lists the tools.
 
-- [ ] **R-1106 Release build**
+- [x] **R-1106 Release build**
   `scripts/release.sh`: `swift build -c release`, signs `vmlab-vz`, bundles `vmlab`, `vmlab-vz`,
   `vmlab-switch` into `dist/vmlab-<version>-arm64.tar.gz` with a checksum; `vmlab --version` reads
   the tag.
@@ -1069,6 +1069,7 @@ six 4 GB guests with the default reserve; macOS 26.6 → VZ save/restore APIs pr
     vz-config.json             the machine the VZ runner builds (VZRunnerConfig)
     serial.log, vz.log, console.log, qemu.log, provision.log, provision.json
     checkpoints.json, checkpoints/<id>/ (VZ state files and disk clones)
+    backing/<key>.qcow2        frozen layers that clones' disks are backed by (R-803)
     manifests/<id>.json, exec/<job>.log, dumps/, pulled/, screenshots/
   segments/<name>/             switch.sock, stats.sock, switch.pid, ports/
   fleets/<name>.json

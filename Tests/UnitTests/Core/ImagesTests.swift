@@ -105,6 +105,49 @@ final class TartRunner: CommandRunning {
     }
   }
 
+  /// R-1000: the Ubuntu and amd64 entries carry their checksum URLs, and every amd64 image is
+  /// one only qemu-tcg runs (so it is never converted to raw for VZ).
+  @Test func ubuntuAndAmd64Catalogue() throws {
+    let catalogue = ImageCatalogue.builtin
+    let ubuntu = try #require(catalogue.image(named: "ubuntu-24.04-arm64"))
+    #expect(
+      ubuntu.url == "https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-arm64.img")
+    #expect(
+      ubuntu.checksumURL?.absoluteString
+        == "https://cloud-images.ubuntu.com/noble/current/SHA256SUMS")
+    #expect(ubuntu.fileName == "noble-server-cloudimg-arm64.img")
+    #expect(ubuntu.format == .qcow2 && ubuntu.convertToRaw)
+    #expect(ubuntu.login == ImageLogin(user: "ubuntu"))
+    let ubuntuAmd64 = try #require(catalogue.image(named: "ubuntu-24.04-amd64"))
+    #expect(ubuntuAmd64.fileName == "noble-server-cloudimg-amd64.img")
+    #expect(ubuntuAmd64.checksumAlgorithm == .sha256)
+    let debianAmd64 = try #require(catalogue.image(named: "debian-13-amd64"))
+    #expect(debianAmd64.fileName == "debian-13-genericcloud-amd64.qcow2")
+    #expect(debianAmd64.checksumURL?.lastPathComponent == "SHA512SUMS")
+
+    let amd64 = catalogue.images.filter { $0.guest.arch == .x86_64 }
+    #expect(Set(amd64.map(\.name)) == ["debian-13-amd64", "ubuntu-24.04-amd64"])
+    for image in amd64 {
+      #expect(!image.convertToRaw, "\(image.name)")
+      let profiles = Profile.allCases.filter { Capabilities.supports(image.guest, on: $0) }
+      #expect(profiles == [.qemuTCG], "\(image.name)")
+      let plan = try ProfileSelector.select(
+        try Requirements(guest: image.guest, image: image.name), host: SelectorTests.devHost(),
+        running: .empty
+      ).get()
+      #expect(plan.profile == .qemuTCG, "\(image.name)")
+    }
+  }
+
+  @Test func guestOfAnImageIsItsRecordsElseTheCatalogues() throws {
+    let (home, bin) = try Self.sandbox()
+    defer { try? FileManager.default.removeItem(at: home.deletingLastPathComponent()) }
+    let store = ImageStore(home: home, catalogue: try Self.catalogue(), searchPaths: [bin.path])
+    #expect(store.guest(of: "tiny-arm64") == GuestSpec(os: .linux, arch: .arm64))
+    #expect(store.guest(of: "tiny-mac")?.os == .macos)
+    #expect(store.guest(of: "nothing") == nil)
+  }
+
   @Test func parsesChecksumLists() throws {
     let sha512 = ChecksumList.parse(
       try String(contentsOf: Self.fixtures.appending(path: "SHA512SUMS"), encoding: .utf8))
