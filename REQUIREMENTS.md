@@ -324,7 +324,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   integration (`VMLAB_INTEGRATION=1`): `vmlab images pull debian-13-arm64` succeeds and a second
   pull is a no-op.
 
-- [ ] **R-301 Cloud-init seed**
+- [x] **R-301 Cloud-init seed**
   `Sources/VMLabCore/CloudInit.swift` builds a NoCloud seed ISO with `hdiutil makehybrid -iso
   -joliet -default-volume-name cidata` from `user-data` and `meta-data`: hostname, the VM's SSH
   public key for the image's default user, password login off, `qemu-guest-agent` installed and
