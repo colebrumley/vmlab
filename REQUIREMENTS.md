@@ -193,7 +193,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   against the same host with all probes `unknown`; one assertion per row of Appendix B that the
   code agrees with the document (table-driven from a copy of the table in the test file).
 
-- [ ] **R-103 Selector**
+- [x] **R-103 Selector**
   `Sources/VMLabCore/Selector.swift`: `func select(_ r: Requirements, host: HostFacts, running:
   Inventory) -> Result<Plan, Unsatisfiable>` implementing Appendix I exactly: normalise, filter
   profiles by guest OS and arch, filter by every `require` feature recording which profiles each
@@ -1122,8 +1122,10 @@ ext4; decide in R-305 and record it).
    `require` (size 1, then 2, then 3) whose removal leaves a survivor, each with that survivor.
 6. **Dynamic limits.** For each survivor in rank order: macOS count, memory budget; the first that
    passes wins; if none, the error of the first survivor.
-7. **Rank.** Count of `prefer` satisfied (desc), then performance tier, energy tier, startup tier
-   (asc), then `vz-linux` before `qemu-hvf` before `qemu-tcg`.
+7. **Rank.** For an arm64 guest, `qemu-tcg` only after every hardware-virtualized survivor (a
+   preference never moves a native guest onto an emulated CPU); then count of `prefer` satisfied
+   (desc), then performance tier, energy tier, startup tier (asc), then `vz-linux` before
+   `qemu-hvf` before `qemu-tcg`.
 8. **Plan.** Profile, resolved features (`require` ∪ every `yes` in the matrix for that profile, so
    the model learns what else it has), `preferredDenied`, `unverified`, `notes` (TCG speed warning,
    GUI install time, host-reachable address instead of a forwarded port on VZ).
@@ -1144,7 +1146,7 @@ Worked examples (each is a unit test in R-103; host = dev host, all probes `yes`
 | macos, require [serial] | `invalid_request` (contradiction, caught before selection) |
 | macos, require [gui, checkpoint_disk], two macOS guests running | `limit_macos_guests` |
 | linux arm64, require [net_fast], not root, `qemu_vmnet` = no | `vz-linux` (net_fast is yes there) |
-| linux arm64, require [net_fast, gdb], not root | unsatisfiable; suggestion: drop [net_fast] → qemu-hvf |
+| linux arm64, require [net_fast, gdb], not root, `qemu_vmnet` = no | unsatisfiable; suggestions: drop [gdb] → vz-linux; drop [net_fast] → qemu-hvf |
 | linux arm64, require [nested_virt] on M1 | `qemu-tcg` (notes: nested virtualization emulated, very slow; `vz-linux` eliminated by `nested_supported = false`) |
 | linux arm64, require [gdb], prefer [checkpoint_live], probe `qemu_hvf_live_snapshot` = unknown | `qemu-hvf` with `unverified: [checkpoint_live]`, `preferredDenied: [checkpoint_live]` |
 | linux arm64, require [], prefer [serial] | `vz-linux` (serial is yes there) |
