@@ -24,6 +24,7 @@ struct VMLab: AsyncParsableCommand {
     VMLabLogging.bootstrap()
     // Every command, `serve` and the tool subcommands alike, reaches engines through `Backends`.
     Engines.registerAll(store: Store(home: Store.defaultHome()))
+    Engines.registerProbes()
     do {
       var command = try parseAsRoot()
       if var command = command as? AsyncParsableCommand {

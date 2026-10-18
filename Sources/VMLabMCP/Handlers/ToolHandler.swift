@@ -293,26 +293,4 @@ extension JSONValue {
   public var data: Data {
     (try? JSONEncoder().encode(self)) ?? Data("null".utf8)
   }
-
-  public subscript(key: String) -> JSONValue? { objectValue?[key] }
-
-  public var objectValue: [String: JSONValue]? {
-    if case .object(let object) = self { object } else { nil }
-  }
-
-  public var arrayValue: [JSONValue]? {
-    if case .array(let array) = self { array } else { nil }
-  }
-
-  public var stringValue: String? {
-    if case .string(let string) = self { string } else { nil }
-  }
-
-  public var numberValue: Double? {
-    if case .number(let number) = self { number } else { nil }
-  }
-
-  public var boolValue: Bool? {
-    if case .bool(let bool) = self { bool } else { nil }
-  }
 }

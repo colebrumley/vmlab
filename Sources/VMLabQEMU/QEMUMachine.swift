@@ -303,6 +303,7 @@ public actor QEMUMachine {
     let process = Process()
     process.executableURL = binary
     process.arguments = arguments
+    process.environment = daemonEnvironment()
     process.standardInput = FileHandle.nullDevice
     process.standardOutput = handle
     process.standardError = handle
@@ -322,6 +323,18 @@ public actor QEMUMachine {
           "status": .number(Double(status)),
         ])
     }
+  }
+
+  /// This process's environment plus `OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES`. `-daemonize`
+  /// forks without exec, and macOS aborts a forked child that initialises an Objective-C class
+  /// ("crashed on child side of fork pre-exec"); QEMU 11.1 under HVF does exactly that on its
+  /// first `snapshot-save`, so without this every live checkpoint killed the guest (R-307).
+  static func daemonEnvironment(
+    _ base: [String: String] = ProcessInfo.processInfo.environment
+  ) -> [String: String] {
+    var environment = base
+    environment["OBJC_DISABLE_INITIALIZE_FORK_SAFETY"] = "YES"
+    return environment
   }
 
   static func run(_ tool: URL, _ arguments: [String], step: String) throws(VMLabError) {

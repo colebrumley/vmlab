@@ -384,7 +384,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   `-pidfile`, `-daemonize`, `-monitor`) that raises `invalid_request`.
   **Verify:** unit tests for pass-through and the denylist.
 
-- [ ] **R-307 qcow2 checkpoints and the live-snapshot probe**
+- [x] **R-307 qcow2 checkpoints and the live-snapshot probe**
   `CheckpointProvider` for QEMU: disk checkpoints on a stopped guest via `qemu-img snapshot -c`;
   on a running guest via QMP `snapshot-save` (memory and disk) when the host fact
   `qemu_hvf_live_snapshot` is `yes`, else `wrong_state` with the hint to stop first. The slow probe

@@ -32,9 +32,16 @@ public protocol Backend: Sendable {
   func destroy(_ record: VMRecord) async throws(VMLabError)
   /// Handles on the channels of a running or paused guest.
   func attach(_ record: VMRecord) async throws(VMLabError) -> any RunningVM
+  /// The checkpoints of the VM in any state. The default attaches (so needs a live guest) and
+  /// returns its `checkpoints` channel; an engine that checkpoints stopped guests overrides it.
+  func checkpoints(_ record: VMRecord) async throws(VMLabError) -> any CheckpointProvider
 }
 
 extension Backend {
+  public func checkpoints(_ record: VMRecord) async throws(VMLabError) -> any CheckpointProvider {
+    try await attach(record).channel(.checkpoints)
+  }
+
   public func reset(_ record: VMRecord) async throws(VMLabError) -> VMRuntime {
     try await kill(record)
     var stopped = record
@@ -135,7 +142,15 @@ public enum CheckpointMode: String, CaseIterable, Codable, Sendable {
 }
 
 /// The engine half of checkpoints (R-307, R-800 keeps the tree): takes, restores and deletes the
-/// snapshot named by a checkpoint id.
+/// engine snapshot named by a checkpoint id. Get one with `Backend.checkpoints(_:)` (any state)
+/// or a running VM's `checkpoints` channel.
+///
+/// The provider never stops or starts the guest. A mode the guest's current state cannot serve
+/// (`disk` while it runs on an engine that needs it stopped, `live` while it is stopped, `live` on
+/// a host whose probe said no) is `wrong_state` with a hint naming the lifecycle action to take;
+/// an id that is malformed, already taken (`create`) or unknown (`restore`, `delete`) is
+/// `invalid_request` with field `id`. Restoring a `live` checkpoint leaves the guest running from
+/// the saved memory; restoring a `disk` one rewinds the stopped guest's disk.
 public protocol CheckpointProvider: Sendable {
   func create(id: String, mode: CheckpointMode) async throws(VMLabError)
   func restore(id: String, mode: CheckpointMode) async throws(VMLabError)
