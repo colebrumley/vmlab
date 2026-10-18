@@ -38,8 +38,12 @@ public actor VMManager {
       try await backend.create(stored, plan: plan)
       if Task.isCancelled { throw Self.cancelled("create", vm: stored.id) }
     } catch {
-      try? await backend.destroy(stored)
-      try? store.remove(id: stored.id)
+      // In a task of its own, which a cancelled caller does not cancel, so the cleanup runs whole.
+      let store = store
+      await Task {
+        try? await backend.destroy(stored)
+        try? store.remove(id: stored.id)
+      }.value
       throw error
     }
     await log(stored.id, "created (\(plan.profile.rawValue))")
@@ -147,9 +151,11 @@ public actor VMManager {
     try? await log.append(kind, message, level: level)
   }
 
-  static func cancelled(_ what: String, vm: String) -> VMLabError {
+  /// The refusal of an operation whose task was cancelled (MCP `notifications/cancelled`).
+  public static func cancelled(_ what: String, vm: String) -> VMLabError {
     VMLabError(
       code: .timeout, message: "\(what) of \(vm) was cancelled",
-      hint: "Nothing was kept; call it again to retry.", data: ["vm": .string(vm)])
+      hint: "Nothing was kept; call it again to retry.",
+      data: ["vm": .string(vm), "cancelled": .bool(true)])
   }
 }

@@ -52,7 +52,8 @@ import VMLabMCP
   @Test func registryHoldsBuiltToolsInCatalogOrder() {
     #expect(
       ToolHandlers.specs.map(\.name) == [
-        "host_facts", "host_doctor", "vm_plan", "vm_list", "vm_inspect",
+        "host_facts", "host_doctor", "images", "vm_plan", "vm_create", "vm_list", "vm_inspect",
+        "vm_lifecycle",
       ])
     for handler in ToolHandlers.all {
       #expect(ToolCatalog.spec(named: handler.spec.name) == handler.spec)

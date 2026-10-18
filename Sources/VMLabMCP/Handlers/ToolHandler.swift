@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 import VMLabCore
 
 /// An image content block a tool result carries next to its JSON (screenshots, R-50x).
@@ -36,13 +37,16 @@ public struct ToolResult: Sendable, Hashable {
 
 /// Where a long call reports how far it has got. On the MCP server it sends
 /// `notifications/progress` with the call's progress token; elsewhere, and when the client sent no
-/// token, it does nothing. R-205 makes the long calls report at least every 5 s.
+/// token, it does nothing. Long calls report through `during(_:every:_:)` (R-205), which sends a
+/// step when the work starts and a heartbeat at least every `interval` until it ends.
 public struct ToolProgress: Sendable {
   public typealias Send =
     @Sendable (_ progress: Double, _ total: Double?, _ message: String?) async
     -> Void
 
   private let send: Send?
+  /// The last progress value sent, shared by every copy, so steps and heartbeats keep increasing.
+  private let counter = Counter()
 
   public init(_ send: @escaping Send) { self.send = send }
 
@@ -56,27 +60,80 @@ public struct ToolProgress: Sendable {
 
   /// Reports `progress` (increasing on every call) out of `total` when known.
   public func report(_ progress: Double, total: Double? = nil, message: String? = nil) async {
+    counter.value.withLock { $0 = max($0, progress) }
     await send?(progress, total, message)
+  }
+
+  /// Reports the next step: one more than the last progress value sent.
+  public func step(_ message: String) async {
+    guard let send else { return }
+    let value = counter.value.withLock { value -> Double in
+      value += 1
+      return value
+    }
+    await send(value, nil, message)
+  }
+
+  /// Runs `body`, reporting `message` when it starts and `message (Ns)` every `interval` until it
+  /// returns or throws, so a client sees progress on a call that takes longer than its timeout.
+  /// Cancelling the calling task cancels `body` as usual; the heartbeat stops with it.
+  public func during<T: Sendable>(
+    _ message: String, every interval: Duration = .seconds(5),
+    _ body: () async throws(VMLabError) -> T
+  ) async throws(VMLabError) -> T {
+    guard isReporting else { return try await body() }
+    await step(message)
+    let started = ContinuousClock.now
+    let heartbeat = Task { [self] in
+      while !Task.isCancelled {
+        do { try await Task.sleep(for: interval) } catch { return }
+        let elapsed = (ContinuousClock.now - started).components.seconds
+        await step("\(message) (\(elapsed) s)")
+      }
+    }
+    defer { heartbeat.cancel() }
+    return try await body()
+  }
+
+  private final class Counter: Sendable {
+    let value = Mutex<Double>(0)
   }
 }
 
 /// What a handler may use: the VM store, the host probe and the limits, all under one
-/// `VMLAB_HOME`, plus where this call reports progress. R-105 adds the backend registry here.
+/// `VMLAB_HOME`, the backends with the `VMManager` that drives them, the image cache, the start
+/// gate, plus where this call reports progress.
 public struct ToolContext: Sendable {
   public var home: URL
   public var store: Store
   public var probe: HostProbe
   public var limits: ResourceLimits
+  public var backends: BackendRegistry
+  /// One per context, so actions on one VM are serialized across the calls that share it.
+  public var manager: VMManager
+  public var images: ImageStore
+  /// Admission to guest starts (`vm_lifecycle start`, `vm_create` autostart).
+  public var startGate: any StartGating
   /// This call's progress reporter; the MCP server sets it per `tools/call`.
   public var progress: ToolProgress = .none
+  /// How often a long call reports while it waits (R-205: at least every 5 s).
+  public var heartbeat: Duration = .seconds(5)
 
   /// A context on `home`; the default probe counts running guests from that store.
-  public init(home: URL, probe: HostProbe? = nil, limits: ResourceLimits = .defaults) {
+  public init(
+    home: URL, probe: HostProbe? = nil, limits: ResourceLimits = .defaults,
+    backends: BackendRegistry = Backends.shared, images: ImageStore? = nil,
+    startGate: any StartGating = StartGate.shared
+  ) {
     let store = Store(home: home)
     self.home = home
     self.store = store
     self.probe = probe ?? HostProbe(home: home, runningGuests: { store.runningGuests() })
     self.limits = limits
+    self.backends = backends
+    self.manager = VMManager(store: store, backends: backends)
+    self.images = images ?? ImageStore(home: home)
+    self.startGate = startGate
   }
 
   /// The context of this process: `VMLAB_HOME`, or `~/.vmlab`.
@@ -97,7 +154,8 @@ public protocol ToolHandler: Sendable {
 /// The handlers built so far, keyed by tool name. Items register theirs in `all` as they land.
 public enum ToolHandlers {
   public static let all: [any ToolHandler] = [
-    HostFactsHandler(), HostDoctorHandler(), VMPlanHandler(), VMListHandler(), VMInspectHandler(),
+    HostFactsHandler(), HostDoctorHandler(), VMPlanHandler(), VMCreateHandler(), VMListHandler(),
+    VMInspectHandler(), VMLifecycleHandler(), ImagesHandler(),
   ]
 
   private static let byName: [String: any ToolHandler] = Dictionary(

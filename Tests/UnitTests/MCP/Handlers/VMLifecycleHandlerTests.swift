@@ -1,0 +1,92 @@
+import Foundation
+import Testing
+import VMLabCore
+
+@testable import VMLabMCP
+
+/// `vm_lifecycle` through `VMManager` and the fake backend.
+@Suite struct VMLifecycleHandlerTests {
+  typealias Fixture = VMCreateHandlerTests.Fixture
+
+  static func act(_ action: String, on vm: String = "web", in f: Fixture) async throws(VMLabError)
+    -> ToolResult
+  {
+    try await ToolHandlers.call(
+      "vm_lifecycle", arguments: .object(["vm": .string(vm), "action": .string(action)]),
+      context: f.context)
+  }
+
+  @Test func walksThePowerStates() async throws {
+    let f = try Fixture()
+    defer { f.cleanUp() }
+    _ = try await f.create(["autostart": .bool(false)])
+    #expect(try await Self.act("start", in: f).value["state"] == .string("running"))
+    #expect(f.progress.messages.contains { $0.hasPrefix("starting vm-") })
+    #expect(try await Self.act("pause", in: f).value["state"] == .string("paused"))
+    #expect(try await Self.act("resume", in: f).value["state"] == .string("running"))
+    #expect(try await Self.act("reset", in: f).value["state"] == .string("running"))
+    let stopped = try await Self.act("stop", in: f)
+    #expect(stopped.value["state"] == .string("stopped"))
+    #expect(stopped.value["vm"]?["name"] == .string("web"))
+    #expect(stopped.value["durationMs"]?.numberValue != nil)
+    let destroyed = try await Self.act("destroy", in: f)
+    #expect(destroyed.value["state"] == .string("destroyed"))
+    #expect(f.vmDirectories().isEmpty)
+  }
+
+  @Test func illegalTransitionIsWrongState() async throws {
+    let f = try Fixture()
+    defer { f.cleanUp() }
+    _ = try await f.create()
+    let error = await #expect(throws: VMLabError.self) { try await Self.act("start", in: f) }
+    #expect(error?.code == .wrongState)
+    #expect(f.backend.operations == [.create, .start])
+  }
+
+  @Test func unknownVMAndUnbuiltActionsAreRefused() async throws {
+    let f = try Fixture()
+    defer { f.cleanUp() }
+    let missing = await #expect(throws: VMLabError.self) {
+      try await Self.act("stop", on: "nope", in: f)
+    }
+    #expect(missing?.code == .vmNotFound)
+    _ = try await f.create(["autostart": .bool(false)])
+    let clone = await #expect(throws: VMLabError.self) { try await Self.act("clone", in: f) }
+    #expect(clone?.code == .invalidRequest)
+    let checkpoint = await #expect(throws: VMLabError.self) {
+      try await Self.act("checkpoint_stop", in: f)
+    }
+    #expect(checkpoint?.code == .invalidRequest)
+  }
+
+  @Test func cancelledStartWhileWaitingForASlotStartsNothing() async throws {
+    let f = try Fixture()
+    defer { f.cleanUp() }
+    _ = try await f.create(["autostart": .bool(false)])
+    // Hold every slot of a one-slot gate so the start waits in admit.
+    var limits = ResourceLimits.defaults
+    limits.parallelStarts = 1
+    let gate = StartGate(limits: limits)
+    let held = try await gate.admit(
+      Inventory.Guest(id: "other", profile: .qemuHVF, os: .linux, memoryGB: 0),
+      running: { .empty }, host: f.context.hostFacts())
+    var context = f.context
+    context.startGate = gate
+    let call = Task {
+      try await ToolHandlers.call(
+        "vm_lifecycle", arguments: .object(["vm": .string("web"), "action": .string("start")]),
+        context: context)
+    }
+    while await gate.waiting == 0 { try await Task.sleep(for: .milliseconds(5)) }
+    call.cancel()
+    let outcome = await call.result
+    guard case .failure(let error) = outcome else {
+      Issue.record("a cancelled start returned a result")
+      return
+    }
+    #expect((error as? VMLabError)?.data["cancelled"] == .bool(true))
+    #expect(!f.backend.operations.contains(.start))
+    #expect(try f.context.store.find("web").state == .created)
+    await gate.release(held)
+  }
+}

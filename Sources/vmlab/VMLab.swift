@@ -12,8 +12,10 @@ struct VMLab: AsyncParsableCommand {
     abstract: "Virtual machines for a language model, over MCP.",
     version: VMLabMCP.version,
     subcommands: [
-      FactsCommand.self, DoctorCommand.self, Images.self, PlanCommand.self, ListCommand.self,
-      InspectCommand.self, Serve.self, GenDocs.self,
+      FactsCommand.self, DoctorCommand.self, Images.self, PlanCommand.self, CreateCommand.self,
+      ListCommand.self, InspectCommand.self, StartCommand.self, StopCommand.self,
+      KillCommand.self, PauseCommand.self, ResumeCommand.self, ResetCommand.self,
+      DestroyCommand.self, Serve.self, GenDocs.self,
     ]
   )
 
