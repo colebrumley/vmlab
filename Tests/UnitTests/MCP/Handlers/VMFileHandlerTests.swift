@@ -25,6 +25,15 @@ import VMLabCore
       (["action": .string("copy"), "remote": .string("/x")], "action"),
       (["action": .string("push"), "remote": .string("/x")], "local"),
       (["action": .string("pull"), "remote": .string("/x"), "local": .string("rel")], "local"),
+      // R-1102: outside the user's home and /tmp (no allowAnyPath in the test home's config).
+      (
+        ["action": .string("push"), "remote": .string("/x"), "local": .string("/etc/passwd")],
+        "local"
+      ),
+      (
+        ["action": .string("pull"), "remote": .string("/x"), "local": .string("/tmp/../etc/x")],
+        "local"
+      ),
     ]
     for (arguments, field) in cases {
       let error = await #expect(throws: VMLabError.self) { try await Self.file(arguments, in: f) }

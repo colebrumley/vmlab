@@ -18,6 +18,9 @@ public enum RFBError: Error, Equatable, Sendable {
   case connectFailed(String)
   /// No framebuffer update arrived within the timeout.
   case timeout
+  /// The server owed an answer (the handshake, a forced update) and sent nothing for the
+  /// dead-peer window (R-1101), with the reason.
+  case deadPeer(String)
   /// The framebuffer has no pixels yet.
   case emptyFramebuffer
   /// A key name in a chord is neither a named key nor a single character.

@@ -208,6 +208,10 @@ public struct GDBDebugTarget: DebugTarget {
     do {
       return try await body()
     } catch let error as GDBError {
+      // R-1101: a stub that missed an ack or a reply is a hung engine; the VM is marked broken.
+      if let reason = await client.deadPeerReason {
+        throw DeadPeer.error(channel: "gdb", endpoint: endpoint.address, reason: reason)
+      }
       throw error.vmLabError(endpoint: endpoint)
     } catch let error as VMLabError {
       throw error

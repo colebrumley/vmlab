@@ -188,7 +188,7 @@ import Testing
     #expect(empty.extra?.qemuArgs == [] && empty.impliedFeatures.isEmpty)
     for denied in [
       "-qmp", "-serial", "-vnc", "-gdb", "-pidfile", "-daemonize", "-monitor", "--monitor",
-      "-gdb=tcp::1", "-s", "-mon", "-qmp-pretty", "-readconfig",
+      "-gdb=tcp::1", "-s", "-mon", "-qmp-pretty", "-readconfig", "-plugin", "--run-with",
     ] {
       let json =
         #"{"guest":{"os":"linux","arch":"arm64"},"extra":{"qemuArgs":["-device","x",""#

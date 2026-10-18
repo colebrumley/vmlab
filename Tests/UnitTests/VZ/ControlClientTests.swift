@@ -82,3 +82,72 @@ final class FakeRunner: Sendable {
     #expect(handle.runtime == VMRuntime(pid: 99, controlSocket: runner.path))
   }
 }
+
+/// A control socket that serves each connection on its own thread, like `vmlab-vz`'s, and asks
+/// `answer` for each request (nil: stay silent). `answer` may change behaviour over time.
+final class ThreadedFakeRunner: Sendable {
+  let path: String
+  let fd: Int32
+
+  init(answer: @escaping @Sendable (ControlRequest) -> ControlResponse?) throws {
+    path = "/tmp/vmlab-tr-\(getpid())-\(UInt32.random(in: 0...UInt32.max)).sock"
+    unlink(path)
+    fd = try UnixStream.listen(path: path)
+    let fd = fd
+    Thread.detachNewThread {
+      while true {
+        let conn = accept(fd, nil, nil)
+        if conn < 0 { return }
+        Thread.detachNewThread {
+          var buffer = LineBuffer()
+          while let bytes = try? UnixStream.read(conn), !bytes.isEmpty {
+            for line in (try? buffer.feed(bytes)) ?? [] {
+              guard let request = try? ControlCodec.decodeRequest(line) else { continue }
+              if let reply = answer(request), let data = try? ControlCodec.line(reply) {
+                try? UnixStream.writeAll(conn, data)
+              }
+            }
+          }
+          close(conn)
+        }
+      }
+    }
+  }
+
+  deinit {
+    unlink(path)
+    shutdown(fd, SHUT_RDWR)
+    close(fd)
+  }
+}
+
+@Suite struct ControlClientDeadPeerTests {
+  @Test func longCommandOnAnsweringRunnerIsNotADeadPeer() async throws {
+    // The save takes 400 ms; status probes keep being answered meanwhile.
+    let runner = try ThreadedFakeRunner { request in
+      if request.command == .save { Thread.sleep(forTimeInterval: 0.4) }
+      return .success(.running, pid: 7)
+    }
+    let client = VZControlClient(
+      socketPath: runner.path, deadPeerWindow: .milliseconds(150),
+      probeInterval: .milliseconds(30))
+    #expect(try await client.save(to: "/tmp/x").state == .running)
+  }
+
+  @Test func hungRunnerIsDetectedDuringALongCommand() async throws {
+    let runner = try ThreadedFakeRunner { _ in nil }
+    let client = VZControlClient(
+      socketPath: runner.path, deadPeerWindow: .milliseconds(150),
+      probeInterval: .milliseconds(30))
+    let started = ContinuousClock.now
+    await #expect {
+      try await client.save(to: "/tmp/x")  // 600 s of its own
+    } throws: { error in
+      guard let error = error as? VMLabError else { return false }
+      return DeadPeer.isDeadPeer(error) && error.data["channel"] == .string("control")
+        && (error.data["reason"]?.stringValue ?? "").contains("status probe")
+    }
+    // Far below the save's own 600 s, even on a loaded machine.
+    #expect(ContinuousClock.now - started < .seconds(60))
+  }
+}

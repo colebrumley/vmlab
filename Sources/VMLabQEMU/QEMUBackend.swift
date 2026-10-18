@@ -48,6 +48,7 @@ public final class QEMUBackend: Backend {
     }
     let machine = try await Self.lift { try await QEMUMachine.launch(request) }
     machines.withLock { $0[record.id] = machine }
+    await watch(machine, of: record.id)
     return machine.runtime
   }
 
@@ -67,6 +68,22 @@ public final class QEMUBackend: Backend {
   }
 
   public func kill(_ record: VMRecord) async throws(VMLabError) {
+    // A broken VM's QEMU may be hung: no QMP (whose handshake would wait), straight to SIGKILL.
+    if record.state == .broken {
+      if let machine = machines.withLock({ $0.removeValue(forKey: record.id) }) {
+        await machine.disconnect()
+      }
+      if let pid = QEMUMachine.readPID(layout(of: record.id)) ?? record.runtime?.pid,
+        QEMUMachine.isAlive(pid)
+      {
+        Darwin.kill(pid, SIGKILL)
+        let deadline = ContinuousClock.now + .seconds(5)
+        while QEMUMachine.isAlive(pid), ContinuousClock.now < deadline {
+          try? await Task.sleep(for: .milliseconds(50))
+        }
+      }
+      return
+    }
     if let machine = try? await machine(for: record) {
       await machine.kill()
     } else if let pid = record.runtime?.pid ?? QEMUMachine.readPID(layout(of: record.id)),
@@ -157,7 +174,20 @@ public final class QEMUBackend: Backend {
         forwards: record.runtime?.forwards)
     }
     machines.withLock { $0[record.id] = machine }
+    await watch(machine, of: record.id)
     return machine
+  }
+
+  /// Dead-peer detection on the machine's QMP connection (R-1101): a QEMU that stops answering
+  /// for 5 s marks the VM broken with the reason and is dropped from the cache.
+  func watch(_ machine: QEMUMachine, of id: String) async {
+    let store = store
+    await machine.qmp.watchPeer { [weak self] reason in
+      self?.machines.withLock { cached in
+        if cached[id] === machine { cached[id] = nil }
+      }
+      await store.markBroken(id: id, reason: "qmp: \(reason)")
+    }
   }
 
   /// Whether the guest's NIC is `vmnet-shared` (R-309): the request asked for `net_fast` and the

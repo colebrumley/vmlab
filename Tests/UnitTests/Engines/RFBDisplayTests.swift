@@ -77,3 +77,17 @@ import VMLabRFB
     #expect(error?.code == .guestUnreachable)
   }
 }
+
+@Suite struct RFBDeadPeerMappingTests {
+  @Test func onlyTheEnginesOwnDisplayIsADeadPeer() {
+    let host = DisplayEndpoint(address: .unixSocket(path: "/v/vnc.sock"), hostSide: true)
+    let guest = DisplayEndpoint(
+      address: .tcp(host: "192.168.64.5", port: 5900), auth: .none, hostSide: false)
+    let hostError = RFBDisplaySession.map(RFBError.deadPeer("silent"), endpoint: host)
+    #expect(DeadPeer.isDeadPeer(hostError))
+    #expect(hostError.data["channel"] == .string("display"))
+    let guestError = RFBDisplaySession.map(RFBError.deadPeer("silent"), endpoint: guest)
+    #expect(guestError.code == .guestUnreachable)
+    #expect(!DeadPeer.isDeadPeer(guestError))
+  }
+}

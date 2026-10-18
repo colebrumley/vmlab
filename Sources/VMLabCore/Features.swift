@@ -347,10 +347,12 @@ public struct ExtraSpec: Codable, Sendable, Hashable {
   /// QEMU options a request may not pass: vmlab's QMP, serial, VNC and GDB endpoints, its pid
   /// file and daemonizing, and any second monitor. Matched on the option name with one or two
   /// leading dashes and without an `=value` suffix; `-s` is `-gdb tcp::1234`, `-qmp-pretty`
-  /// and `-mon` are monitors, and `-readconfig` could add any of them from a file.
+  /// and `-mon` are monitors, and `-readconfig` could add any of them from a file. R-1102 adds
+  /// `-plugin`, which loads a host shared library into QEMU (code execution as the user), and
+  /// `-run-with`, which changes the process's user or root.
   public static let deniedQEMUOptions: Set<String> = [
     "qmp", "qmp-pretty", "serial", "vnc", "gdb", "s", "pidfile", "daemonize", "monitor", "mon",
-    "readconfig",
+    "readconfig", "plugin", "run-with",
   ]
 
   public init(qemuArgs: [String] = []) { self.qemuArgs = qemuArgs }

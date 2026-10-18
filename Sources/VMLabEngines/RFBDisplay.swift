@@ -54,7 +54,7 @@ public actor RFBDisplaySession: DisplaySession {
     let fresh: RFBClient
     do {
       fresh = try await RFBClient.connect(Self.rfbEndpoint(endpoint), password: try password())
-      await fresh.start()
+      await fresh.start(deadPeerWindow: DeadPeer.window)
       try await fresh.waitForUpdateCount(1, timeout: firstFrameTimeout)
       // macOS Screen Sharing answers the first request with an all-black frame and sends the
       // screen a moment later; give a uniform first frame a few more updates to fill in.
@@ -228,6 +228,18 @@ public actor RFBDisplaySession: DisplaySession {
       return .invalidRequest(
         field: "text", reason: "\(key) is not a key name",
         hint: "Use xdotool names such as Return, Tab, Escape, ctrl+c, cmd+space, F5.")
+    case .deadPeer(let reason):
+      // QEMU's own VNC socket going silent means QEMU is hung (the VM is marked broken); an
+      // in-guest VNC server going silent says nothing about the engine.
+      if endpoint.hostSide {
+        return DeadPeer.error(channel: "display", endpoint: address, reason: reason)
+      }
+      return VMLabError(
+        code: .guestUnreachable, message: "The display at \(address) stopped answering: \(reason)",
+        hint: "The guest's VNC server may be hung or restarting; retry, or check vm_serial.",
+        data: [
+          "channel": .string("display"), "address": .string(address), "reason": .string(reason),
+        ])
     case .connectFailed, .connectionClosed, .connectionRefused, .timeout:
       return VMLabError(
         code: .guestUnreachable, message: "The display at \(address) is not reachable: \(rfb)",

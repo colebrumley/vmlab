@@ -1,4 +1,5 @@
 import Foundation
+import VMLabCore
 
 /// A GDB remote serial protocol client in all-stop mode, over one transport.
 ///
@@ -7,8 +8,9 @@ import Foundation
 /// stop reply. While the target runs, only `interrupt` and `waitForStop` are legal.
 public actor GDBClient {
   public struct Options: Sendable {
-    /// How long a command waits for its reply. A reply that arrives after its deadline would be
-    /// taken as the next command's reply, so a timed-out session should be reconnected.
+    /// How long a command waits for its ack and its reply: the dead-peer window (R-1101). A stub
+    /// that misses it is dead: the client closes the connection (a late reply would be taken as
+    /// the next command's), records `deadPeerReason` and calls the dead-peer handler.
     public var replyTimeout: Duration
     /// Layout used when the stub serves no `target.xml`.
     public var fallbackArchitecture: GDBArchitecture?
@@ -16,7 +18,7 @@ public actor GDBClient {
     public var maxRetransmits: Int
 
     public init(
-      replyTimeout: Duration = .seconds(5), fallbackArchitecture: GDBArchitecture? = nil,
+      replyTimeout: Duration = DeadPeer.window, fallbackArchitecture: GDBArchitecture? = nil,
       maxRetransmits: Int = 3
     ) {
       self.replyTimeout = replyTimeout
@@ -49,6 +51,9 @@ public actor GDBClient {
   private var cachedMap: RegisterMap?
   private var busy = false
   private var queue: [CheckedContinuation<Void, Never>] = []
+  /// Why the stub was declared dead (R-1101), once it was; every later call fails.
+  public private(set) var deadPeerReason: String?
+  private var deadPeerHandler: (@Sendable (String) async -> Void)?
 
   private struct Waiter {
     var id: Int
@@ -76,6 +81,12 @@ public actor GDBClient {
     closedError = closedError ?? .connectionClosed
     await transport.close()
     reader?.cancel()
+  }
+
+  /// Called once with the reason when the stub misses an ack or a reply (R-1101); the session
+  /// layer marks the VM broken from it.
+  public func onDeadPeer(_ handler: @escaping @Sendable (String) async -> Void) {
+    deadPeerHandler = handler
   }
 
   /// True once the stub closed the connection (or `close` ran); every later command fails.
@@ -392,7 +403,9 @@ public actor GDBClient {
   {
     guard state == .stopped else { throw GDBError.targetRunning }
     try await transmit(payload)
-    let reply = try await nextPacket(timeout: options.replyTimeout)
+    let reply = try await fromPeer("the reply to \(Self.name(payload))") {
+      try await self.nextPacket(timeout: self.options.replyTimeout)
+    }
     if reply.isEmpty {
       if emptyMeansUnsupported {
         throw GDBError.unsupported(
@@ -424,7 +437,9 @@ public actor GDBClient {
     while true {
       if let error = closedError { throw error }
       try await send(frame)
-      let event = try await nextEvent(timeout: options.replyTimeout)
+      let event = try await fromPeer("the ack of \(Self.name(payload))") {
+        try await self.nextEvent(timeout: self.options.replyTimeout)
+      }
       switch event {
       case .ack:
         return
@@ -445,6 +460,34 @@ public actor GDBClient {
     while true {
       if case .packet(let payload) = try await nextEvent(timeout: timeout) { return payload }
     }
+  }
+
+  // MARK: Internals: dead peer
+
+  /// `body`, a wait bounded by `replyTimeout`; its timeout declares the stub dead.
+  private func fromPeer<T: Sendable>(
+    _ what: String, _ body: () async throws -> T
+  ) async throws -> T {
+    do {
+      return try await body()
+    } catch GDBError.timeout(let seconds) {
+      await declareDead(DeadPeer.silence(options.replyTimeout, waitingFor: what))
+      throw GDBError.timeout(seconds: seconds)
+    }
+  }
+
+  private func declareDead(_ reason: String) async {
+    guard deadPeerReason == nil else { return }
+    deadPeerReason = reason
+    closedError = .connectionClosed
+    await transport.close()
+    reader?.cancel()
+    if let handler = deadPeerHandler { await handler(reason) }
+  }
+
+  /// A packet's command letters, without its arguments, for messages.
+  static func name(_ payload: String) -> String {
+    String(payload.prefix(while: { $0 != ":" && $0 != "," && $0 != ";" }).prefix(24))
   }
 
   // MARK: Internals: event mailbox

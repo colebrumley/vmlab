@@ -211,3 +211,20 @@ import VMLabCore
     await second.detach()
   }
 }
+
+@Suite struct GDBDebugTargetDeadPeerTests {
+  @Test func stubThatStopsReplyingIsADeadPeer() async throws {
+    let base = try GDBDebugTargetTests.qemuLike()
+    // Reads at 0x2000 are acknowledged and never answered: QEMU's main loop is hung.
+    let stub = try LoopbackGDBStub { packet in packet.hasPrefix("m2000") ? [] : base(packet) }
+    let target = try await GDBDebugConnector(replyTimeout: .milliseconds(300)).connect(
+      to: GDBDebugTargetTests.endpoint(stub), arch: .arm64)
+    defer { Task { await target.close() } }
+    let error = await #expect(throws: VMLabError.self) {
+      _ = try await target.readMemory(address: 0x2000, length: 4, thread: nil)
+    }
+    #expect(error.map(DeadPeer.isDeadPeer) == true)
+    #expect(error?.data["channel"] == .string("gdb"))
+    #expect(await target.isConnected == false)
+  }
+}
