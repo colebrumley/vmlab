@@ -403,6 +403,11 @@ final class FakeDisplay: DisplaySession, DisplayConnector {
         ["action": .string("zoom"), "region": region([0, 0, huge, huge])],
         ["action": .string("zoom"), "region": region([0, 0, huge, 10]), "scaled": .bool(true)],
         ["action": .string("left_click"), "coordinate": region([huge, 0]), "scaled": .bool(true)],
+        // Codex CX-3: 2^62 at scale 0.5 once trapped in Int(Double / scale).
+        [
+          "action": .string("left_click"), "coordinate": region([4_611_686_018_427_387_904, 0]),
+          "scaled": .bool(true),
+        ],
         ["action": .string("mouse_move"), "coordinate": region([huge, huge])],
         [
           "action": .string("left_click_drag"), "startCoordinate": region([0, 0]),
@@ -446,6 +451,10 @@ final class FakeDisplay: DisplaySession, DisplayConnector {
     #expect(
       Computer.unscale((x: Int.max, y: 0), frame: .init(originX: 0, originY: 0, scale: 0.5)).x
         == DisplayRect.coordinateLimit)
+    #expect(
+      Computer.unscale(
+        (x: 4_611_686_018_427_387_904, y: 0), frame: .init(originX: 0, originY: 0, scale: 0.5)
+      ).x == DisplayRect.coordinateLimit)
     #expect(
       Computer.unscale((x: 5, y: 5), frame: .init(originX: 0, originY: 0, scale: 0)).x
         == DisplayRect.coordinateLimit)
