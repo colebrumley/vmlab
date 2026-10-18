@@ -26,9 +26,11 @@ public enum Engines {
   }
 
   /// Registers the slow probes the engine modules own (`vmlab doctor --probe` runs them): QEMU's,
+  /// VZ's `vz_linux_live_snapshot` (R-608),
   /// and `qemu_hvf_gdb` (R-702), which needs both QEMU and the GDB client.
   public static func registerProbes(into registry: SlowProbeRegistry = SlowProbeRunners.shared) {
     for runner in VMLabQEMU.probeRunners { registry.register(runner) }
+    for runner in VMLabVZ.probeRunners { registry.register(runner) }
     registry.register(HVFGDBProbe())
   }
 }

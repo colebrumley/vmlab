@@ -198,6 +198,20 @@ runner builds from (`linux(record:vmDirectory:boot:seed:)`: CPUs, memory, `Boot`
 console to `console.log` and `serial.sock`, the balloon, `Graphics` only when `gui` was granted,
 the record's share (`SharedDirSpec.of`, R-404) as the virtiofs `DirectoryShare` `share0`, and Rosetta
 (`rosettaTag`) only when the plan's `requested` holds `rosetta` (`wantsRosetta`)).
+`VZCheckpoints` (R-608) is the vz-linux `CheckpointProvider`, handed out by
+`VZBackend.checkpoints(_:)` in any state and by `VZRunningVM.checkpoints`: each checkpoint is
+`<vm>/checkpoints/<id>/` with `clonefile(2)` clones of `disk.raw`, `efi-vars.bin` and
+`machine-id.bin`; `disk` mode needs the guest not running; `live` pauses, has the runner
+`saveMachineStateTo` `state.vzvmsave`, clones the files and the `vz-config.json` the machine was
+built from, and resumes; a live restore ends the runner, clones the files back, starts a held
+(`--hold`) runner from that configuration, restores and resumes (unless the VM was paused), then
+writes the new runtime to `vm.json` and reconnects serial. A `suspended` VM's start
+(`checkpoint_stop`) is that held runner (`startSuspended`, marked by `<vm>/vz-held-for`), so the
+manager's restore only loads the state. `VZRunnerConfig.machineIdentifier` (`<vm>/machine-id.bin`)
+keeps one `VZGenericMachineIdentifier` per VM, without which a saved state will not restore.
+`VZLiveSnapshotProbe` (`vz_linux_live_snapshot`, registered by `Engines.registerProbes`) saves and
+restores a throwaway machine on a clone of a pulled Linux raw disk (`unknown` when none is pulled);
+`vz_macos_live_snapshot` has no runner until a vz-macos guest can boot.
 `SerialBridge` (R-602) is the runner's end of `<vm>/serial.sock`: the virtio console byte for byte,
 one client at a time like QEMU's socket chardev (a second waits in the backlog), client bytes to the
 guest's input pipe, and output made while nobody is connected kept (last 1 MB) for the next client,

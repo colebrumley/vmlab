@@ -13,6 +13,7 @@
   "fileSystems" : [
 
   ],
+  "machineIdentifier" : "/vmlab/vms/vm-test01/machine-id.bin",
   "memoryBalloon" : true,
   "memoryBytes" : 4294967296,
   "network" : [

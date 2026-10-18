@@ -23,7 +23,9 @@ import VMLabCore
   @Test func registerProbesFillsTheEngineProbes() {
     let registry = SlowProbeRegistry()
     Engines.registerProbes(into: registry)
-    #expect(registry.probes == [.qemuHVFGDB, .qemuHVFLiveSnapshot, .qemuVmnet])
+    #expect(
+      registry.probes == [.qemuHVFGDB, .qemuHVFLiveSnapshot, .qemuVmnet, .vzLinuxLiveSnapshot])
+    #expect(registry.runner(for: .vzMacOSLiveSnapshot) == nil)
     #expect(registry.runner(for: .qemuHVFGDB) is HVFGDBProbe)
   }
 

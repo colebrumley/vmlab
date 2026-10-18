@@ -82,7 +82,11 @@ enum ConfigurationBuilder {
     let machine = VZVirtualMachineConfiguration()
     machine.cpuCount = plan.cpus
     machine.memorySize = plan.memoryBytes
-    machine.platform = VZGenericPlatformConfiguration()
+    let platform = VZGenericPlatformConfiguration()
+    if let path = plan.machineIdentifier {
+      platform.machineIdentifier = try machineIdentifier(at: URL(filePath: path))
+    }
+    machine.platform = platform
 
     switch plan.bootLoader {
     case .efi(let path):
@@ -172,6 +176,20 @@ enum ConfigurationBuilder {
       throw validationError(error)
     }
     return BuiltMachine(configuration: machine, console: pipes)
+  }
+
+  /// The identifier stored at `url`, or a new one written there.
+  static func machineIdentifier(at url: URL) throws(VMLabError) -> VZGenericMachineIdentifier {
+    if let data = try? Data(contentsOf: url),
+      let stored = VZGenericMachineIdentifier(dataRepresentation: data)
+    {
+      return stored
+    }
+    let fresh = VZGenericMachineIdentifier()
+    do { try fresh.dataRepresentation.write(to: url, options: .atomic) } catch {
+      throw engineError("Cannot write the machine identifier \(url.path)", error)
+    }
+    return fresh
   }
 
   /// A failed `validate()`: `host_missing_tool` when the process lacks the entitlement.

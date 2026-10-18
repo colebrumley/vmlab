@@ -24,7 +24,7 @@ column is what the development host recorded (`docs/dev-host-facts.json`, refres
 | `custom_devices` | N | N | Y | Y |  |
 | `halt_at_start` | N | N | Y | Y |  |
 | `checkpoint_disk` | Y | Y | Y | Y |  |
-| `checkpoint_live` | ? `vz_macos_live_snapshot` (R-608) | ? `vz_linux_live_snapshot` (R-608) | ? `qemu_hvf_live_snapshot` (R-307) | Y | `vz_macos_live_snapshot`: unknown; `vz_linux_live_snapshot`: unknown; `qemu_hvf_live_snapshot`: yes, 2026-10-18 |
+| `checkpoint_live` | ? `vz_macos_live_snapshot` (R-608) | ? `vz_linux_live_snapshot` (R-608) | ? `qemu_hvf_live_snapshot` (R-307) | Y | `vz_macos_live_snapshot`: unknown; `vz_linux_live_snapshot`: yes, 2026-10-18; `qemu_hvf_live_snapshot`: yes, 2026-10-18 |
 | `pause` | Y | Y | Y | Y |  |
 | `net_nat` | Y | Y | Y | Y |  |
 | `net_fast` | Y | Y | C `root` or `qemu_vmnet` | C `root` or `qemu_vmnet` | `qemu_vmnet`: no, 2026-10-18 |

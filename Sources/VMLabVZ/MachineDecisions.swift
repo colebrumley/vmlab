@@ -93,6 +93,9 @@ public struct VZMachineDecisions: Codable, Sendable, Hashable {
   public var memoryBytes: UInt64
   /// Always `VZGenericPlatformConfiguration`.
   public var platform: String
+  /// The file holding the platform's `VZGenericMachineIdentifier`, created when absent; nil is a
+  /// fresh identifier per machine.
+  public var machineIdentifier: String?
   public var bootLoader: BootLoader
   public var storage: [BlockDevice]
   public var network: [NATDevice]
@@ -133,6 +136,7 @@ extension VZRunnerConfig {
       cpus: min(max(cpus, limits.minCPUs), limits.maxCPUs),
       memoryBytes: min(max(memoryBytes / mib * mib, limits.minMemoryBytes), limits.maxMemoryBytes),
       platform: "generic",
+      machineIdentifier: machineIdentifier,
       bootLoader: loader,
       storage: disks.map { .init(path: $0.path, readOnly: $0.readOnly) },
       network: nics,

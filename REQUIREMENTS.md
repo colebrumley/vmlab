@@ -606,7 +606,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   **Verify:** integration: `key cmd+space`, `type "Terminal"`, `key Return`, screenshot contains a
   new window (bounding-box diff non-empty).
 
-- [ ] **R-608 Save and restore on VZ (live checkpoints)**
+- [x] **R-608 Save and restore on VZ (live checkpoints)**
   Runner `save(path)`: pause, `saveMachineStateTo`, APFS-clone the disk (`clonefile(2)`) and the
   auxiliary storage beside it; `restore(path)`: `restoreMachineStateFrom` on a configuration built
   from the checkpoint's clones. `CheckpointProvider` for VZ: `disk` mode clones the disk of a

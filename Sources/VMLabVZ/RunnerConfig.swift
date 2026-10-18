@@ -102,12 +102,16 @@ public struct VZRunnerConfig: Codable, Sendable, Hashable {
   public var directoryShares: [DirectoryShare]
   /// Whether to share Rosetta for Linux with the guest under `rosettaTag` (R-603).
   public var rosetta: Bool
+  /// Where the `VZGenericMachineIdentifier` is kept (created on first use), so every machine
+  /// built for the VM is the same one: a saved state restores only into its own machine (R-608).
+  public var machineIdentifier: String?
 
   public init(
     cpus: Int, memoryBytes: UInt64, boot: Boot, disks: [Disk],
     network: [Network] = [.nat(macAddress: nil)], consoleLog: String? = nil,
     serialSocket: String? = nil, memoryBalloon: Bool = true, graphics: Graphics? = nil,
-    directoryShares: [DirectoryShare] = [], rosetta: Bool = false
+    directoryShares: [DirectoryShare] = [], rosetta: Bool = false,
+    machineIdentifier: String? = nil
   ) {
     self.cpus = cpus
     self.memoryBytes = memoryBytes
@@ -120,11 +124,12 @@ public struct VZRunnerConfig: Codable, Sendable, Hashable {
     self.graphics = graphics
     self.directoryShares = directoryShares
     self.rosetta = rosetta
+    self.machineIdentifier = machineIdentifier
   }
 
   enum CodingKeys: String, CodingKey {
     case cpus, memoryBytes, boot, disks, network, consoleLog, serialSocket, memoryBalloon
-    case graphics, directoryShares, rosetta
+    case graphics, directoryShares, rosetta, machineIdentifier
   }
 
   public init(from decoder: any Decoder) throws {
@@ -140,6 +145,7 @@ public struct VZRunnerConfig: Codable, Sendable, Hashable {
     graphics = try c.decodeIfPresent(Graphics.self, forKey: .graphics)
     directoryShares = try c.decodeIfPresent([DirectoryShare].self, forKey: .directoryShares) ?? []
     rosetta = try c.decodeIfPresent(Bool.self, forKey: .rosetta) ?? false
+    machineIdentifier = try c.decodeIfPresent(String.self, forKey: .machineIdentifier)
   }
 
   /// The guest command line for `.kernel` boot without one: the root on the first virtio disk and
@@ -196,7 +202,8 @@ public struct VZRunnerConfig: Codable, Sendable, Hashable {
             tag: SharedDirSpec.tag, path: $0.hostDirectory(vmDirectory: vmDirectory).path)
         ]
       } ?? [],
-      rosetta: wantsRosetta(record))
+      rosetta: wantsRosetta(record),
+      machineIdentifier: vmDirectory.appending(path: "machine-id.bin").path)
   }
 
   /// Whether the guest gets the Rosetta share: only when the request asked for `rosetta`

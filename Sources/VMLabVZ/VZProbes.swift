@@ -1,0 +1,116 @@
+import Darwin
+import Foundation
+import VMLabCore
+
+/// The slow probe `vz_linux_live_snapshot` (R-608, Appendix E): boots a throwaway `vz-linux`
+/// machine with the device set real guests get (`VZRunnerConfig.linux`) on a clone of a pulled
+/// Linux image's raw disk (`unknown` when none is pulled), without network or seed. It pauses the machine, saves its state, ends
+/// the runner, builds a held machine from the same configuration, restores the state into it and
+/// resumes: `yes` when the restored machine runs, `no` when the save or the restore is refused.
+/// Throws only when the machine could not be started at all (an unsigned runner, say).
+public struct VZLiveSnapshotProbe: SlowProbeRunner {
+  public var probe: SlowProbe { .vzLinuxLiveSnapshot }
+  public var launcher: VZRunnerLauncher
+
+  public init(launcher: VZRunnerLauncher = VZRunnerLauncher()) {
+    self.launcher = launcher
+  }
+
+  public func run(_ context: SlowProbeContext) async throws(VMLabError) -> ProbeResult {
+    _ = try launcher.checkedRunner()
+    let dir = Self.directory(home: context.home)
+    let files = FileManager.default
+    try? files.removeItem(at: dir)
+    defer {
+      try? files.removeItem(at: dir)
+      rmdir(dir.deletingLastPathComponent().path)
+    }
+    // A guest that runs: an APFS clone of a pulled arm64 Linux raw disk (Apple's EFI powers a
+    // machine off at once when it has nothing to boot).
+    guard let source = Self.bootableDisk(home: context.home) else { return .unknown }
+    do {
+      try files.createDirectory(at: dir, withIntermediateDirectories: true)
+    } catch {
+      throw VZCheckpoints.ioError("prepare \(dir.path)", error)
+    }
+    try VZCheckpoints.clone(source, to: dir.appending(path: "disk.raw"))
+    let guest = GuestSpec(os: .linux, arch: .arm64)
+    let record = VMRecord(
+      id: "probe-vz-live", profile: .vzLinux, guest: guest, features: [.serial],
+      resources: ResourceSpec(cpus: 1, memoryGB: 1), network: NetworkSpec(mode: .disabled))
+    let config = try VZRunnerConfig.linux(record: record, vmDirectory: dir, seed: false)
+    let first = try await launcher.launch(vmDirectory: dir, config: config)
+    let state = dir.appending(path: VZCheckpoints.stateFile).path
+    var current = first
+    defer { _ = Self.end(current) }
+    do {
+      try await Task.sleep(for: .seconds(5))
+      try await first.client.pause()
+      try await first.client.save(to: state)
+    } catch {
+      return .no
+    }
+    await Self.endAndWait(first)
+    let held: VZRunnerHandle
+    do {
+      held = try await launcher.launch(vmDirectory: dir, config: config, hold: true)
+    } catch {
+      return .no
+    }
+    current = held
+    do {
+      try await held.client.restore(from: state)
+      try await held.client.resume()
+      try await Task.sleep(for: .seconds(1))
+      return try await held.client.status().state == .running ? .yes : .no
+    } catch {
+      return .no
+    }
+  }
+
+  /// The raw disk of the first pulled arm64 Linux image, if any.
+  static func bootableDisk(home: URL) -> URL? {
+    let images = ImageStore(home: home)
+    for name in ImageCatalogue.builtin.images.map(\.name) {
+      guard let pulled = images.pulled(name), pulled.guest == GuestSpec(os: .linux, arch: .arm64),
+        let raw = pulled.files["raw"]
+      else { continue }
+      let url = images.imageDirectory(name).appending(path: raw)
+      if FileManager.default.fileExists(atPath: url.path) { return url }
+    }
+    return nil
+  }
+
+  /// Under `home/probes/`, or under /tmp when that would make socket paths too long.
+  static func directory(home: URL) -> URL {
+    let name = "vz-live-snapshot-\(getpid())"
+    let preferred = home.appending(path: "probes/\(name)")
+    if preferred.appending(path: "control.sock").path.utf8.count <= UnixStream.maxPathBytes {
+      return preferred
+    }
+    return URL(filePath: "/tmp/vmlab-probe-\(name)")
+  }
+
+  @discardableResult
+  static func end(_ handle: VZRunnerHandle) -> Bool {
+    guard handle.pid > 0, LivenessProbe.processExists(handle.pid) else { return false }
+    Foundation.kill(handle.pid, SIGKILL)
+    return true
+  }
+
+  static func endAndWait(_ handle: VZRunnerHandle) async {
+    _ = try? await handle.client.exit()
+    let deadline = ContinuousClock.now + .seconds(10)
+    while LivenessProbe.processExists(handle.pid), ContinuousClock.now < deadline {
+      try? await Task.sleep(for: .milliseconds(100))
+    }
+    end(handle)
+  }
+}
+
+extension VMLabVZ {
+  /// The slow probes this module owns, for `Engines` to register. `vz_macos_live_snapshot` needs
+  /// a `vz-macos` guest, which this build cannot boot yet (R-605), so it stays unregistered and
+  /// `unknown`.
+  public static var probeRunners: [any SlowProbeRunner] { [VZLiveSnapshotProbe()] }
+}

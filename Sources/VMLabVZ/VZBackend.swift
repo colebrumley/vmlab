@@ -118,6 +118,8 @@ public struct VZBackend: Backend {
   /// Launches the runner, then waits up to `leaseTimeout` for the NIC's DHCP lease and records
   /// it as `runtime.ip` (nil when none appeared; the guest still runs).
   public func start(_ record: VMRecord) async throws(VMLabError) -> VMRuntime {
+    // A suspended guest comes back from its checkpoint: a held runner the restore loads into.
+    if let held = try await startSuspended(record) { return held }
     let dir = store.directory(of: record.id)
     // VZ refuses to start with a missing shared directory; say which field instead.
     try SharedDirSpec.of(record)?.checkHostDirectory(vmDirectory: dir)
@@ -195,7 +197,7 @@ public struct VZBackend: Backend {
     }
     return VZRunningVM(
       id: record.id, profile: profile, features: record.features, handle: handle, serial: serial,
-      ssh: ssh)
+      ssh: ssh, checkpoints: VZCheckpoints(backend: self, record: record))
   }
 
   /// The runner's client and pid, from the record's runtime or the VM directory.
@@ -265,7 +267,7 @@ final class VZSerialChannels: Sendable {
   }
 }
 
-/// A running VZ guest. Display (R-503) and checkpoints (R-605) are not wired yet.
+/// A running VZ guest. Display is Core's `DisplayEndpoint.forVM` (R-503).
 public struct VZRunningVM: RunningVM {
   public let id: String
   public let profile: Profile
@@ -277,7 +279,8 @@ public struct VZRunningVM: RunningVM {
 
   public init(
     id: String, profile: Profile, features: [Feature], handle: VZRunnerHandle,
-    serial: SerialChannel? = nil, ssh: SSHTarget? = nil
+    serial: SerialChannel? = nil, ssh: SSHTarget? = nil,
+    checkpoints: (any CheckpointProvider)? = nil
   ) {
     self.id = id
     self.profile = profile
@@ -285,7 +288,10 @@ public struct VZRunningVM: RunningVM {
     self.handle = handle
     self.serial = serial
     self.ssh = ssh
+    self.provider = checkpoints
   }
+
+  private let provider: (any CheckpointProvider)?
 
   public var display: DisplayEndpoint? { nil }
   public var gdb: GDBEndpoint? { nil }
@@ -295,7 +301,7 @@ public struct VZRunningVM: RunningVM {
     return NotYet(vm: id, channel: "exec", item: "R-400: no DHCP lease was recorded for SSH")
   }
   public var checkpoints: any CheckpointProvider {
-    NotYet(vm: id, channel: "checkpoints", item: "R-605")
+    provider ?? NotYet(vm: id, channel: "checkpoints", item: "R-608")
   }
 
   struct NotYet: ExecChannel, CheckpointProvider {

@@ -52,9 +52,48 @@ import VMLabQEMU
     await guest.shutdown()
   }
 
-  /// The VZ Linux half of R-800's Verify. VZ checkpoints (save/restore and disk clones) come from
-  /// R-608, which is not built: VZBackend has no CheckpointProvider yet.
-  // TODO(R-608): enable once VZBackend.checkpoints(_:) exists, mirroring the QEMU test above.
-  @Test(.disabled("TODO(R-608): VZ checkpoints are not built yet"))
-  func vzLinuxRestoresEachSideOfTheTree() async throws {}
+  /// The VZ Linux half of R-800's Verify, on R-608's save/restore and disk clones.
+  @Test(.enabled(if: VZRunnerIntegrationTests.ready), .timeLimit(.minutes(10)))
+  func vzLinuxRestoresEachSideOfTheTree() async throws {
+    let guest = try await VZGuest.boot(
+      features: [.execSSH, .serial, .checkpointDisk, .checkpointLive], tag: "t")
+    defer { guest.cleanUp() }
+    let id = guest.id
+    let manager = guest.manager
+
+    let a = try await manager.createCheckpoint(id, name: "A")
+    #expect(a.node.mode == .live)
+    #expect(await guest.ssh("echo b > /home/debian/marker && sync")?.status == 0)
+    let b = try await manager.createCheckpoint(id, name: "B")
+    #expect(b.node.parent == a.node.id)
+
+    _ = try await manager.restoreCheckpoint(id, name: "A")
+    let cps = guest.directory.appending(path: "checkpoints")
+    #expect(await guest.ssh("test ! -e /home/debian/marker")?.status == 0)
+    _ = try await manager.restoreCheckpoint(id, name: "B")
+    #expect(await guest.ssh("test -e /home/debian/marker")?.status == 0)
+    #expect(try await manager.checkpoints(of: id).current == b.node.id)
+
+    // checkpoint_stop and start: the guest comes back from its saved memory.
+    #expect(await guest.ssh("echo s > /dev/shm/suspended")?.status == 0)
+    let suspended = try #require(try await manager.perform(.checkpointStop, on: id))
+    #expect(suspended.state == .suspended)
+    let resumed = try #require(try await manager.perform(.start, on: id))
+    #expect(resumed.state == .running)
+    #expect(await guest.ssh("test -e /dev/shm/suspended")?.status == 0)
+    #expect(try await manager.checkpoints(of: id).resume == nil)
+
+    // A disk checkpoint of the stopped guest, restored after a change.
+    try await manager.perform(.stop, on: id)
+    let d = try await manager.createCheckpoint(id, name: "D", mode: .disk)
+    #expect(d.node.mode == .disk)
+    _ = try await manager.restoreCheckpoint(id, name: "D")
+
+    let deleted = try await manager.deleteCheckpoint(id, name: "A", recursive: true)
+    #expect(deleted.count == 4)
+    #expect(try await manager.checkpoints(of: id).nodes.isEmpty)
+    #expect(
+      (try? FileManager.default.contentsOfDirectory(
+        atPath: guest.directory.appending(path: "checkpoints").path))?.isEmpty ?? true)
+  }
 }

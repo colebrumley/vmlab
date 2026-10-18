@@ -12,7 +12,9 @@ enum VZGuestSSH {
     process.arguments = [
       "-i", key.path, "-o", "IdentitiesOnly=yes", "-o", "BatchMode=yes",
       "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null",
-      "-o", "ConnectTimeout=5", "-o", "LogLevel=ERROR", "\(user)@\(host)", command,
+      "-o", "ConnectTimeout=5", "-o", "LogLevel=ERROR",
+      // A user's ControlMaster would reuse a session the restored guest no longer has.
+      "-o", "ControlMaster=no", "-o", "ControlPath=none", "\(user)@\(host)", command,
     ]
     let output = FileManager.default.temporaryDirectory
       .appending(path: "vmlab-ssh-\(UUID().uuidString).out")
