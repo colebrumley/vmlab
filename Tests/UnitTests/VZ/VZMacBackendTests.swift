@@ -65,6 +65,22 @@ import VMLabCore
       ])
   }
 
+  /// CR-1: destroy deletes only the Tart VM named after this record's own id, never another VM's
+  /// clone that a copied `tartClone` names.
+  @Test func destroyNeverDeletesAnotherVMsClone() async throws {
+    let (home, store, backend, fake) = try Self.sandbox()
+    defer { try? FileManager.default.removeItem(at: home) }
+    let source = try Self.create(store)
+    try await backend.create(source, plan: Self.plan)
+    let sourceClone = try #require(try store.load(id: source.id).tartClone)
+    var other = try Self.create(store)
+    other.tartClone = sourceClone
+    try await backend.destroy(other)
+    #expect(FileManager.default.fileExists(atPath: sourceClone))
+    #expect(!(fake.calls.withLock { $0 }.contains(["delete", source.id])))
+    #expect(!backend.supportsClone)
+  }
+
   /// A clone whose layout this build cannot read is deleted again and the create fails.
   @Test func unreadableCloneIsDeleted() async throws {
     let broken = TartTests.temporary()

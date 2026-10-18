@@ -7,6 +7,8 @@ import VMLabCore
 /// F; R-608 makes those), then `create` writes the clone's seed with its own key and MAC. A raw
 /// clone shares no file with its source, so the backing chain is empty.
 extension VZBackend {
+  public var supportsClone: Bool { true }
+
   public func clone(
     _ source: VMRecord, checkpoint: CheckpointNode?, into target: VMRecord
   ) async throws(VMLabError) -> [URL] {

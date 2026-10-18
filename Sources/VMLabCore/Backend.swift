@@ -51,9 +51,14 @@ public protocol Backend: Sendable {
   func clone(
     _ source: VMRecord, checkpoint: CheckpointNode?, into target: VMRecord
   ) async throws(VMLabError) -> [URL]
+  /// Whether `clone` is implemented. The manager refuses a clone before it stores anything when
+  /// it is false. The default is false; an engine that implements `clone` says true.
+  var supportsClone: Bool { get }
 }
 
 extension Backend {
+  public var supportsClone: Bool { false }
+
   public func stop(_ record: VMRecord, grace: Duration?) async throws(VMLabError) {
     try await stop(record)
   }
@@ -61,9 +66,7 @@ extension Backend {
   public func clone(
     _ source: VMRecord, checkpoint: CheckpointNode?, into target: VMRecord
   ) async throws(VMLabError) -> [URL] {
-    throw VMLabError.invalidRequest(
-      field: "action", reason: "\(profile.rawValue) VMs cannot be cloned yet",
-      hint: "Create a new VM with vm_create instead.")
+    throw VMLabError.cloneUnsupported(profile)
   }
 
   public func sshEndpoint(_ record: VMRecord, timeout: Duration) async -> SSHEndpoint? {
@@ -80,6 +83,15 @@ extension Backend {
     stopped.state = .stopped
     stopped.runtime = nil
     return try await start(stopped)
+  }
+}
+
+extension VMLabError {
+  /// `invalid_request`: `profile`'s engine does not implement `Backend.clone`.
+  static func cloneUnsupported(_ profile: Profile) -> VMLabError {
+    .invalidRequest(
+      field: "action", reason: "\(profile.rawValue) VMs cannot be cloned yet",
+      hint: "Create a new VM with vm_create instead.")
   }
 }
 

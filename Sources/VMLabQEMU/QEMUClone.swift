@@ -15,6 +15,8 @@ import VMLabCore
 /// The source's EFI variables are copied too, so the clone keeps its boot entries. The recorded
 /// chain comes from `qemu-img info --backing-chain`.
 extension QEMUBackend {
+  public var supportsClone: Bool { true }
+
   public static let backingDirectory = "backing"
 
   public func clone(
