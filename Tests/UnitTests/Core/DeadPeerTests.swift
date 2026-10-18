@@ -97,3 +97,20 @@ import VMLabCore
     #expect(!String(decoding: plain, as: UTF8.self).contains("brokenReason"))
   }
 }
+
+@Suite struct GDBDeadPeerMarkingTests {
+  @Test func theVMWhoseStubDiedIsMarkedBroken() async throws {
+    let f = try VMManagerTests.Fixture()
+    let vm = try await f.create()
+    try await f.manager.perform(.start, on: vm.id)
+    try f.store.update(id: vm.id) { $0.runtime?.gdbEndpoint = "tcp:127.0.0.1:41234" }
+    #expect(
+      await f.store.markBroken(
+        gdbEndpoint: GDBEndpoint(host: "127.0.0.1", port: 9), reason: "gdb: x") == false)
+    #expect(
+      await f.store.markBroken(
+        gdbEndpoint: GDBEndpoint(host: "127.0.0.1", port: 41234), reason: "gdb: silent"))
+    let record = try f.store.load(id: vm.id)
+    #expect(record.state == .broken && record.brokenReason == "gdb: silent")
+  }
+}

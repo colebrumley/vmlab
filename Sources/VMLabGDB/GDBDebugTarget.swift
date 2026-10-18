@@ -10,9 +10,16 @@ import VMLabCore
 public struct GDBDebugConnector: DebugConnector {
   /// How long the `qSupported` handshake and every later reply may take.
   public var replyTimeout: Duration
+  /// Called with the stub and the reason when a connected stub misses an ack or a reply
+  /// (R-1101); `Engines` marks the VM broken from it.
+  public var onDeadPeer: (@Sendable (GDBEndpoint, String) async -> Void)?
 
-  public init(replyTimeout: Duration = .seconds(5)) {
+  public init(
+    replyTimeout: Duration = .seconds(5),
+    onDeadPeer: (@Sendable (GDBEndpoint, String) async -> Void)? = nil
+  ) {
     self.replyTimeout = replyTimeout
+    self.onDeadPeer = onDeadPeer
   }
 
   public func connect(to endpoint: GDBEndpoint, arch: GuestSpec.Arch) async throws(VMLabError)
@@ -53,6 +60,10 @@ public struct GDBDebugConnector: DebugConnector {
     } catch {
       await client.close()
       throw GDBError.connectionFailed("\(error)").vmLabError(endpoint: endpoint)
+    }
+    // Registered after the handshake: a stub that does not answer it is busy, not dead.
+    if let onDeadPeer {
+      await client.onDeadPeer { reason in await onDeadPeer(endpoint, reason) }
     }
     return GDBDebugTarget(client: client, endpoint: endpoint, architecture: architecture)
   }
