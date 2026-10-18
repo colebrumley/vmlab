@@ -63,7 +63,8 @@ public struct VZBackend: Backend {
       instanceID: record.id, hostname: Self.hostname(for: record), user: pulled.login.user,
       sshPublicKey: key, gui: try Self.guiStack(plan: plan, vmDirectory: dir), console: .hvc0,
       dhcpIdentifierMAC: record.network.mode == .disabled
-        ? nil : VZRunnerConfig.stableMAC(for: record.id))
+        ? nil : VZRunnerConfig.stableMAC(for: record.id)
+    ).provisioned(record.provision)
     seed.applyTemplate(pulled.template)
     if let segment = record.segment, record.network.mode != .disabled {
       seed.segment = SegmentNIC(

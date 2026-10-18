@@ -67,12 +67,24 @@ public indirect enum Condition: Sendable, Hashable {
     case .probe(let probe):
       switch host.probe(probe) {
       case .unknown: "probe \(probe.rawValue) has not been verified on this host"
-      case .no: "probe \(probe.rawValue) answered no on this host"
+      case .no: probe.noReason ?? "probe \(probe.rawValue) answered no on this host"
       case .yes: "probe \(probe.rawValue) answered yes"
       }
     case .anyOf(let conditions):
       conditions.filter { !$0.holds(on: host) }.map { $0.reasonUnmet(on: host) }
         .joined(separator: "; and ")
+    }
+  }
+}
+
+extension SlowProbe {
+  /// What a refusal says when this probe answered `no`, for probes with more to say than that.
+  public var noReason: String? {
+    switch self {
+    case .qemuHVFGDB:
+      "GDB under HVF unsupported by this QEMU (probe qemu_hvf_gdb answered no); use arch x86_64, "
+        + "or run the arm64 guest under qemu-tcg (emulated, slow)"
+    default: nil
     }
   }
 }

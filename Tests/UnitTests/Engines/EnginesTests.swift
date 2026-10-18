@@ -1,7 +1,8 @@
 import Foundation
 import Testing
 import VMLabCore
-import VMLabEngines
+
+@testable import VMLabEngines
 
 @Suite struct EnginesTests {
   @Test func registerAllFillsEveryEngineProfile() throws {
@@ -19,9 +20,18 @@ import VMLabEngines
     #expect(throws: VMLabError.self) { try registry.backend(for: .vzMacOS) }
   }
 
-  @Test func registerProbesFillsTheQEMUProbes() {
+  @Test func registerProbesFillsTheEngineProbes() {
     let registry = SlowProbeRegistry()
     Engines.registerProbes(into: registry)
-    #expect(registry.probes == [.qemuHVFLiveSnapshot, .qemuVmnet])
+    #expect(registry.probes == [.qemuHVFGDB, .qemuHVFLiveSnapshot, .qemuVmnet])
+    #expect(registry.runner(for: .qemuHVFGDB) is HVFGDBProbe)
+  }
+
+  @Test func hvfGDBProbeBootsAHaltedDisklessMachine() {
+    let arguments = HVFGDBProbe.arguments(port: 4321)
+    #expect(arguments.contains("-S"))
+    #expect(arguments.joined(separator: " ").contains("-accel hvf"))
+    #expect(arguments.joined(separator: " ").contains("-gdb tcp:127.0.0.1:4321"))
+    #expect(!arguments.contains("-drive"))
   }
 }

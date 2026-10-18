@@ -7,7 +7,7 @@ import VMLabCore
 /// one operation throw.
 final class FakeBackend: Backend {
   enum Operation: String, Sendable {
-    case create, start, stop, kill, pause, resume, reset, destroy, attach
+    case create, start, stop, kill, pause, resume, reset, destroy, attach, clone
   }
 
   struct Call: Sendable, Equatable {
@@ -94,6 +94,17 @@ final class FakeBackend: Backend {
 
   func destroy(_ record: VMRecord) async throws(VMLabError) { try self.record(.destroy, record) }
 
+  /// Writes the clone's `disk.raw` and reports a chain through `<source>/backing/<key>.qcow2`.
+  func clone(
+    _ source: VMRecord, checkpoint: CheckpointNode?, into target: VMRecord
+  ) async throws(VMLabError) -> [URL] {
+    try self.record(.clone, target)
+    let disk = store.directory(of: target.id).appending(path: "disk.raw")
+    FileManager.default.createFile(atPath: disk.path, contents: Data())
+    let key = checkpoint?.id ?? "disk-\(target.id)"
+    return [store.directory(of: source.id).appending(path: "backing/\(key).qcow2")]
+  }
+
   func attach(_ record: VMRecord) async throws(VMLabError) -> any RunningVM {
     try self.record(.attach, record)
     let dir = store.directory(of: record.id)
@@ -132,11 +143,15 @@ struct FakeRunningVM: RunningVM {
   var exec: any ExecChannel
   var checkpoints: any CheckpointProvider
   var memoryDump: (any MemoryDumper)? = FakeMemoryDumper()
+  var agentExec: (any ExecChannel)? = FakeExec(prefix: "agent: ")
 }
 
 struct FakeExec: ExecChannel {
+  /// Put before the echoed command, so a test can tell which channel ran it.
+  var prefix = ""
+
   func run(_ request: ExecRequest) async throws(VMLabError) -> ExecResult {
-    ExecResult(exitCode: 0, stdout: request.command + "\n", stderr: "")
+    ExecResult(exitCode: 0, stdout: prefix + request.command + "\n", stderr: "")
   }
 }
 

@@ -23,7 +23,7 @@ console=ttyAMA0 root=/dev/vda1
 -drive
 if=none,id=disk0,format=qcow2,cache=writeback,discard=unmap,file=/Users/someone/.vmlab/vms/vm-hvf234/disk.qcow2
 -device
-virtio-blk-pci,drive=disk0,bootindex=0
+virtio-blk-pci,drive=disk0
 -drive
 if=none,id=seed,format=raw,readonly=on,file=/Users/someone/.vmlab/vms/vm-hvf234/seed.iso
 -device
@@ -44,6 +44,12 @@ usb-tablet
 virtio-keyboard-pci
 -device
 virtio-tablet-pci
+-chardev
+socket,id=qga0,path=/Users/someone/.vmlab/vms/vm-hvf234/qga.sock,server=on,wait=off
+-device
+virtio-serial-pci,id=vser0
+-device
+virtserialport,bus=vser0.0,chardev=qga0,name=org.qemu.guest_agent.0
 -qmp
 unix:/Users/someone/.vmlab/vms/vm-hvf234/qmp.sock,server,wait=off
 -serial

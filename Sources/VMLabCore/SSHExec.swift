@@ -49,18 +49,8 @@ public struct SSHExecChannel: ExecChannel {
       stdout: files.stdoutURL, stderr: files.stderrURL,
       log: execDirectory.appending(path: "\(job).log"))
     if outcome.timedOut {
-      let seconds = Double(request.timeout / .milliseconds(1)) / 1000
-      var data: [String: JSONValue] = [
-        "vm": .string(target.vm), "timeoutSeconds": .number(seconds),
-        "stdout": .string(output.stdout), "stderr": .string(output.stderr),
-        "truncated": .bool(output.truncated), "durationMs": .number(Double(durationMs)),
-      ]
-      if let log = output.logPath { data["logPath"] = .string(log) }
-      throw VMLabError(
-        code: .timeout,
-        message: "The command did not finish within \(Self.format(seconds)) s and was killed",
-        hint: "Raise timeoutSeconds, or run it with background: true and poll vm_job.",
-        data: data)
+      throw ExecTimeout.error(
+        vm: target.vm, timeout: request.timeout, output: output, durationMs: durationMs)
     }
     if outcome.status == 255, Self.isSSHFailure(output.stderr) {
       throw Self.unreachable(target, output.stderr)
@@ -68,10 +58,6 @@ public struct SSHExecChannel: ExecChannel {
     return ExecResult(
       exitCode: outcome.status, stdout: output.stdout, stderr: output.stderr,
       durationMs: durationMs, truncated: output.truncated, logPath: output.logPath)
-  }
-
-  static func format(_ seconds: Double) -> String {
-    seconds == seconds.rounded() ? String(Int(seconds)) : String(seconds)
   }
 
   // MARK: Helpers
@@ -91,6 +77,19 @@ public struct SSHExecChannel: ExecChannel {
     return markers.contains { stderr.contains($0) }
   }
 
+  /// Whether `ssh` failed before the remote command could start (no session was set up), so the
+  /// command may safely go to another channel (R-403).
+  static func isConnectFailure(_ stderr: String) -> Bool {
+    let markers = [
+      "ssh: connect to host", "Permission denied (", "Host key verification failed",
+      "kex_exchange_identification", "Connection refused", "Connection timed out",
+      "REMOTE HOST IDENTIFICATION HAS CHANGED", "Could not resolve hostname",
+    ]
+    if stderr.contains("closed by remote host") { return false }
+    return markers.contains { stderr.contains($0) }
+      || (stderr.contains("Connection closed by") && !stderr.contains("Broken pipe"))
+  }
+
   static func unreachable(_ target: SSHTarget, _ stderr: String) -> VMLabError {
     let last =
       stderr.split(separator: "\n").last.map(String.init)?.trimmingCharacters(in: .whitespaces)
@@ -102,18 +101,19 @@ public struct SSHExecChannel: ExecChannel {
       hint: "The guest may still be booting; wait and retry, or read vm_serial to see where it is.",
       data: [
         "vm": .string(target.vm), "tried": .array([.string("ssh")]), "error": .string(last),
+        ExecFallback.connectedKey: .bool(!isConnectFailure(stderr)),
       ])
   }
 }
 
 /// The scratch files of one command's output under `<vm>/exec/`.
-struct ExecFiles {
-  let stdoutURL: URL
-  let stderrURL: URL
-  let stdout: FileHandle
-  let stderr: FileHandle
+public struct ExecFiles {
+  public let stdoutURL: URL
+  public let stderrURL: URL
+  public let stdout: FileHandle
+  public let stderr: FileHandle
 
-  init(directory: URL, job: String) throws(VMLabError) {
+  public init(directory: URL, job: String) throws(VMLabError) {
     stdoutURL = directory.appending(path: "\(job).stdout")
     stderrURL = directory.appending(path: "\(job).stderr")
     do {
@@ -133,12 +133,12 @@ struct ExecFiles {
     }
   }
 
-  func close() {
+  public func close() {
     try? stdout.close()
     try? stderr.close()
   }
 
-  func removeScratch() {
+  public func removeScratch() {
     close()
     try? FileManager.default.removeItem(at: stdoutURL)
     try? FileManager.default.removeItem(at: stderrURL)
@@ -161,7 +161,7 @@ public enum ExecOutput {
 
   /// Reads both scratch files; when either is over the limit, the whole output moves to `log`
   /// (stdout, then stderr after a `==> stderr <==` line when it was cut too).
-  static func collect(stdout: URL, stderr: URL, log: URL) -> Collected {
+  public static func collect(stdout: URL, stderr: URL, log: URL) -> Collected {
     let out = excerpt(of: stdout)
     let err = excerpt(of: stderr)
     guard out.cut || err.cut else {

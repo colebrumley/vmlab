@@ -51,6 +51,24 @@ public struct CheckpointRef: Codable, Sendable, Hashable {
   }
 }
 
+/// Where a cloned VM's disk came from (R-803): the source VM and, when cloned from one, the
+/// checkpoint (its id and name at the time).
+public struct CloneOrigin: Codable, Sendable, Hashable {
+  public var vm: String
+  public var checkpoint: String?
+  public var checkpointName: String?
+  public var at: Date
+
+  public init(
+    vm: String, checkpoint: String? = nil, checkpointName: String? = nil, at: Date = Date()
+  ) {
+    self.vm = vm
+    self.checkpoint = checkpoint
+    self.checkpointName = checkpointName
+    self.at = at
+  }
+}
+
 /// The contents of `vms/<id>/vm.json` (constraint C4). `features` is the resolved feature set the
 /// plan granted.
 public struct VMRecord: Codable, Sendable, Hashable {
@@ -74,6 +92,12 @@ public struct VMRecord: Codable, Sendable, Hashable {
   /// The plan the selector made when the VM was created, so `vm_inspect` can show it after a
   /// context reset. Absent from records written before it existed (additive: schema 1 still).
   public var plan: Plan?
+  /// The VM this one was cloned from (R-803); nil for a VM made from an image.
+  public var clonedFrom: CloneOrigin?
+  /// The files the VM's disk reads through, nearest first (absolute paths): for a qcow2 clone the
+  /// frozen layer in the source's `backing/` directory, then that layer's own backing files. Nil
+  /// when none were recorded. `vm_lifecycle destroy` and `vmlab gc` read it (R-805).
+  public var backingChain: [String]?
   /// How the guest boots (the request's `boot`); nil is from its disk. Additive: schema 1 still.
   public var boot: BootSpec?
   /// The request's `extra` (R-306: `qemuArgs`); nil when it had none. Additive: schema 1 still.
@@ -82,14 +106,18 @@ public struct VMRecord: Codable, Sendable, Hashable {
   public var segment: SegmentAttachment?
   /// The fleet the VM belongs to (R-903); nil for a VM of its own. Additive: schema 1.
   public var fleet: String?
+  /// The request's `provision` (R-1001); nil when it had none. Additive: schema 1 still.
+  public var provision: ProvisionSpec?
+  /// The request's `share` (R-404); nil when it had none. Additive: schema 1 still.
+  public var share: SharedDirSpec?
 
   public init(
     id: String, name: String? = nil, profile: Profile, guest: GuestSpec, features: [Feature],
     resources: ResourceSpec = ResourceSpec(), image: String? = nil,
     network: NetworkSpec = NetworkSpec(), createdAt: Date = Date(), state: VMState = .created,
     runtime: VMRuntime? = nil, checkpoints: [CheckpointRef] = [], plan: Plan? = nil,
-    boot: BootSpec? = nil, extra: ExtraSpec? = nil, segment: SegmentAttachment? = nil,
-    fleet: String? = nil
+    boot: BootSpec? = nil, extra: ExtraSpec? = nil, provision: ProvisionSpec? = nil,
+    share: SharedDirSpec? = nil, segment: SegmentAttachment? = nil, fleet: String? = nil
   ) {
     self.schemaVersion = Self.currentSchemaVersion
     self.id = id
@@ -109,11 +137,14 @@ public struct VMRecord: Codable, Sendable, Hashable {
     self.extra = extra
     self.segment = segment
     self.fleet = fleet
+    self.provision = provision
+    self.share = share
   }
 
   enum CodingKeys: String, CodingKey {
     case schemaVersion, id, name, profile, guest, features, resources, image, network, createdAt
-    case state, runtime, checkpoints, plan, boot, extra, segment, fleet
+    case state, runtime, checkpoints, plan, boot, extra, provision, share, clonedFrom, backingChain
+    case segment, fleet
   }
 
   public init(from decoder: any Decoder) throws {
@@ -133,9 +164,13 @@ public struct VMRecord: Codable, Sendable, Hashable {
     checkpoints = try c.decodeIfPresent([CheckpointRef].self, forKey: .checkpoints) ?? []
     plan = try c.decodeIfPresent(Plan.self, forKey: .plan)
     boot = try c.decodeIfPresent(BootSpec.self, forKey: .boot)
+    clonedFrom = try c.decodeIfPresent(CloneOrigin.self, forKey: .clonedFrom)
+    backingChain = try c.decodeIfPresent([String].self, forKey: .backingChain)
     extra = try c.decodeIfPresent(ExtraSpec.self, forKey: .extra)
     segment = try c.decodeIfPresent(SegmentAttachment.self, forKey: .segment)
     fleet = try c.decodeIfPresent(String.self, forKey: .fleet)
+    provision = try c.decodeIfPresent(ProvisionSpec.self, forKey: .provision)
+    share = try c.decodeIfPresent(SharedDirSpec.self, forKey: .share)
   }
 
   /// `vm-` plus six lowercase RFC 4648 base32 characters.

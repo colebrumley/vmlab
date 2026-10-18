@@ -22,11 +22,14 @@ public struct QEMULaunchOptions: Sendable, Hashable {
   public var vmnet: Bool
   /// The second NIC on a segment (R-901): `-netdev dgram` between its port socket and the switch.
   public var segment: QEMUSegmentNIC?
+  /// The host directory shared as 9p tag `share0` (R-404); nil shares nothing.
+  public var sharedDirectory: String?
 
   public init(
     boot: BootSpec = BootSpec(), firmware: QEMUFirmware? = nil, disk: Bool = true,
     seed: Bool = false, gdbPort: Int? = nil, sshHostPort: Int? = nil,
-    forwards: [PortForward]? = nil, vmnet: Bool = false, segment: QEMUSegmentNIC? = nil
+    forwards: [PortForward]? = nil, vmnet: Bool = false, sharedDirectory: String? = nil,
+    segment: QEMUSegmentNIC? = nil
   ) {
     self.boot = boot
     self.firmware = firmware
@@ -36,6 +39,7 @@ public struct QEMULaunchOptions: Sendable, Hashable {
     self.sshHostPort = sshHostPort
     self.forwards = forwards
     self.vmnet = vmnet
+    self.sharedDirectory = sharedDirectory
     self.segment = segment
   }
 }
@@ -73,6 +77,9 @@ public enum QEMUCommandLine {
       return allowed && !name.isEmpty && name.count <= 32 ? name : nil
     }
   }
+
+  /// The virtio-serial port name qemu-guest-agent opens in the guest.
+  public static let guestAgentPort = "org.qemu.guest_agent.0"
 
   /// The machine type: `q35` for x86_64, `virt` for everything else.
   public static func machine(for arch: GuestSpec.Arch) -> String {
@@ -136,7 +143,10 @@ public enum QEMUCommandLine {
         "-drive",
         "if=none,id=disk0,format=qcow2,cache=writeback,discard=unmap,file="
           + escape(layout.disk.path),
-        "-device", "virtio-blk-pci,drive=disk0,bootindex=0",
+        // A `-kernel` boot owns boot index 0 on x86 (the linuxboot option ROM); the disk is
+        // then only the root file system.
+        "-device",
+        "virtio-blk-pci,drive=disk0" + (options.boot.mode == .kernel ? "" : ",bootindex=0"),
       ]
     }
     if options.seed {
@@ -195,6 +205,30 @@ public enum QEMUCommandLine {
       // full kernels; virtio-input for cloud kernels, which have no USB stack.
       args += ["-device", "qemu-xhci", "-device", "usb-kbd", "-device", "usb-tablet"]
       args += ["-device", "virtio-keyboard-pci", "-device", "virtio-tablet-pci"]
+    }
+    // R-404: the shared directory as 9p over virtio (`-virtfs`). `mapped-xattr` keeps the
+    // guest's owners and modes in extended attributes, since QEMU runs unprivileged.
+    if let shared = options.sharedDirectory {
+      guard plan.grants(.sharedDir) else {
+        throw VMLabError.invalidRequest(
+          field: "share", reason: "the plan does not grant shared_dir",
+          hint: "Require shared_dir, or drop share.")
+      }
+      args += [
+        "-virtfs",
+        "local,path=\(escape(shared)),mount_tag=\(SharedDirSpec.tag),"
+          + "security_model=mapped-xattr,id=\(SharedDirSpec.tag)",
+      ]
+    }
+    // R-403: qemu-guest-agent's virtio-serial port, served on a unix socket of its own (QGA is
+    // not reachable through QMP). PCI-less `other` architectures get none.
+    if defaults && plan.grants(.execAgent) {
+      args += [
+        "-chardev",
+        "socket,id=qga0,path=\(escape(layout.agentSocket.path)),server=on,wait=off",
+        "-device", "virtio-serial-pci,id=vser0",
+        "-device", "virtserialport,bus=vser0.0,chardev=qga0,name=\(guestAgentPort)",
+      ]
     }
     args += ["-qmp", "unix:\(layout.qmpSocket.path),server,wait=off"]
     args += ["-serial", "unix:\(layout.serialSocket.path),server,wait=off"]

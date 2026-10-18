@@ -24,12 +24,14 @@ public struct QEMULaunchRequest: Sendable {
   public var vmnet: Bool
   /// The segment NIC (R-901).
   public var segment: QEMUSegmentNIC?
+  /// The host directory shared into the guest (R-404).
+  public var sharedDirectory: URL?
 
   public init(
     record: VMRecord, plan: Plan, layout: QEMULayout, baseImage: URL?,
     boot: BootSpec = BootSpec(), seed: CloudInitConfig? = nil, installation: QEMUInstallation,
     gdbPort: Int? = nil, sshHostPort: Int? = nil, forwards: [PortForward]? = nil,
-    vmnet: Bool = false, segment: QEMUSegmentNIC? = nil
+    vmnet: Bool = false, sharedDirectory: URL? = nil, segment: QEMUSegmentNIC? = nil
   ) {
     self.record = record
     self.plan = plan
@@ -43,6 +45,7 @@ public struct QEMULaunchRequest: Sendable {
     self.forwards = forwards
     self.vmnet = vmnet
     self.segment = segment
+    self.sharedDirectory = sharedDirectory
   }
 }
 
@@ -67,6 +70,8 @@ public actor QEMUMachine {
   public nonisolated let qmp: QMPClient
   public nonisolated let serial: SerialChannel
   public nonisolated let runtime: VMRuntime
+  /// qemu-guest-agent on `qga.sock` (R-403); it connects per command, so it needs no setup here.
+  public nonisolated let agent: GuestAgent
 
   init(layout: QEMULayout, pid: Int32, qmp: QMPClient, serial: SerialChannel, runtime: VMRuntime) {
     self.layout = layout
@@ -74,6 +79,8 @@ public actor QEMUMachine {
     self.qmp = qmp
     self.serial = serial
     self.runtime = runtime
+    agent = GuestAgent(
+      vm: layout.directory.lastPathComponent, socketPath: layout.agentSocket.path)
   }
 
   // MARK: Starting
@@ -150,7 +157,8 @@ public actor QEMUMachine {
     var options = QEMULaunchOptions(
       boot: request.boot, disk: request.baseImage != nil, seed: request.seed != nil,
       gdbPort: request.gdbPort, sshHostPort: request.sshHostPort, forwards: request.forwards,
-      vmnet: request.vmnet, segment: request.segment)
+      vmnet: request.vmnet, sharedDirectory: request.sharedDirectory?.path,
+      segment: request.segment)
     if request.boot.mode == .disk {
       options.firmware = try request.installation.firmware(for: request.plan.guest.arch)
     }

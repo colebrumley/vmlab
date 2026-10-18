@@ -98,7 +98,8 @@ Manage the guest image cache in ~/.vmlab/images. list shows pulled and available
 ```
 list: { images: [ { name, guest, arch, format, pulled, bytes?, template, path? } ] }
 pull: { name, path, bytes, cached }
-remove, prune: { removed: [name], bytesFreed }
+remove: { removed: [name], bytesFreed }
+prune: { removed: [name], bytesFreed, kept: [name] }
 register, template_create, extract_kernel: { name, path, files: [path] }
 ```
 
@@ -188,7 +189,9 @@ Everything about one VM: its record, the plan and resolved features (what channe
   endpoints: { ssh?, ip?, serial?, gdb?,
     display?: { kind, address, auth, passwordFile?, hostSide },
     forwards?: [ { guest, host: "127.0.0.1:port" } ] },
-  segments: [ { name, ip } ], events: [ Event ], panic?: { line, offset, at }, warnings }
+  segments: [ { name, ip } ], events: [ Event ], panic?: { line, offset, at },
+  provision?: { vm, finishedAt, steps: [ { name, command, status, exitCode?, durationMs?,
+    error? } ] }, warnings }
 ```
 
 ## `vm_lifecycle`
@@ -276,7 +279,7 @@ Copy files between the host and the guest over SSH. push copies the host path lo
 | `vm` | string | yes | The VM's id (vm-xxxxxx) or name, as vm_list or vm_create returned it. |
 | `action` | `push` \| `pull` | yes | Direction of the copy. |
 | `remote` | string | yes | Path in the guest. |
-| `local` | string |  | Path on the host (push: required; pull: optional). |
+| `local` | string |  | Absolute path on the host (push: required; pull: optional). |
 
 **Result**
 
@@ -344,7 +347,7 @@ The guest's serial console, captured from the first byte of boot. read returns t
 
 ## `vm_debug`
 
-Debug the guest CPU through its GDB stub. info gives the endpoint a human can attach to and whether vmlab is attached; halt stops the CPU; continue resumes; step executes one instruction; wait blocks until the CPU stops (breakpoint, watchpoint) or timeoutSeconds; breakpoint_add sets one at address (kind software, hardware, or a watch_* watchpoint over size bytes); breakpoint_remove clears it; breakpoints lists them; registers reads them; read_memory returns size bytes at address as hex (with ASCII up to 256 bytes); write_memory writes hex data. Addresses are numbers in 0x hex; no symbols. Needs gdb; require halt_at_start to debug from the first instruction.
+Debug the guest CPU through its GDB stub. info gives the endpoint a human can attach to and whether vmlab is attached; halt stops the CPU; continue resumes; step executes one instruction; wait blocks until the CPU stops (breakpoint, watchpoint) or timeoutSeconds; breakpoint_add sets one at address (kind software, hardware, or a watch_* watchpoint over size bytes); breakpoint_remove clears it; breakpoints lists them; registers reads them; read_memory returns size bytes at address as hex (with ASCII up to 256 bytes); write_memory writes hex data. Addresses are numbers in 0x hex; no symbols. Needs gdb; require halt_at_start to debug from the first instruction. The first action that needs the stub attaches, and QEMU stops the guest when a debugger attaches; continue resumes it. Breakpoints set on a running CPU leave it running.
 
 **Errors:** `vm_not_found`, `wrong_state`, `capability_missing`, `invalid_request`, `debug_busy`, `timeout`, `engine_error`
 
@@ -358,14 +361,16 @@ Debug the guest CPU through its GDB stub. info gives the endpoint a human can at
 | `data` | string |  | write_memory: the bytes as hex, e.g. 1f2003d5. |
 | `kind` | `software` \| `hardware` \| `watch_write` \| `watch_read` \| `watch_access`, default `software` |  | breakpoint_add, breakpoint_remove: the kind of stop point. |
 | `size` | integer, ≥ 1 |  | read_memory: bytes to read; watchpoints: bytes to watch. |
-| `thread` | string |  | The thread (CPU) to act on, as registers or info names it. |
+| `symbolFile` | string |  | A host path to the guest's symbol file (vmlinux, a kernel .debug), recorded for the info output so a human can load it; vmlab resolves no symbols. |
+| `thread` | string |  | step, continue, registers, read_memory, write_memory: the thread (CPU) to act on, as a stop reports it (e.g. p01.02). |
 | `timeoutSeconds` | integer, ≥ 1, default `30` |  | wait: the longest to block. |
 
 **Result**
 
 ```
 { stopped, reason?, pc?, registers?: { <name>: hex }, bytes?: hex, ascii?,
-  breakpoints?: [ { address, kind, size? } ], endpoint, attached }
+  breakpoints?: [ { address, kind, size? } ], endpoint, attached,
+  info: connect: { gdb, lldb }, symbolFile, note }
 ```
 
 ## `vm_introspect`
@@ -560,8 +565,15 @@ The `requirements` object of `vm_plan`, `vm_create` and `fleet` (`Requirements` 
 | `network.mode` | `nat` \| `none` |  | nat for outbound internet, none for no network device at all. |
 | `network.segment` | string |  | A private segment (net_segment) to join with a second NIC. |
 | `prefer` | array of `exec_ssh` \| `exec_agent` \| `gui` \| `gui_preboot` \| `gui_desktop` \| `gui_accel` \| `serial` \| `gdb` \| `introspection` \| `memory_dump` \| `direct_kernel_boot` \| `custom_firmware` \| `custom_devices` \| `halt_at_start` \| `checkpoint_disk` \| `checkpoint_live` \| `pause` \| `net_nat` \| `net_fast` \| `net_segment` \| `net_port_forward` \| `net_none` \| `rosetta` \| `nested_virt` \| `shared_dir` \| `cloud_init` \| `many_guests` |  | Features to have when possible; they rank profiles but never rule one out. |
+| `provision` | object |  | First-boot provisioning beyond vmlab's own setup. |
+| `provision.packages` | array of string |  | Packages cloud-init installs on first boot (Linux only). |
+| `provision.runCommands` | array of string |  | Commands run in order on first boot: as root after cloud-init (Linux), or over SSH as the login user (macOS). The first that fails stops the rest; vm_inspect reports it as provision_failed. |
+| `provision.userData` | string |  | cloud-init user-data merged after vmlab's own (its keys win, lists append); must start with #cloud-config, #!, #cloud-boothook or #include (Linux only). |
 | `require` | array of `exec_ssh` \| `exec_agent` \| `gui` \| `gui_preboot` \| `gui_desktop` \| `gui_accel` \| `serial` \| `gdb` \| `introspection` \| `memory_dump` \| `direct_kernel_boot` \| `custom_firmware` \| `custom_devices` \| `halt_at_start` \| `checkpoint_disk` \| `checkpoint_live` \| `pause` \| `net_nat` \| `net_fast` \| `net_segment` \| `net_port_forward` \| `net_none` \| `rosetta` \| `nested_virt` \| `shared_dir` \| `cloud_init` \| `many_guests` |  | Features the VM must have; a profile lacking any is ruled out. Default [] (VZ). |
 | `resources` | object |  | Guest resources; each omitted field takes the guest's default. |
 | `resources.cpus` | integer, ≥ 1 |  | Virtual CPUs. |
 | `resources.diskGB` | integer, ≥ 1 |  | Disk size in GB. |
 | `resources.memoryGB` | integer, ≥ 1 |  | Guest memory in GB. |
+| `share` | object |  | A host directory mounted read-write in the guest (implies shared_dir): 9p under QEMU (the guest kernel needs 9p; Debian's cloud kernel has none), virtiofs under VZ. |
+| `share.guest` | string, default `/mnt/host` |  | Absolute guest path it is mounted at. |
+| `share.host` | string |  | Absolute host path of an existing directory. Omitted: the VM's own shared/ directory (vm_inspect endpoints.share). |

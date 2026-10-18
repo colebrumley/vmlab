@@ -39,9 +39,25 @@ public protocol Backend: Sendable {
   /// The checkpoints of the VM in any state. The default attaches (so needs a live guest) and
   /// returns its `checkpoints` channel; an engine that checkpoints stopped guests overrides it.
   func checkpoints(_ record: VMRecord) async throws(VMLabError) -> any CheckpointProvider
+  /// Makes the disk of `target` (already stored, state `created`, its SSH key generated) from
+  /// `source`'s current disk, or from `checkpoint` of it (R-803), and whatever else the engine
+  /// needs to boot it; the guest's memory is not cloned. Returns the files the new disk reads
+  /// through, nearest first, which the manager records as `backingChain`. The manager holds the
+  /// source and refuses a current-disk clone of a live guest. The default refuses.
+  func clone(
+    _ source: VMRecord, checkpoint: CheckpointNode?, into target: VMRecord
+  ) async throws(VMLabError) -> [URL]
 }
 
 extension Backend {
+  public func clone(
+    _ source: VMRecord, checkpoint: CheckpointNode?, into target: VMRecord
+  ) async throws(VMLabError) -> [URL] {
+    throw VMLabError.invalidRequest(
+      field: "action", reason: "\(profile.rawValue) VMs cannot be cloned yet",
+      hint: "Create a new VM with vm_create instead.")
+  }
+
   public func sshEndpoint(_ record: VMRecord, timeout: Duration) async -> SSHEndpoint? {
     SSHEndpoint(runtime: record.runtime)
   }
@@ -323,15 +339,22 @@ extension Channel where Value == any MemoryDumper {
 }
 
 extension Channel where Value == any ExecChannel {
-  /// SSH or the agent, whichever the backend offers (`via: auto`).
-  public static var exec: Self { Self(name: "exec", features: [.execSSH, .execAgent]) { $0.exec } }
+  /// `via: auto` (R-403): SSH when it was granted and the guest answers, else the guest agent
+  /// when that was granted.
+  public static var exec: Self {
+    Self(name: "exec", features: [.execSSH, .execAgent]) { vm in
+      AutoExecChannel(
+        ssh: vm.features.contains(.execSSH) ? vm.exec : nil,
+        agent: vm.features.contains(.execAgent) ? vm.agentExec : nil)
+    }
+  }
   /// SSH only (`via: ssh`).
   public static var execSSH: Self {
     Self(name: "exec_ssh", features: [.execSSH]) { $0.exec }
   }
-  /// The guest agent only (`via: agent`); no backend offers it before R-403.
+  /// The guest agent only (`via: agent`, R-403).
   public static var execAgent: Self {
-    Self(name: "exec_agent", features: [.execAgent]) { _ in nil }
+    Self(name: "exec_agent", features: [.execAgent]) { $0.agentExec }
   }
 }
 
@@ -353,7 +376,10 @@ public protocol RunningVM: Sendable {
   var display: DisplayEndpoint? { get }
   var gdb: GDBEndpoint? { get }
   var introspection: (any Introspection)? { get }
+  /// Commands over SSH (R-400).
   var exec: any ExecChannel { get }
+  /// Commands through a host-side guest agent (R-403); nil (the default) when the engine has none.
+  var agentExec: (any ExecChannel)? { get }
   var checkpoints: any CheckpointProvider { get }
   /// Nil (the default) when the engine cannot dump memory.
   var memoryDump: (any MemoryDumper)? { get }
@@ -361,6 +387,7 @@ public protocol RunningVM: Sendable {
 
 extension RunningVM {
   public var memoryDump: (any MemoryDumper)? { nil }
+  public var agentExec: (any ExecChannel)? { nil }
 }
 
 extension RunningVM {
