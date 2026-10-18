@@ -10,6 +10,9 @@ import VMLabVZ
 /// template there without touching the shared cache. It registers the QEMU backends and, when the
 /// signed runner is built, `VZBackend`. `shutdown()` kills every guest it knows and removes the home.
 struct LabHome {
+  /// `codesign` of one binary from two suites at once fails; sign once per test process.
+  static let signOnce: Void = { try? VZRunnerIntegrationTests.signRunner() }()
+
   nonisolated(unsafe) static var counter = 0
   static let counterLock = NSLock()
 
@@ -39,7 +42,7 @@ struct LabHome {
     qemu = QEMUBackend(profile: .qemuHVF, store: store)
     registry.register(qemu)
     if VZRunnerIntegrationTests.ready {
-      try VZRunnerIntegrationTests.signRunner()
+      _ = Self.signOnce
       registry.register(
         VZBackend(
           store: store, launcher: VZRunnerLauncher(runnerPath: VZRunnerIntegrationTests.runner),
