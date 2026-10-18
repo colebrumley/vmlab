@@ -787,28 +787,28 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
 
 ## Phase 10 — Images and provisioning
 
-- [ ] **R-1000 Ubuntu images and the amd64 catalogue**
+- [x] **R-1000 Ubuntu images and the amd64 catalogue**
   Add `ubuntu-24.04-arm64`, `ubuntu-24.04-amd64`, `debian-13-amd64` with their checksum URLs;
   amd64 images select `qemu-tcg` only.
   **Verify:** catalogue test; integration: Ubuntu arm64 boots under both engines.
 
-- [ ] **R-1001 Custom user-data and packages**
+- [x] **R-1001 Custom user-data and packages**
   `Requirements.provision: { packages: [String], userData: String?, runCommands: [String] }` merged
   into the cloud-init seed; for macOS guests `runCommands` run over SSH after R-606.
   **Verify:** integration: a Debian guest created with `packages: [jq]` has `jq --version` working.
 
-- [ ] **R-1002 Register a local disk image or installer**
+- [x] **R-1002 Register a local disk image or installer**
   `images register <name> --disk <path> --guest linux --arch arm64 [--format raw|qcow2]` and
   `images register --ipsw <path>` (hands off to `tart create --from-ipsw` for a macOS base built
   locally; the attended install is the user's, documented in `docs/AGENT.md`).
   **Verify:** unit test for `image.json`; integration: a registered raw image boots.
 
-- [ ] **R-1003 Image cache policy**
+- [x] **R-1003 Image cache policy**
   `~/.vmlab/images` reports size in `host_facts`; `images prune` removes images no VM or template
   references; pulls over 10 GB (macOS) require `confirm: true` from the tool with the size stated.
   **Verify:** unit tests for the reference check and the confirm gate.
 
-- [ ] **R-1004 Reproducible first boot**
+- [x] **R-1004 Reproducible first boot**
   Every provisioning step (cloud-init, macOS SSH steps) writes `<vm>/provision.log` and a
   `provision.json` with each step's command, duration and exit; `vm_inspect` surfaces failures as
   a `provision_failed` warning rather than hiding them behind `ssh_unreachable`.

@@ -58,10 +58,13 @@ public struct CatalogImage: Codable, Sendable, Hashable {
   /// A qcow2 download is also converted to `disk.raw` with `qemu-img` (VZ boots raw only).
   public var convertToRaw: Bool
   public var login: ImageLogin
+  /// About how many bytes a pull downloads, for the confirm gate (R-1003); nil when unknown.
+  public var approxBytes: Int64?
 
   public init(
     name: String, guest: GuestSpec, url: String, format: ImageFormat, checksumURL: URL? = nil,
-    checksumAlgorithm: ChecksumAlgorithm? = nil, convertToRaw: Bool = false, login: ImageLogin
+    checksumAlgorithm: ChecksumAlgorithm? = nil, convertToRaw: Bool = false, login: ImageLogin,
+    approxBytes: Int64? = nil
   ) {
     self.name = name
     self.guest = guest
@@ -71,10 +74,12 @@ public struct CatalogImage: Codable, Sendable, Hashable {
     self.checksumAlgorithm = checksumAlgorithm
     self.convertToRaw = convertToRaw
     self.login = login
+    self.approxBytes = approxBytes
   }
 
   enum CodingKeys: String, CodingKey {
     case name, guest, url, format, checksumURL, checksumAlgorithm, convertToRaw, login
+    case approxBytes
   }
 
   public init(from decoder: any Decoder) throws {
@@ -88,6 +93,7 @@ public struct CatalogImage: Codable, Sendable, Hashable {
       ChecksumAlgorithm.self, forKey: .checksumAlgorithm)
     convertToRaw = try container.decodeIfPresent(Bool.self, forKey: .convertToRaw) ?? false
     login = try container.decode(ImageLogin.self, forKey: .login)
+    approxBytes = try container.decodeIfPresent(Int64.self, forKey: .approxBytes)
   }
 
   /// The name the checksum file lists the download under: the last path component of `url`.
@@ -120,25 +126,25 @@ public struct ImageCatalogue: Codable, Sendable, Hashable {
        "url": "https://cloud.debian.org/images/cloud/trixie/latest/debian-13-genericcloud-arm64.qcow2",
        "format": "qcow2", "convertToRaw": true,
        "checksumURL": "https://cloud.debian.org/images/cloud/trixie/latest/SHA512SUMS",
-       "checksumAlgorithm": "sha512", "login": {"user": "debian"}},
+       "checksumAlgorithm": "sha512", "login": {"user": "debian"}, "approxBytes": 340000000},
       {"name": "debian-13-amd64", "guest": {"os": "linux", "arch": "x86_64"},
        "url": "https://cloud.debian.org/images/cloud/trixie/latest/debian-13-genericcloud-amd64.qcow2",
        "format": "qcow2", "convertToRaw": false,
        "checksumURL": "https://cloud.debian.org/images/cloud/trixie/latest/SHA512SUMS",
-       "checksumAlgorithm": "sha512", "login": {"user": "debian"}},
+       "checksumAlgorithm": "sha512", "login": {"user": "debian"}, "approxBytes": 345000000},
       {"name": "ubuntu-24.04-arm64", "guest": {"os": "linux", "arch": "arm64"},
        "url": "https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-arm64.img",
        "format": "qcow2", "convertToRaw": true,
        "checksumURL": "https://cloud-images.ubuntu.com/noble/current/SHA256SUMS",
-       "checksumAlgorithm": "sha256", "login": {"user": "ubuntu"}},
+       "checksumAlgorithm": "sha256", "login": {"user": "ubuntu"}, "approxBytes": 620000000},
       {"name": "ubuntu-24.04-amd64", "guest": {"os": "linux", "arch": "x86_64"},
        "url": "https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img",
        "format": "qcow2", "convertToRaw": false,
        "checksumURL": "https://cloud-images.ubuntu.com/noble/current/SHA256SUMS",
-       "checksumAlgorithm": "sha256", "login": {"user": "ubuntu"}},
+       "checksumAlgorithm": "sha256", "login": {"user": "ubuntu"}, "approxBytes": 620000000},
       {"name": "macos-base", "guest": {"os": "macos", "arch": "arm64"},
        "url": "ghcr.io/cirruslabs/macos-tahoe-base:latest", "format": "tart",
-       "login": {"user": "admin", "password": "admin"}}
+       "login": {"user": "admin", "password": "admin"}, "approxBytes": 25000000000}
     ]}
     """
 }
@@ -185,10 +191,14 @@ public struct PulledImage: Codable, Sendable, Hashable {
   public var pulledAt: Date
   /// The release of the kernel in `files["kernel"]` when it was extracted (R-305).
   public var kernelVersion: String?
+  /// For a Tart image, the name `tart clone` takes as its source: the OCI reference that was
+  /// pulled, or the local Tart VM an IPSW was installed into (R-1002).
+  public var tartVM: String?
 
   public init(
     name: String, guest: GuestSpec, source: String, format: ImageFormat, checksum: Checksum?,
-    files: [String: String], login: ImageLogin, pulledAt: Date, kernelVersion: String? = nil
+    files: [String: String], login: ImageLogin, pulledAt: Date, kernelVersion: String? = nil,
+    tartVM: String? = nil
   ) {
     self.schemaVersion = Self.currentSchemaVersion
     self.name = name
@@ -199,6 +209,7 @@ public struct PulledImage: Codable, Sendable, Hashable {
     self.files = files
     self.login = login
     self.kernelVersion = kernelVersion
+    self.tartVM = tartVM
     // Whole seconds, so the record equals what image.json (ISO 8601) reads back.
     self.pulledAt = Date(timeIntervalSince1970: pulledAt.timeIntervalSince1970.rounded(.down))
   }
@@ -292,6 +303,11 @@ public actor ImageStore {
     let decoder = JSONDecoder()
     decoder.dateDecodingStrategy = .iso8601
     return try? decoder.decode(PulledImage.self, from: data)
+  }
+
+  /// The guest an image runs: its pulled record's, else its catalogue entry's; nil when unknown.
+  public nonisolated func guest(of name: String) -> GuestSpec? {
+    pulled(name)?.guest ?? catalogue.image(named: name)?.guest
   }
 
   /// Every catalogue image with its pulled record, then pulled images the catalogue lacks.
@@ -419,20 +435,28 @@ public actor ImageStore {
   }
 
   func convertToRaw(_ tool: String, _ qcow2: URL, _ raw: URL) throws {
-    let partial = raw.deletingLastPathComponent().appending(
-      path: raw.lastPathComponent + ".partial")
+    try convert(tool, qcow2, from: .qcow2, to: raw, as: .raw)
+  }
+
+  /// `qemu-img convert` from `input` to `output` through a `.partial` file.
+  func convert(
+    _ tool: String, _ input: URL, from: ImageFormat, to output: URL, as format: ImageFormat
+  ) throws {
+    let partial = output.deletingLastPathComponent().appending(
+      path: output.lastPathComponent + ".partial")
     try? FileManager.default.removeItem(at: partial)
-    let output = runner.run(
-      tool, ["convert", "-f", "qcow2", "-O", "raw", qcow2.path, partial.path])
-    guard let output, output.status == 0 else {
+    let result = runner.run(
+      tool,
+      ["convert", "-f", from.rawValue, "-O", format.rawValue, input.path, partial.path])
+    guard let result, result.status == 0 else {
       try? FileManager.default.removeItem(at: partial)
       throw VMLabError(
-        code: .engineError, message: "qemu-img could not convert the image to raw",
+        code: .engineError, message: "qemu-img could not convert the image to \(format.rawValue)",
         hint: "Check free disk space and that qemu-img runs, then pull again",
-        data: ["engine": .string("qemu-img"), "raw": .string(output?.output ?? "did not launch")])
+        data: ["engine": .string("qemu-img"), "raw": .string(result?.output ?? "did not launch")])
     }
-    try? FileManager.default.removeItem(at: raw)
-    try FileManager.default.moveItem(at: partial, to: raw)
+    try? FileManager.default.removeItem(at: output)
+    try FileManager.default.moveItem(at: partial, to: output)
   }
 
   func pullTart(_ entry: CatalogImage) throws -> PullResult {

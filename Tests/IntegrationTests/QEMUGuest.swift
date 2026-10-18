@@ -29,7 +29,7 @@ struct QEMUGuest {
     diskGB: Int = 8, prepare: ((URL) throws -> Void)? = nil,
     boot: BootSpec? = nil, network: NetworkSpec = NetworkSpec(), profile: Profile = .qemuHVF,
     guest: GuestSpec = GuestSpec(os: .linux, arch: .arm64), image: String = "debian-13-arm64",
-    cpus: Int = 2, share: SharedDirSpec? = nil
+    cpus: Int = 2, provision: ProvisionSpec? = nil, share: SharedDirSpec? = nil
   ) async throws -> QEMUGuest {
     let n = counterLock.withLock {
       counter += 1
@@ -54,7 +54,8 @@ struct QEMUGuest {
     let created = try await manager.create(
       VMRecord(
         id: "", name: "it-\(n)", profile: profile, guest: guest, features: features,
-        image: image, network: network, boot: boot, share: share), plan: plan)
+        image: image, network: network, boot: boot, provision: provision, share: share),
+      plan: plan)
     do {
       try prepare?(store.directory(of: created.id))
       let outcome = try await manager.run(.start, on: created.id)
