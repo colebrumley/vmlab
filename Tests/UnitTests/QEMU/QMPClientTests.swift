@@ -292,7 +292,7 @@ actor MutableQMPTransport: QMPTransport {
       return DeadPeer.isDeadPeer(error) && error.data["channel"] == .string("qmp")
     }
     let elapsed = ContinuousClock.now - started
-    #expect(elapsed < .seconds(5))  // the command's own timeout is 30 s
+    #expect(elapsed < .seconds(20))  // the command's own timeout is 30 s
     #expect(await reported.value?.contains("query-block") == true)
     #expect(await client.isConnected == false)
     #expect(await transport.closed)

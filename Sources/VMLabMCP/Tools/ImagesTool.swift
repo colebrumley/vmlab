@@ -21,7 +21,8 @@ extension ToolSpec {
           "Image name (pull, remove, register, template_create, extract_kernel)."),
         "confirm": Schema.boolean(
           "Allow a pull or prune the server asks to confirm (it states the size)."),
-        "path": Schema.string("register: host path of a raw or qcow2 disk image, or an .ipsw."),
+        "path": Schema.string(
+          "register: host path (under your home or /tmp) of a raw or qcow2 disk, or an .ipsw."),
         "kernel": Schema.string("register: host path of a kernel image."),
         "initrd": Schema.string("register: host path of an initrd for that kernel."),
         "guest": Schema.string(

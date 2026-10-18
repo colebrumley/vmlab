@@ -831,7 +831,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   `broken` with the reason. `vm_lifecycle kill` always works on a `broken` VM.
   **Verify:** unit tests with fake sockets that stop answering.
 
-- [ ] **R-1102 Security review of the tool surface**
+- [x] **R-1102 Security review of the tool surface**
   Paths in `vm_file`, `vm_memory_dump`, `images register` and `shared_dir` are canonicalised and
   must be under the user's home or `/tmp` unless `allowAnyPath` is set in `~/.vmlab/config.json`;
   `extra.qemuArgs` keeps its denylist; `vm_introspect raw` keeps its allowlist; no tool executes a

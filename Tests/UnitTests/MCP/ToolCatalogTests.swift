@@ -157,3 +157,12 @@ import VMLabCore
     #expect(found.count == 4, "\(found)")
   }
 }
+
+/// R-1102: which tool inputs are host paths. Each one goes through `PathPolicy`; a new one must
+/// be added here and to the policy's callers.
+@Suite struct HostPathInputsTests {
+  @Test func memoryDumpTakesNoHostPath() {
+    let properties = ToolSpec.vmMemoryDump.inputSchema["properties"]?.objectValue ?? [:]
+    #expect(Set(properties.keys) == ["vm", "address", "size", "confirm"])
+  }
+}

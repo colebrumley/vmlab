@@ -229,7 +229,7 @@ enum Schema {
         "share": object(
           [
             "host": string(
-              "Absolute host path of an existing directory. Omitted: the VM's own shared/ "
+              "Absolute host path of an existing directory under your home or /tmp. Omitted: the VM's own shared/ "
                 + "directory (vm_inspect endpoints.share)."),
             "guest": string(
               "Absolute guest path it is mounted at.", default: SharedDirSpec.defaultGuestPath),

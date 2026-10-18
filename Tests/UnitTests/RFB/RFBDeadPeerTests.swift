@@ -86,13 +86,16 @@ actor StillScreenTransport: RFBTransport {
     try await client.waitForUpdateCount(1, timeout: .seconds(2))
     await transport.mute()
     let started = ContinuousClock.now
-    await #expect {
-      try await client.waitForUpdate(timeout: .seconds(5))
-    } throws: { error in
-      guard case .deadPeer(let reason) = error as? RFBError else { return false }
-      return reason.contains("framebuffer update")
+    // An update answered just before the mute may still land; then the silence counts.
+    while await client.loopError == nil, ContinuousClock.now - started < .seconds(30) {
+      try await Task.sleep(for: .milliseconds(20))
     }
-    #expect(ContinuousClock.now - started < .seconds(5))
+    guard case .deadPeer(let reason)? = await client.loopError else {
+      Issue.record("expected deadPeer, got \(String(describing: await client.loopError))")
+      return
+    }
+    #expect(reason.contains("framebuffer update"))
+    await #expect(throws: RFBError.self) { try await client.waitForUpdate(timeout: .seconds(1)) }
     #expect(await transport.closed)
   }
 

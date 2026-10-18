@@ -138,6 +138,15 @@ import VMLabCore
         ], in: f)
     }
     #expect(badFormat?.data["field"] == .string("format"))
+    // R-1102: register paths obey the path policy.
+    for (key, value) in [("path", "/etc/hosts"), ("kernel", "/System/kernel"), ("path", "rel.raw")]
+    {
+      let outside = await #expect(throws: VMLabError.self) {
+        try await Self.images(
+          ["action": .string("register"), "name": .string("z"), key: .string(value)], in: f)
+      }
+      #expect(outside?.data["field"] == .string(key), "\(key) \(value)")
+    }
   }
 
   /// R-305: register a kernel, then extract_kernel from a pulled image's ext4 root.

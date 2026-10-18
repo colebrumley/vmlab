@@ -436,7 +436,13 @@ public actor GDBClient {
     var attempts = 0
     while true {
       if let error = closedError { throw error }
-      try await transport.send(frame)
+      do {
+        try await transport.send(frame)
+      } catch {
+        // The socket is gone; say so now rather than when the reader gets to its end of file.
+        closedError = closedError ?? .connectionClosed
+        throw error
+      }
       let event = try await fromPeer("the ack of \(Self.name(payload))") {
         try await self.nextEvent(timeout: self.options.replyTimeout)
       }

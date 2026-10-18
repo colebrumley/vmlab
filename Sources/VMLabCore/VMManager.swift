@@ -66,6 +66,11 @@ public actor VMManager {
     new.runtime = nil
     new.checkpoints = []
     new.plan = plan
+    // R-1102: a share's host directory is model-supplied; it must pass the path policy and is
+    // recorded canonical, so a symlink swapped in later does not move it.
+    if let host = new.share?.host {
+      new.share?.host = try PathPolicy.load(home: store.home).check(host, field: "share.host").path
+    }
     let stored = try store.create(new)
     do throws(VMLabError) {
       try await SSHKeys.generateDetached(
