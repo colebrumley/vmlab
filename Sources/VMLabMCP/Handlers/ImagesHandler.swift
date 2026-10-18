@@ -2,14 +2,13 @@ import Foundation
 import VMLabCore
 
 /// `images`: list, pull and remove over `ImageStore` (R-300); `pull` reports progress while it
-/// downloads. extract_kernel and the kernel form of register are R-305's; registering a disk
-/// (R-1002), template_create (R-804) and prune (R-1003) are refused until their items land.
+/// downloads. extract_kernel and the kernel form of register are R-305's; registering a disk or
+/// an IPSW is R-1002's; template_create (R-804) and prune (R-1003) are refused until their items
+/// land.
 struct ImagesHandler: ToolHandler {
   var spec: ToolSpec { .images }
 
-  static let owners = [
-    "register": "R-1002", "template_create": "R-804", "prune": "R-1003",
-  ]
+  static let owners = ["template_create": "R-804", "prune": "R-1003"]
 
   func call(_ arguments: ToolArguments, context: ToolContext) async throws(VMLabError)
     -> ToolResult
@@ -67,16 +66,84 @@ struct ImagesHandler: ToolHandler {
         try await images.registerKernel(name, kernel: kernel, initrd: initrd, guest: guest)
       }
       return Self.kernelResult(files, context)
+    case "register":
+      return try await Self.register(arguments, context: context)
     default:
       if let owner = Self.owners[action] {
         throw VMLabError.invalidRequest(
           field: "action", reason: "images \(action) is not built yet (\(owner))",
-          hint: "list, pull, remove, extract_kernel and register with kernel work now.")
+          hint: "list, pull, remove, register and extract_kernel work now.")
       }
       throw VMLabError.invalidRequest(
         field: "action", reason: "\(action) is not an images action",
         hint: "Use list, pull or remove.")
     }
+  }
+
+  /// `register` with `path`: a disk image (`guest`, `arch`, `format`) or an `.ipsw`.
+  static func register(_ arguments: ToolArguments, context: ToolContext) async throws(VMLabError)
+    -> ToolResult
+  {
+    guard let path = try arguments.string("path"), !path.isEmpty else {
+      throw VMLabError.invalidRequest(
+        field: "path", reason: "register needs path (a disk image or .ipsw) or kernel",
+        hint: "Give path with the host path of a raw or qcow2 disk, or of an .ipsw.")
+    }
+    let file = URL(filePath: path)
+    let images = context.images
+    let record: PulledImage
+    if file.pathExtension.lowercased() == "ipsw" {
+      let name = try arguments.string("name") ?? "macos-ipsw"
+      record = try await context.progress.during(
+        "installing \(file.lastPathComponent) with tart create", every: context.heartbeat
+      ) { () throws(VMLabError) -> PulledImage in
+        try await LongOperation.typed("images register \(name)") {
+          try await images.registerIPSW(name, ipsw: file)
+        }
+      }
+    } else {
+      let name = try Self.name(arguments)
+      let os =
+        try arguments.string("guest").map { value throws(VMLabError) -> GuestSpec.OS in
+          guard let os = GuestSpec.OS(rawValue: value) else {
+            throw VMLabError.invalidRequest(
+              field: "guest", reason: "\(value) is not a guest OS", hint: "Use linux.")
+          }
+          return os
+        } ?? .linux
+      let guest = GuestSpec(
+        os: os, arch: GuestSpec.Arch(rawValue: try arguments.string("arch") ?? "arm64"))
+      let format = try arguments.string("format").map { value throws(VMLabError) -> ImageFormat in
+        guard let format = ImageFormat(rawValue: value), format == .raw || format == .qcow2 else {
+          throw VMLabError.invalidRequest(
+            field: "format", reason: "\(value) is not a disk format", hint: "Use raw or qcow2.")
+        }
+        return format
+      }
+      record = try await context.progress.during(
+        "registering \(file.lastPathComponent)", every: context.heartbeat
+      ) { () throws(VMLabError) -> PulledImage in
+        try await LongOperation.typed("images register \(name)") {
+          try await images.registerDisk(name, disk: file, guest: guest, format: format)
+        }
+      }
+    }
+    let folder = images.imageDirectory(record.name)
+    var object: [String: JSONValue] = [
+      "name": .string(record.name), "path": .string(folder.path),
+      "guest": .string(record.guest.os.rawValue), "arch": .string(record.guest.arch.rawValue),
+      "format": .string(record.format.rawValue),
+      "files": .array(
+        record.files.values.sorted().map { .string(folder.appending(path: $0).path) }),
+    ]
+    if let vm = record.tartVM { object["tartVM"] = .string(vm) }
+    var warnings: [String] = []
+    if record.format == .tart {
+      warnings.append(
+        "macOS is installed but not set up: run `tart run \(record.tartVM ?? "")`, finish Setup "
+          + "Assistant with the account admin/admin and turn on Remote Login (docs/AGENT.md)")
+    }
+    return ToolResult(object, warnings: warnings)
   }
 
   static func kernelResult(_ files: KernelFiles, _ context: ToolContext) -> ToolResult {

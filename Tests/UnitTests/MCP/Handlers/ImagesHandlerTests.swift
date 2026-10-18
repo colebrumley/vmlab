@@ -61,6 +61,39 @@ import VMLabCore
     #expect(unbuilt?.code == .invalidRequest)
   }
 
+  /// R-1002: register a local raw disk through the tool; it lists as an arm64 raw image.
+  @Test func registerADisk() async throws {
+    let f = try Fixture()
+    defer { f.cleanUp() }
+    let disk = f.context.home.appending(path: "local.raw")
+    try Data(repeating: 1, count: 512).write(to: disk)
+    let registered = try await Self.images(
+      [
+        "action": .string("register"), "name": .string("local"), "path": .string(disk.path),
+        "guest": .string("linux"), "arch": .string("arm64"), "format": .string("raw"),
+      ], in: f)
+    #expect(registered.value["format"] == .string("raw"))
+    #expect(registered.value["arch"] == .string("arm64"))
+    #expect(registered.value["files"]?.arrayValue?.count == 2)
+    let rows = try await Self.images(["action": .string("list")], in: f)
+    #expect(
+      rows.value["images"]?.arrayValue?.contains {
+        $0["name"] == .string("local") && $0["pulled"] == .bool(true)
+      } == true)
+    let noPath = await #expect(throws: VMLabError.self) {
+      try await Self.images(["action": .string("register"), "name": .string("x")], in: f)
+    }
+    #expect(noPath?.data["field"] == .string("path"))
+    let badFormat = await #expect(throws: VMLabError.self) {
+      try await Self.images(
+        [
+          "action": .string("register"), "name": .string("y"), "path": .string(disk.path),
+          "format": .string("vmdk"),
+        ], in: f)
+    }
+    #expect(badFormat?.data["field"] == .string("format"))
+  }
+
   /// R-305: register a kernel, then extract_kernel from a pulled image's ext4 root.
   @Test func registerAndExtractKernel() async throws {
     let f = try Fixture()

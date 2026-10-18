@@ -185,10 +185,14 @@ public struct PulledImage: Codable, Sendable, Hashable {
   public var pulledAt: Date
   /// The release of the kernel in `files["kernel"]` when it was extracted (R-305).
   public var kernelVersion: String?
+  /// For a Tart image, the name `tart clone` takes as its source: the OCI reference that was
+  /// pulled, or the local Tart VM an IPSW was installed into (R-1002).
+  public var tartVM: String?
 
   public init(
     name: String, guest: GuestSpec, source: String, format: ImageFormat, checksum: Checksum?,
-    files: [String: String], login: ImageLogin, pulledAt: Date, kernelVersion: String? = nil
+    files: [String: String], login: ImageLogin, pulledAt: Date, kernelVersion: String? = nil,
+    tartVM: String? = nil
   ) {
     self.schemaVersion = Self.currentSchemaVersion
     self.name = name
@@ -199,6 +203,7 @@ public struct PulledImage: Codable, Sendable, Hashable {
     self.files = files
     self.login = login
     self.kernelVersion = kernelVersion
+    self.tartVM = tartVM
     // Whole seconds, so the record equals what image.json (ISO 8601) reads back.
     self.pulledAt = Date(timeIntervalSince1970: pulledAt.timeIntervalSince1970.rounded(.down))
   }
@@ -424,20 +429,28 @@ public actor ImageStore {
   }
 
   func convertToRaw(_ tool: String, _ qcow2: URL, _ raw: URL) throws {
-    let partial = raw.deletingLastPathComponent().appending(
-      path: raw.lastPathComponent + ".partial")
+    try convert(tool, qcow2, from: .qcow2, to: raw, as: .raw)
+  }
+
+  /// `qemu-img convert` from `input` to `output` through a `.partial` file.
+  func convert(
+    _ tool: String, _ input: URL, from: ImageFormat, to output: URL, as format: ImageFormat
+  ) throws {
+    let partial = output.deletingLastPathComponent().appending(
+      path: output.lastPathComponent + ".partial")
     try? FileManager.default.removeItem(at: partial)
-    let output = runner.run(
-      tool, ["convert", "-f", "qcow2", "-O", "raw", qcow2.path, partial.path])
-    guard let output, output.status == 0 else {
+    let result = runner.run(
+      tool,
+      ["convert", "-f", from.rawValue, "-O", format.rawValue, input.path, partial.path])
+    guard let result, result.status == 0 else {
       try? FileManager.default.removeItem(at: partial)
       throw VMLabError(
-        code: .engineError, message: "qemu-img could not convert the image to raw",
+        code: .engineError, message: "qemu-img could not convert the image to \(format.rawValue)",
         hint: "Check free disk space and that qemu-img runs, then pull again",
-        data: ["engine": .string("qemu-img"), "raw": .string(output?.output ?? "did not launch")])
+        data: ["engine": .string("qemu-img"), "raw": .string(result?.output ?? "did not launch")])
     }
-    try? FileManager.default.removeItem(at: raw)
-    try FileManager.default.moveItem(at: partial, to: raw)
+    try? FileManager.default.removeItem(at: output)
+    try FileManager.default.moveItem(at: partial, to: output)
   }
 
   func pullTart(_ entry: CatalogImage) throws -> PullResult {

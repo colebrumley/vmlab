@@ -78,25 +78,61 @@ struct Images: ParsableCommand {
 
   struct Register: ToolCommand {
     static let configuration = CommandConfiguration(
-      abstract: "Register a kernel (and initrd) under an image name for direct kernel boot.")
+      abstract: "Register a local disk image, a macOS IPSW or a kernel under an image name.",
+      discussion: """
+        vmlab images register <name> --disk <path> --guest linux --arch arm64 [--format raw|qcow2]
+        vmlab images register [<name>] --ipsw <path>     (tart create --from-ipsw; see docs/AGENT.md)
+        vmlab images register <name> --kernel <path> [--initrd <path>] [--arch arm64]
+        """)
     static let toolName = "images"
 
-    @Argument(help: "The image name to register under.") var name: String
-    @Option(help: "Host path of the kernel image.") var kernel: String
+    @Argument(help: "The image name to register under (default for --ipsw: macos-ipsw).")
+    var name: String?
+    @Option(help: "Host path of a raw or qcow2 Linux disk image.") var disk: String?
+    @Option(help: "Host path of a macOS restore image (.ipsw) for Apple silicon.") var ipsw: String?
+    @Option(help: "Host path of the kernel image.") var kernel: String?
     @Option(help: "Host path of its initrd.") var initrd: String?
-    @Option(help: "The kernel's architecture (arm64, x86_64, ...).") var arch = "arm64"
+    @Option(help: "The disk's guest OS.") var guest = "linux"
+    @Option(help: "The image's architecture (arm64, x86_64, ...).") var arch = "arm64"
+    @Option(help: "The disk's format (raw or qcow2); default from its header.") var format: String?
     @Flag(help: "Print the result object as JSON.") var json = false
 
+    func validate() throws {
+      let given = [disk, ipsw, kernel].compactMap { $0 }
+      guard given.count == 1 else {
+        throw ValidationError("Give exactly one of --disk, --ipsw or --kernel.")
+      }
+      if ipsw == nil, name == nil { throw ValidationError("Give the image name.") }
+    }
+
     func arguments() throws -> JSONValue {
-      var object: [String: JSONValue] = [
-        "action": .string("register"), "name": .string(name),
-        "kernel": .string(Images.absolute(kernel)), "arch": .string(arch),
-      ]
-      if let initrd { object["initrd"] = .string(Images.absolute(initrd)) }
+      var object: [String: JSONValue] = ["action": .string("register")]
+      if let name { object["name"] = .string(name) }
+      if let kernel {
+        object["kernel"] = .string(Images.absolute(kernel))
+        object["arch"] = .string(arch)
+        if let initrd { object["initrd"] = .string(Images.absolute(initrd)) }
+      } else if let ipsw {
+        object["path"] = .string(Images.absolute(ipsw))
+      } else if let disk {
+        object["path"] = .string(Images.absolute(disk))
+        object["guest"] = .string(guest)
+        object["arch"] = .string(arch)
+        if let format { object["format"] = .string(format) }
+      }
       return .object(object)
     }
 
-    func render(_ result: ToolResult) -> String { Images.renderKernel(result, "Registered") }
+    func render(_ result: ToolResult) -> String {
+      if kernel != nil { return Images.renderKernel(result, "Registered") }
+      let v = result.value
+      var text =
+        "Registered \(v["name"]?.stringValue ?? "?") (\(v["guest"]?.stringValue ?? "?")/"
+        + "\(v["arch"]?.stringValue ?? "?"), \(v["format"]?.stringValue ?? "?")) in "
+        + "\(v["path"]?.stringValue ?? "?")"
+      for warning in result.warnings { text += "\nwarning: \(warning)" }
+      return text
+    }
   }
 
   struct ExtractKernel: ToolCommand {

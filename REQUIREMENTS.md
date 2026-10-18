@@ -797,7 +797,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   into the cloud-init seed; for macOS guests `runCommands` run over SSH after R-606.
   **Verify:** integration: a Debian guest created with `packages: [jq]` has `jq --version` working.
 
-- [ ] **R-1002 Register a local disk image or installer**
+- [x] **R-1002 Register a local disk image or installer**
   `images register <name> --disk <path> --guest linux --arch arm64 [--format raw|qcow2]` and
   `images register --ipsw <path>` (hands off to `tart create --from-ipsw` for a macOS base built
   locally; the attended install is the user's, documented in `docs/AGENT.md`).
