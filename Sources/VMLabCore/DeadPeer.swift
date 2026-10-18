@@ -84,6 +84,12 @@ public final class PeerClock: Sendable {
   /// Nothing is owed any more (the work that expected an answer was abandoned).
   public func settle() { state.withLock { $0.owed = nil } }
 
+  /// An outstanding debt starts over from `now`: the peer was excused meanwhile (it is busy with
+  /// a long command another client sent), so its silence until now does not count.
+  public func postpone(at now: ContinuousClock.Instant = .now) {
+    state.withLock { if let owed = $0.owed { $0.owed = (now, owed.what) } }
+  }
+
   /// How long since anything arrived.
   public func idle(at now: ContinuousClock.Instant = .now) -> Duration {
     state.withLock { now - $0.lastReceived }

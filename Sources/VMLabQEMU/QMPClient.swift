@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 import VMLabCore
 
 /// The server's greeting: `{"QMP": {"version": {...}, "capabilities": [...]}}`.
@@ -73,6 +74,14 @@ public actor QMPClient {
   /// its own timeout; dead-peer detection pauses while one is outstanding.
   public static let longRunningCommands: Set<String> = ["dump-guest-memory", "pmemsave", "memsave"]
 
+  /// CX-24: while one of `longRunningCommands` is outstanding, a client watched with a busy
+  /// directory keeps `qmp-busy.<pid>.<n>` there, so another server's watchdog on the same QEMU
+  /// (which stalls every monitor) does not take the stall for a dead peer.
+  public static let busyMarkerPrefix = "qmp-busy."
+  private var busyDirectory: URL?
+  private var busyMarker: URL?
+  private static let markerSerial = Mutex(0)
+
   private struct Pending {
     var command: String
     var continuation: CheckedContinuation<JSONValue, any Error>
@@ -133,7 +142,9 @@ public actor QMPClient {
     let encoder = JSONEncoder()
     encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
     let line = try encoder.encode(message)
-    if !Self.longRunningCommands.contains(command) { peer.awaiting(command) }
+    let long = Self.longRunningCommands.contains(command)
+    if !long { peer.awaiting(command) }
+    defer { if long { refreshBusyMarker() } }
     return try await withCheckedThrowingContinuation { continuation in
       let timer = Task { [weak self] in
         try? await Task.sleep(for: timeout)
@@ -141,6 +152,7 @@ public actor QMPClient {
         await self?.expire(id, after: timeout)
       }
       pending[id] = Pending(command: command, continuation: continuation, timer: timer)
+      if long { refreshBusyMarker() }
       // Chained so lines leave in the order the commands were issued.
       let previous = sendChain
       sendChain = Task { [weak self, transport] in
@@ -202,6 +214,7 @@ public actor QMPClient {
   /// also when it already had before this call.
   public func watchPeer(
     window: Duration = DeadPeer.window, interval: Duration = DeadPeer.probeInterval,
+    busyDirectory: URL? = nil,
     onDead: @escaping @Sendable (String) async -> Void = { _ in },
     onClosed: @escaping @Sendable () async -> Void = {}
   ) {
@@ -211,6 +224,8 @@ public actor QMPClient {
     }
     guard watchdog == nil, !closed else { return }
     onPeerClosed = onClosed
+    self.busyDirectory = busyDirectory
+    refreshBusyMarker()
     peer.received()
     watchdog = Task { [weak self] in
       while !Task.isCancelled {
@@ -233,6 +248,10 @@ public actor QMPClient {
       return nil
     }
     if pending.values.contains(where: { Self.longRunningCommands.contains($0.command) }) {
+      return nil
+    }
+    if let busyDirectory, Self.othersBusy(in: busyDirectory, except: busyMarker) {
+      peer.postpone()
       return nil
     }
     if let reason = peer.overdue(window: window) {
@@ -314,6 +333,7 @@ public actor QMPClient {
     guard case .string(let id) = message["id"], let entry = pending.removeValue(forKey: id) else {
       return
     }
+    if Self.longRunningCommands.contains(entry.command) { refreshBusyMarker() }
     entry.timer?.cancel()
     if case .object(let error) = message["error"] {
       entry.continuation.resume(throwing: Self.engineError(command: entry.command, error))
@@ -325,6 +345,7 @@ public actor QMPClient {
   private func finish() {
     guard !closed else { return }
     closed = true
+    defer { refreshBusyMarker() }
     let error = closedError()
     for entry in pending.values {
       entry.timer?.cancel()
@@ -339,6 +360,7 @@ public actor QMPClient {
 
   private func expire(_ id: String, after timeout: Duration) {
     guard let entry = pending.removeValue(forKey: id) else { return }
+    defer { refreshBusyMarker() }
     entry.continuation.resume(
       throwing: VMLabError(
         code: .timeout, message: "QEMU did not answer \(entry.command) in time.",
@@ -364,11 +386,51 @@ public actor QMPClient {
 
   private func fail(_ id: String, _ error: any Error) {
     guard let entry = pending.removeValue(forKey: id) else { return }
+    defer { refreshBusyMarker() }
     entry.timer?.cancel()
     entry.continuation.resume(throwing: error)
   }
 
   private func unsubscribe(_ key: Int) { subscribers[key] = nil }
+
+  // MARK: Busy marker (CX-24)
+
+  /// Writes this client's busy marker while a long command is outstanding, removes it otherwise.
+  private func refreshBusyMarker() {
+    let busy =
+      !closed && pending.values.contains { Self.longRunningCommands.contains($0.command) }
+    if busy, busyMarker == nil, let busyDirectory {
+      let serial = Self.markerSerial.withLock {
+        $0 += 1
+        return $0
+      }
+      let marker = busyDirectory.appending(
+        path: "\(Self.busyMarkerPrefix)\(getpid()).\(serial)")
+      if FileManager.default.createFile(atPath: marker.path, contents: Data()) {
+        busyMarker = marker
+      }
+    } else if !busy, let marker = busyMarker {
+      try? FileManager.default.removeItem(at: marker)
+      busyMarker = nil
+    }
+  }
+
+  /// Whether a live process other than this client holds a busy marker in `directory`; markers of
+  /// processes that are gone are removed.
+  static func othersBusy(in directory: URL, except own: URL?) -> Bool {
+    let names = (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
+    var busy = false
+    for name in names where name.hasPrefix(busyMarkerPrefix) && name != own?.lastPathComponent {
+      let parts = name.dropFirst(busyMarkerPrefix.count).split(separator: ".")
+      guard let pid = parts.first.flatMap({ Int32($0) }) else { continue }
+      if LivenessProbe.processExists(pid) {
+        busy = true
+      } else {
+        try? FileManager.default.removeItem(at: directory.appending(path: name))
+      }
+    }
+    return busy
+  }
 
   private func closedError() -> VMLabError {
     if let deadPeerReason {

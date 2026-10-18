@@ -380,6 +380,67 @@ actor MutableQMPTransport: QMPTransport {
   }
 }
 
+/// CX-24: a dump by one server stalls QEMU for every monitor; another server's watchdog took
+/// that for a dead peer and marked the VM broken. The dumping client keeps a busy marker in the
+/// VM directory, and a watchdog that sees a live one waits.
+@Suite struct QMPBusyMarkerTests {
+  static func directory() throws -> URL {
+    let dir = FileManager.default.temporaryDirectory.appending(path: "vmlab-busy-\(UUID())")
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    return dir
+  }
+
+  static func markers(_ dir: URL) -> [String] {
+    ((try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []).filter {
+      $0.hasPrefix(QMPClient.busyMarkerPrefix)
+    }
+  }
+
+  @Test func aLongCommandKeepsAMarkerWhileItRuns() async throws {
+    let dir = try Self.directory()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let transport = MutableQMPTransport()
+    let client = try await QMPClient.handshake(over: transport, timeout: .seconds(2))
+    await client.watchPeer(window: .seconds(5), interval: .seconds(1), busyDirectory: dir)
+    await transport.mute()
+    let dump = Task { try await client.execute("dump-guest-memory", timeout: .milliseconds(400)) }
+    let deadline = ContinuousClock.now + .seconds(5)
+    while Self.markers(dir).isEmpty, ContinuousClock.now < deadline {
+      try await Task.sleep(for: .milliseconds(10))
+    }
+    #expect(Self.markers(dir).count == 1)
+    _ = await dump.result
+    #expect(Self.markers(dir).isEmpty)
+    await client.close()
+  }
+
+  @Test(.timeLimit(.minutes(1))) func anotherServersMarkerHoldsOffTheWatchdog() async throws {
+    let dir = try Self.directory()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let marker = dir.appending(path: "\(QMPClient.busyMarkerPrefix)\(getppid()).1")
+    FileManager.default.createFile(atPath: marker.path, contents: Data())
+    // A marker of a process that is gone is no excuse, and is cleaned up.
+    let stale = dir.appending(path: "\(QMPClient.busyMarkerPrefix)999999.1")
+    FileManager.default.createFile(atPath: stale.path, contents: Data())
+    let transport = MutableQMPTransport()
+    let client = try await QMPClient.handshake(over: transport, timeout: .seconds(2))
+    await client.watchPeer(
+      window: .milliseconds(200), interval: .milliseconds(40), busyDirectory: dir)
+    await transport.mute()
+    let query = Task { try await client.execute("query-block", timeout: .seconds(60)) }
+    try await Task.sleep(for: .milliseconds(800))
+    #expect(await client.deadPeerReason == nil)
+    #expect(!FileManager.default.fileExists(atPath: stale.path))
+    try FileManager.default.removeItem(at: marker)
+    let deadline = ContinuousClock.now + .seconds(10)
+    while await client.deadPeerReason == nil, ContinuousClock.now < deadline {
+      try await Task.sleep(for: .milliseconds(20))
+    }
+    #expect(await client.deadPeerReason != nil)
+    _ = await query.result
+  }
+}
+
 actor Counter {
   private(set) var value = 0
   func bump() { value += 1 }

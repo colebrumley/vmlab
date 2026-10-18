@@ -219,6 +219,7 @@ public final class QEMUBackend: Backend {
     }
     let layout = machine.layout
     await machine.qmp.watchPeer(
+      busyDirectory: layout.directory,
       onDead: { [weak self] reason in
         self?.machines.withLock { cached in
           if cached[id] === machine { cached[id] = nil }
