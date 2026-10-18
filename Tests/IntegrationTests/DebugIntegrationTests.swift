@@ -31,7 +31,7 @@ import VMLabQEMU
     func close() async { await context.debug.drop(vm) }
   }
 
-  /// R-701 Verify, arm64 variant (the x86_64 one needs R-305 and R-310): a `debian-13-arm64`
+  /// R-701, arm64 variant: a `debian-13-arm64`
   /// guest under `qemu-tcg` with `gdb`. Halt, read the pc and the instruction there, set a
   /// software breakpoint at the halted pc, continue, and `wait` stops on it. A pc the guest does
   /// not pass again is retried at the next halt.
@@ -94,9 +94,55 @@ import VMLabQEMU
     await guest.shutdown()
   }
 
-  /// R-701 Verify as written: x86_64 under `qemu-tcg`, halt at start, read `rip`, break at the
-  /// kernel entry from the extracted `System.map`, continue, `wait` stops there.
-  /// TODO(R-305, R-310): enable once `images extract-kernel` and the `debian-13-amd64` boot land.
-  @Test(.disabled("needs R-305 (System.map from images extract-kernel) and R-310 (x86_64 boot)"))
-  func haltAtStartBreakAtKernelEntryX86_64() async throws {}
+  /// R-701 Verify: `debian-13-amd64` under `qemu-tcg` with `boot.haltAtStart`, booted from its
+  /// extracted kernel (R-305) with `nokaslr`: halt at the reset vector, read `rip`, break at the
+  /// kernel entry, continue, and `wait` stops there. Debian ships a placeholder `System.map`
+  /// (the real one is in the -dbg package), so the entry is `start_kernel` when the map has it
+  /// and otherwise the bzImage header's `code32_start`, where the setup code enters the kernel.
+  static func kernelEntry(_ files: KernelFiles) throws -> String {
+    if let url = files.systemMap, let map = try? String(contentsOf: url, encoding: .utf8),
+      let line = map.split(separator: "\n").first(where: { $0.hasSuffix(" T start_kernel") })
+    {
+      return "0x" + line.prefix { $0 != " " }
+    }
+    let kernel = try Data(contentsOf: files.kernel)
+    try #require(kernel.count > 0x218 && kernel[0x202..<0x206] == Data("HdrS".utf8))
+    let start = kernel[0x214..<0x218].reversed().reduce(UInt64(0)) { $0 << 8 | UInt64($1) }
+    return "0x" + String(start, radix: 16)
+  }
+
+  @Test(.enabled(if: integrationEnabled), .timeLimit(.minutes(6)))
+  func haltAtStartBreakAtKernelEntryX86_64() async throws {
+    let images = ImageStore(
+      home: FileManager.default.homeDirectoryForCurrentUser.appending(path: ".vmlab"))
+    let files = try await images.extractKernel("debian-13-amd64")
+    let entry = try Self.kernelEntry(files)
+    let guest = try await QEMUGuest.boot(
+      features: [.serial, .gdb, .directKernelBoot, .haltAtStart, .netNAT], memoryGB: 1,
+      boot: BootSpec(
+        mode: .kernel, cmdline: "console=ttyS0 root=/dev/vda1 nokaslr", haltAtStart: true),
+      profile: .qemuTCG, guest: GuestSpec(os: .linux, arch: .x86_64), image: "debian-13-amd64")
+    let debug = Debugger(guest)
+    do {
+      let halted = try await debug("halt")
+      #expect(halted["stopped"] == .bool(true))
+      let registers = try await debug("registers")
+      let rip = try #require(registers["registers"]?["rip"]?.stringValue)
+      #expect(UInt64(rip.dropFirst(2), radix: 16) == 0xfff0, "rip at reset: \(rip)")
+
+      _ = try await debug("breakpoint_add", ["address": .string(entry)])
+      #expect(try await debug("continue")["stopped"] == .bool(false))
+      let stop = try await debug("wait", ["timeoutSeconds": .number(240)])
+      #expect(stop["reason"] == .string("breakpoint"))
+      #expect(
+        stop["pc"]?.stringValue.flatMap { UInt64($0.dropFirst(2), radix: 16) }
+          == UInt64(entry.dropFirst(2), radix: 16))
+    } catch {
+      await debug.close()
+      await guest.shutdown()
+      throw error
+    }
+    await debug.close()
+    await guest.shutdown()
+  }
 }
