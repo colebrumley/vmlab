@@ -1,0 +1,9 @@
+{"images": [
+  {"name": "tiny-arm64", "guest": {"os": "linux", "arch": "arm64"},
+   "url": "https://example.invalid/images/tiny.qcow2", "format": "qcow2", "convertToRaw": true,
+   "checksumURL": "https://example.invalid/images/SHA512SUMS", "checksumAlgorithm": "sha512",
+   "login": {"user": "debian"}},
+  {"name": "tiny-mac", "guest": {"os": "macos", "arch": "arm64"},
+   "url": "ghcr.io/example/tiny:latest", "format": "tart",
+   "login": {"user": "admin", "password": "admin"}}
+]}

@@ -5,18 +5,29 @@ import VMLabMCP
 
 /// The vmlab CLI. Phase 2 (R-2xx) adds the subcommands; `vmlab serve` runs the MCP server.
 @main
-struct VMLab: ParsableCommand {
+struct VMLab: AsyncParsableCommand {
   static let configuration = CommandConfiguration(
     commandName: "vmlab",
     abstract: "Virtual machines for a language model, over MCP.",
-    subcommands: [GenDocs.self]
+    subcommands: [Images.self, GenDocs.self]
   )
 
-  static func main() {
+  static func main() async {
     VMLabLogging.bootstrap()
     do {
       var command = try parseAsRoot()
-      try command.run()
+      if var command = command as? AsyncParsableCommand {
+        try await command.run()
+      } else {
+        try command.run()
+      }
+    } catch let error as VMLabError {
+      // R-200 replaces this with the shared rendering; until then the Appendix D object as JSON.
+      let encoder = JSONEncoder()
+      encoder.outputFormatting = [.sortedKeys]
+      let text = (try? encoder.encode(error)).map { String(decoding: $0, as: UTF8.self) }
+      FileHandle.standardError.write(Data(((text ?? error.message) + "\n").utf8))
+      Foundation.exit(1)
     } catch {
       exit(withError: error)
     }

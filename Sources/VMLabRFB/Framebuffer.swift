@@ -18,6 +18,14 @@ public struct Framebuffer: Equatable, Sendable {
     pixels = [UInt8](repeating: 0, count: width * height * 4)
   }
 
+  /// A framebuffer over existing BGRX `pixels` (`width × height × 4` bytes).
+  init(width: Int, height: Int, pixels: [UInt8]) {
+    precondition(pixels.count == width * height * 4)
+    self.width = width
+    self.height = height
+    self.pixels = pixels
+  }
+
   /// Resizes to `width` × `height` and clears to black (RFB leaves the contents undefined).
   public mutating func resize(width: Int, height: Int) {
     self = Framebuffer(width: width, height: height)

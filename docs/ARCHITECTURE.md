@@ -18,6 +18,8 @@ self-contradictory request at decode time with `invalid_request`; `Errors.swift`
 `events.jsonl`, appended with `O_APPEND` so the server and runner processes never interleave) and
 process-wide logging (`VMLabLogging`: swift-log to stderr at the `VMLAB_LOG` level, default `info`).
 `CodeSignature` reads `codesign` output so `vmlab doctor` can say whether the runner is entitled. `Profile` names the four profiles with their Appendix B tiers. `HostProbe` gathers `HostFacts` (Appendix E fast facts) through an injectable `CommandRunning` and merges the slow probes persisted in `VMLAB_HOME/host-facts.json` (`SlowProbes`), resetting to `unknown` any probe recorded under another macOS or QEMU version; `ProbeResult.countsAsYes` is how selection reads a probe (unknown counts as no).
+`Images.swift` holds the Appendix H catalogue (`ImageCatalogue.builtin`, decoded from JSON into `CatalogImage`) and `ImageStore`, an actor over `VMLAB_HOME/images/<name>/` that pulls (URLSession through an injectable `ImageDownloading`, checksum from the published `SHA512SUMS`/`SHA256SUMS`, qcow2 to raw with `qemu-img` through `CommandRunning`), lists and removes images and records `image.json` (`PulledImage`); a re-pull whose file still matches the published checksum is a no-op. `ImageStore.defaultHome()` resolves `VMLAB_HOME`.
+`CloudInit` builds the NoCloud seed both engines attach: from a plain `CloudInitConfig` (hostname, user, SSH key, packages, optional `GUIStack`, `SegmentNIC`, `GuestMount`s, `ConsoleDevice`, extra user-data merged last as a MIME part) it emits `user-data`, `meta-data` and `network-config` with a small hand-written YAML emitter (every string double-quoted; no YAML library, C5) and runs `hdiutil makehybrid` to make the `cidata` ISO. `FeatureDocs` renders `docs/FEATURES.md` from the matrix. It depends on swift-log only.
 `Store.swift` holds the VM store: `VMRecord` (the `vm.json` of `vms/<id>/`, with `VMState`, `VMRuntime` endpoints, `CheckpointRef`s and the resolved `[Feature]`), and `Store`, which lists, loads, creates (IDs `vm-` plus six base32 characters, unique names defaulting to the ID), updates and removes records under `VMLAB_HOME` (`Store.defaultHome`). Writes go through a temp file and `rename(2)` under a per-VM `flock` on `locks/<id>.lock` (names under `locks/store.lock`, always taken after a VM lock), so two server processes never corrupt or lose an update; `StoreMigrations` upgrades older `schemaVersion`s step by step, with one fixture per released version in `Tests/Fixtures/store/`. `Store.runningGuests()` is the counter `HostProbe.runningGuests` and the budgets read. `Tests/StoreHelper` builds `vmlab-store-helper`, a test-only executable (no product) that `StoreTests` spawns as the second writer.
 `Capabilities` is the Appendix B matrix: `Capabilities.entry(feature, on: profile)` gives the unresolved cell (`Availability.yes`, `.no(reason)` or `.conditional(Condition)`, where a `Condition` names a fast fact such as `root` or a `SlowProbe`, plus the note and the item that verifies a `?`), and `capabilities(of:host:allowUnverified:)` resolves every cell to yes or no against `HostFacts` (an `unknown` probe is no unless `allowUnverified`); `unverifiedProbes` says which probes a plan reports as unverified, and `supports(_:on:)` is the guest OS and arch filter.
 `CloudInit` builds the NoCloud seed both engines attach: from a plain `CloudInitConfig` (hostname, user, SSH key, packages, optional `GUIStack`, `SegmentNIC`, `GuestMount`s, `ConsoleDevice`, extra user-data merged last as a MIME part) it emits `user-data`, `meta-data` and `network-config` with a small hand-written YAML emitter (every string double-quoted; no YAML library, C5) and runs `hdiutil makehybrid` to make the `cidata` ISO. `FeatureDocs` renders `docs/FEATURES.md` from the matrix, with a last column from the slow probes in `VMLAB_HOME/host-facts.json`. It depends on swift-log only.
@@ -38,7 +40,13 @@ requests keeps a `Framebuffer` current; `snapshot()` returns a `CGImage` and `Fr
 encodes PNG with ImageIO. Input (`RFBInput.swift`, `Keysym.swift`): `pointer(x:y:buttons:)` with a
 `PointerButtons` mask, `key(_:down:)`, `press(_:)` for a `KeyChord` parsed from `cmd+shift+4`-style
 text (`cmd` is `Super_L`), and `type(_:gap:)`, which strikes each character with Shift where a US
-layout needs it, 10 ms apart. Failures are `RFBError`, which callers map to Appendix D codes.
+layout needs it, 10 ms apart. Screenshots (`ScreenshotEncoder.swift`, `ScreenshotCache.swift`):
+`ScreenshotEncoder` crops a `Framebuffer` to a `PixelRect` region, scales its long edge to `maxEdge`
+(default 1280, never upscaling) and encodes PNG or JPEG with a quality; `ScreenshotCache`, one per VM
+held by its owner, keeps the last 20 frames LZFSE-compressed under ids so a later capture with
+`diffFrom` returns only the changed bounding box (`Framebuffer.changedRect`) at the full frame's
+scale, or `unchanged: true`. Failures are `RFBError` (`invalidScreenshotRequest` is
+`invalid_request`), which callers map to Appendix D codes.
 
 **`VMLabGDB`** (library). A GDB remote serial protocol client: registers, memory, breakpoints,
 watchpoints and stepping over a guest's GDB stub. `GDBPacket`/`GDBPacketDecoder` frame packets
@@ -54,7 +62,7 @@ handlers that call Core, rendering of `VMLabError` as structured refusals, and t
 
 **`vmlab`** (executable). The CLI on swift-argument-parser: every MCP tool as a subcommand with
 `--json` output, `vmlab serve` for the MCP server, `vmlab doctor`, and the hidden `vmlab gen-docs`
-that `scripts/gen-docs.sh` uses. It bootstraps logging and hands off to Core and `VMLabMCP`.
+that `scripts/gen-docs.sh` uses; `vmlab images pull|list|remove` (R-300) runs ahead of the R-200 frame. It bootstraps logging and hands off to Core and `VMLabMCP`.
 
 **`vmlab-vz`** (executable). The VZ runner: one process per Virtualization.framework guest, so a
 guest outlives the server, driven over `control.sock` in the VM directory. It is the only binary
