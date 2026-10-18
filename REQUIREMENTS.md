@@ -473,7 +473,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
 
 ## Phase 5 — GUI channel
 
-- [ ] **R-500 RFB client: handshake and framebuffer**
+- [x] **R-500 RFB client: handshake and framebuffer**
   `VMLabRFB`: RFB 3.8 over a unix or TCP socket; security types None and VNC Authentication (DES
   challenge); `ClientInit` shared; encodings requested: Raw, CopyRect, DesktopSize; pixel format
   negotiated to 32-bit BGRX; an incremental `FramebufferUpdateRequest` loop keeps a `Framebuffer`

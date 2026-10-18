@@ -25,7 +25,12 @@ client, the serial channel, the GDB stub endpoint, and qcow2 internal snapshots.
 framework itself is loaded only in `vmlab-vz`.
 
 **`VMLabRFB`** (library). A VNC (RFB) client: framebuffer updates to PNG, pointer and key events. It
-gives both engines a screen to look at and click on.
+gives both engines a screen to look at and click on. `RFBClient` (an actor) speaks RFB 3.8 over an
+`RFBTransport`: `SocketTransport` for a unix or TCP socket, `ReplayTransport` for recorded fixture
+streams. It negotiates security None or VNC Authentication (`VNCAuth`, DES via CommonCrypto), sets
+32-bit BGRX, requests Raw, CopyRect and DesktopSize, and a background loop of incremental update
+requests keeps a `Framebuffer` current; `snapshot()` returns a `CGImage` and `Framebuffer.pngData`
+encodes PNG with ImageIO. Failures are `RFBError`, which callers map to Appendix D codes.
 
 **`VMLabGDB`** (library). A GDB remote serial protocol client: registers, memory, breakpoints and
 stepping over a guest's GDB stub.
