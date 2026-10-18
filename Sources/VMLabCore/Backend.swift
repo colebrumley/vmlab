@@ -39,9 +39,25 @@ public protocol Backend: Sendable {
   /// The checkpoints of the VM in any state. The default attaches (so needs a live guest) and
   /// returns its `checkpoints` channel; an engine that checkpoints stopped guests overrides it.
   func checkpoints(_ record: VMRecord) async throws(VMLabError) -> any CheckpointProvider
+  /// Makes the disk of `target` (already stored, state `created`, its SSH key generated) from
+  /// `source`'s current disk, or from `checkpoint` of it (R-803), and whatever else the engine
+  /// needs to boot it; the guest's memory is not cloned. Returns the files the new disk reads
+  /// through, nearest first, which the manager records as `backingChain`. The manager holds the
+  /// source and refuses a current-disk clone of a live guest. The default refuses.
+  func clone(
+    _ source: VMRecord, checkpoint: CheckpointNode?, into target: VMRecord
+  ) async throws(VMLabError) -> [URL]
 }
 
 extension Backend {
+  public func clone(
+    _ source: VMRecord, checkpoint: CheckpointNode?, into target: VMRecord
+  ) async throws(VMLabError) -> [URL] {
+    throw VMLabError.invalidRequest(
+      field: "action", reason: "\(profile.rawValue) VMs cannot be cloned yet",
+      hint: "Create a new VM with vm_create instead.")
+  }
+
   public func sshEndpoint(_ record: VMRecord, timeout: Duration) async -> SSHEndpoint? {
     SSHEndpoint(runtime: record.runtime)
   }

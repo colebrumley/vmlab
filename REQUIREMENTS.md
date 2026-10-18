@@ -707,7 +707,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   **Verify:** unit test over two fixture manifests; integration on macOS: run `defaults write
   com.apple.dock autohide -bool true` and the diff shows the key with `0 → 1`.
 
-- [ ] **R-803 Clone from checkpoint**
+- [x] **R-803 Clone from checkpoint**
   `vm_lifecycle clone(from: checkpoint?, name)`: a new VM from the current disk or a named
   checkpoint (APFS clone for raw images, `qemu-img create -b` backing file for qcow2 with the
   backing chain recorded), new MAC and SSH key, same plan.
@@ -722,7 +722,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   **Verify:** integration: template from a provisioned Debian, create from it, SSH works with the
   child's key and the parent's key is refused.
 
-- [ ] **R-805 Garbage collection**
+- [x] **R-805 Garbage collection**
   `vmlab gc`: removes orphaned runner processes (pid files whose record is gone), dumps and exec
   logs older than 7 days, checkpoints marked `temporary`, unused template backing files; reports
   bytes freed. `vm_lifecycle destroy` refuses when another VM's backing chain depends on this disk
@@ -1069,6 +1069,7 @@ six 4 GB guests with the default reserve; macOS 26.6 → VZ save/restore APIs pr
     vz-config.json             the machine the VZ runner builds (VZRunnerConfig)
     serial.log, vz.log, console.log, qemu.log, provision.log, provision.json
     checkpoints.json, checkpoints/<id>/ (VZ state files and disk clones)
+    backing/<key>.qcow2        frozen layers that clones' disks are backed by (R-803)
     manifests/<id>.json, exec/<job>.log, dumps/, pulled/, screenshots/
   segments/<name>/             switch.sock, stats.sock, switch.pid, ports/
   fleets/<name>.json

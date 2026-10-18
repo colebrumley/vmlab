@@ -127,3 +127,22 @@ struct DestroyCommand: LifecycleCommand {
 
   var extra: [String: JSONValue] { force ? ["force": .bool(true)] : [:] }
 }
+
+struct CloneCommand: LifecycleCommand {
+  static let configuration = CommandConfiguration(
+    commandName: "clone",
+    abstract: "Make a new VM from a VM's current disk or a checkpoint (vm_lifecycle clone).")
+  static let action = "clone"
+  @Argument(help: "The source VM's id or name.") var vm: String
+  @Option(help: "The new VM's name; defaults to its id.") var name: String?
+  @Option(help: "A checkpoint of the source to clone from (default: its current disk).")
+  var from: String?
+  @Flag(help: "Print the result object as JSON.") var json = false
+
+  var extra: [String: JSONValue] {
+    var object: [String: JSONValue] = [:]
+    if let name { object["name"] = .string(name) }
+    if let from { object["from"] = .string(from) }
+    return object
+  }
+}
