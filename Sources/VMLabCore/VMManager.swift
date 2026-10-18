@@ -75,6 +75,10 @@ public actor VMManager {
     new.runtime = nil
     new.checkpoints = []
     new.plan = plan
+    // CX-5: backends read network.mode, and nil means their default NAT; a granted net_none
+    // (`require` or `prefer` without a mode) must mean no network device. Requirements already
+    // refuse net_none beside mode nat, forwards or a segment.
+    if plan.requests(.netNone) { new.network.mode = .disabled }
     // R-1102: a share's host directory is model-supplied; it must pass the path policy and is
     // recorded canonical, so a symlink swapped in later does not move it.
     if let host = new.share?.host {
