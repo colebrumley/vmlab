@@ -18,4 +18,10 @@ import VMLabEngines
     }
     #expect(throws: VMLabError.self) { try registry.backend(for: .vzMacOS) }
   }
+
+  @Test func registerProbesFillsTheQEMUProbes() {
+    let registry = SlowProbeRegistry()
+    Engines.registerProbes(into: registry)
+    #expect(registry.probes == [.qemuHVFLiveSnapshot])
+  }
 }

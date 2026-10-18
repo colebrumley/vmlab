@@ -21,4 +21,9 @@ public enum Engines {
     registry.register(VZBackend(store: store))
     displays.register(RFBDisplayConnector())
   }
+
+  /// Registers the slow probes the engine modules own (`vmlab doctor --probe` runs them).
+  public static func registerProbes(into registry: SlowProbeRegistry = SlowProbeRunners.shared) {
+    for runner in VMLabQEMU.probeRunners { registry.register(runner) }
+  }
 }

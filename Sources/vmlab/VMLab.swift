@@ -16,7 +16,8 @@ struct VMLab: AsyncParsableCommand {
       FactsCommand.self, DoctorCommand.self, Images.self, PlanCommand.self, CreateCommand.self,
       ListCommand.self, InspectCommand.self, StartCommand.self, StopCommand.self,
       KillCommand.self, PauseCommand.self, ResumeCommand.self, ResetCommand.self,
-      DestroyCommand.self, LogsCommand.self, ComputerCommand.self, Serve.self, GenDocs.self,
+      DestroyCommand.self, LogsCommand.self, ComputerCommand.self, IntrospectCommand.self,
+      MemoryDumpCommand.self, Serve.self, GenDocs.self,
     ]
   )
 
@@ -24,6 +25,7 @@ struct VMLab: AsyncParsableCommand {
     VMLabLogging.bootstrap()
     // Every command, `serve` and the tool subcommands alike, reaches engines through `Backends`.
     Engines.registerAll(store: Store(home: Store.defaultHome()))
+    Engines.registerProbes()
     do {
       var command = try parseAsRoot()
       if var command = command as? AsyncParsableCommand {

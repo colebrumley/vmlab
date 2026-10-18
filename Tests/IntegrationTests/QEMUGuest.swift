@@ -18,10 +18,11 @@ struct QEMUGuest {
 
   /// `requested` becomes the plan's `requested` features (R-504 installs a desktop for
   /// `gui_desktop`); with `sshKey`, `<vm>/id_ed25519` is generated first, so the guest boots
-  /// with a cloud-init seed that authorizes it.
+  /// with a cloud-init seed that authorizes it. `prepare` runs on the VM directory after create
+  /// and before the first start (to drop an `id_ed25519.pub` there, say).
   static func boot(
     features: [Feature] = [.serial, .gui, .netNAT], requested: [Feature] = [], memoryGB: Int = 2,
-    diskGB: Int = 8, sshKey: Bool = false
+    diskGB: Int = 8, sshKey: Bool = false, prepare: ((URL) throws -> Void)? = nil
   ) async throws -> QEMUGuest {
     let n = counterLock.withLock {
       counter += 1
@@ -50,6 +51,7 @@ struct QEMUGuest {
         image: "debian-13-arm64"), plan: plan)
     do {
       if sshKey { try generateKey(in: store.directory(of: created.id)) }
+      try prepare?(store.directory(of: created.id))
       guard let running = try await manager.perform(.start, on: created.id) else {
         throw VMLabError(code: .internal, message: "start returned no record", hint: "")
       }
