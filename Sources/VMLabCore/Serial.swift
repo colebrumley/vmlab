@@ -97,11 +97,21 @@ public actor SerialChannel {
   /// a time costs a matcher round trip per interval, not per byte.
   static let rescanInterval: Duration = .milliseconds(25)
 
+  /// The most a wait's deadline moves for time spent starting its matcher (see `expire`).
+  static let maxLaunchGrace: Duration = .seconds(10)
+
   /// The `vmlab-match` executable waits run their patterns in; nil when it was not found.
   public let matcherPath: String?
+  /// A matcher started ahead of need, so a wait does not pay for the spawn (the first exec of a
+  /// new binary can take a second on a busy host while macOS checks its signature).
+  private var spare: MatchHelperProcess?
 
   private struct Waiter {
     var pattern: String
+    /// The pattern's bytes when it is a plain literal, matched in-process with no matcher.
+    var literal: [UInt8]?
+    /// How far the deadline has moved for the matcher's start-up so far.
+    var grace: Duration = .zero
     var since: UInt64
     /// Where the next match starts (the end of the last one, less `rescanOverlap`).
     var scanFrom: UInt64
@@ -214,6 +224,7 @@ public actor SerialChannel {
       thread.name = "vmlab.serial.reader"
       thread.start()
     }
+    refillSpare()
     readerTask = Task { [weak self] in
       for await chunk in chunks { await self?.ingest(chunk) }
       await self?.readerFinished()
@@ -305,9 +316,12 @@ public actor SerialChannel {
   /// Waits until `pattern` (Swift `Regex` syntax) matches output at or after `since` (default: the
   /// current end, so only new output counts), or fails with `timeout` after `timeout`. The pattern
   /// is matched against the retained output in windows of at most 64 KB, then against new output
-  /// re-scanning the last 4 KB. Matching runs in a `vmlab-match` process of the wait's own, killed
-  /// when the wait ends, so a pattern that backtracks for ever times out, stalls neither reads nor
-  /// the reader, and leaves no CPU busy. Fails with `engine_error` when the helper is missing.
+  /// re-scanning the last 4 KB. A plain literal (`SerialMatcher.literal(of:)`) is found by a byte
+  /// search on the channel. Any other pattern runs in a `vmlab-match` process of the wait's own,
+  /// killed when the wait ends, so a pattern that backtracks for ever times out, stalls neither
+  /// reads nor the reader, and leaves no CPU busy; time spent starting that process does not count
+  /// against `timeout` (up to `maxLaunchGrace`). Fails with `engine_error` when the helper is
+  /// missing.
   public func wait(
     for pattern: String, since: UInt64? = nil, timeout: Duration
   ) async throws -> SerialMatch {
@@ -324,8 +338,11 @@ public actor SerialChannel {
         field: "pattern", reason: "not a valid regular expression: \(error)",
         hint: "Pass a Swift Regex pattern, for example \"login:\" or \"\\\\$ $\".")
     }
-    guard let matcherPath, FileManager.default.isExecutableFile(atPath: matcherPath) else {
-      throw SerialMatcher.missing(matcherPath)
+    let literal = SerialMatcher.literal(of: pattern).map { Array($0.utf8) }
+    if literal == nil {
+      guard let matcherPath, FileManager.default.isExecutableFile(atPath: matcherPath) else {
+        throw SerialMatcher.missing(matcherPath)
+      }
     }
     let from = since ?? ring.end
     let connected = !closed && socket != nil
@@ -334,13 +351,11 @@ public actor SerialChannel {
     nextWaiterID += 1
     return try await withTaskCancellationHandler {
       try await withCheckedThrowingContinuation { continuation in
-        let timer = Task { [weak self] in
-          try? await Task.sleep(for: timeout)
-          await self?.expire(id, pattern: pattern, timeout: timeout)
-        }
         waiters[id] = Waiter(
-          pattern: pattern, since: from, scanFrom: max(from, ring.start), scannedTo: from,
-          continuation: continuation, timer: timer)
+          pattern: pattern, literal: literal, since: from, scanFrom: max(from, ring.start),
+          scannedTo: from,
+          continuation: continuation, timer: nil)
+        arm(id, after: timeout, pattern: pattern, timeout: timeout)
         pump(id)
       }
     } onCancel: {
@@ -478,6 +493,13 @@ public actor SerialChannel {
       if socket == nil { finish(id, throwing: Self.unreachable(socketPath)) }
       return
     }
+    let to = min(ring.end, from + Self.scanWindow)
+    if let literal = waiter.literal {
+      let found = SerialMatcher.search(
+        literal: literal, in: ring.bytes(from: from, to: to), base: from)
+      scanFinished(id, outcome: found.map { .found($0) } ?? .none, through: to, pid: nil)
+      return
+    }
     if let caughtUpAt = waiter.caughtUpAt {
       let due = caughtUpAt + Self.rescanInterval
       if ContinuousClock.now < due {
@@ -496,10 +518,16 @@ public actor SerialChannel {
       guard waiters.values.count(where: { $0.matcher != nil }) < Self.maxMatchers,
         let matcherPath
       else { return }
-      matcher = MatchHelperProcess(path: matcherPath, pattern: waiter.pattern)
+      if let warm = spare {
+        matcher = warm
+        spare = nil
+      } else {
+        matcher = MatchHelperProcess(path: matcherPath)
+      }
+      matcher.assign(pattern: waiter.pattern)
       waiters[id]?.matcher = matcher
+      refillSpare()
     }
-    let to = min(ring.end, from + Self.scanWindow)
     let bytes = ring.bytes(from: from, to: to)
     scanning.insert(id)
     let thread = Thread { [weak self] in
@@ -508,6 +536,19 @@ public actor SerialChannel {
       Task { await self?.scanFinished(id, outcome: outcome, through: to, pid: pid) }
     }
     thread.name = "vmlab.serial.match"
+    thread.start()
+  }
+
+  /// Starts a spare matcher on a thread of its own, unless one exists, there is no helper, or the
+  /// channel is closed.
+  private func refillSpare() {
+    guard spare == nil, !closed, socket != nil, let matcherPath,
+      FileManager.default.isExecutableFile(atPath: matcherPath)
+    else { return }
+    let warm = MatchHelperProcess(path: matcherPath)
+    spare = warm
+    let thread = Thread { warm.start() }
+    thread.name = "vmlab.serial.match-launch"
     thread.start()
   }
 
@@ -566,6 +607,8 @@ public actor SerialChannel {
     socket = nil
     log.close()
     partialLine.removeAll()
+    spare?.kill()
+    spare = nil
     for id in waiters.keys where failingAll || !scanning.contains(id) {
       if failingAll { finish(id, throwing: Self.unreachable(socketPath)) } else { pump(id) }
     }
@@ -574,8 +617,32 @@ public actor SerialChannel {
   /// How much of the output a timed-out wait returns.
   static let timeoutTextBytes: UInt64 = 4096
 
+  /// (Re)arms waiter `id`'s deadline `delay` from now.
+  private func arm(_ id: UInt64, after delay: Duration, pattern: String, timeout: Duration) {
+    waiters[id]?.timer?.cancel()
+    waiters[id]?.timer = Task { [weak self] in
+      do { try await Task.sleep(for: delay) } catch { return }
+      await self?.expire(id, pattern: pattern, timeout: timeout)
+    }
+  }
+
+  /// The deadline passed. Time the wait's scans spent waiting for its matcher to start is not
+  /// matching time, so the deadline first moves by that much (and, while the matcher is still
+  /// starting, in steps of 100 ms), up to `maxLaunchGrace` in all; then the wait times out.
   private func expire(_ id: UInt64, pattern: String, timeout: Duration) {
     guard let waiter = waiters[id] else { return }
+    if let matcher = waiter.matcher, waiter.grace < Self.maxLaunchGrace {
+      let owed = matcher.launchWait - waiter.grace
+      let step: Duration? =
+        matcher.scanIsWaitingForLaunch
+        ? max(owed, .milliseconds(100)) : (owed > .zero ? owed : nil)
+      if let step {
+        let granted = min(step, Self.maxLaunchGrace - waiter.grace)
+        waiters[id]?.grace += granted
+        arm(id, after: granted, pattern: pattern, timeout: timeout)
+        return
+      }
+    }
     // Partial data (R-1101): what the guest printed while the wait ran, its last 4 KB at most.
     let end = ring.end
     let from = max(

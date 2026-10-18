@@ -433,7 +433,7 @@ func eventually(_ condition: () async -> Bool) async -> Bool {
     try await channel.start()
     server.accept()
     do {
-      _ = try await channel.wait(for: "login:", timeout: .seconds(1))
+      _ = try await channel.wait(for: "log[a-z]+:", timeout: .seconds(1))
       Issue.record("expected engine_error")
     } catch let error as VMLabError {
       #expect(error.code == .engineError)
@@ -443,7 +443,7 @@ func eventually(_ condition: () async -> Bool) async -> Bool {
     let unlocated = SerialChannel(
       socketPath: server.path, logURL: server.logURL, matcherPath: nil)
     await #expect(throws: VMLabError.self) {
-      try await unlocated.wait(for: "x", since: 0, timeout: .seconds(1))
+      try await unlocated.wait(for: "x+", since: 0, timeout: .seconds(1))
     }
     // A matcher that exits instead of answering (no SIGPIPE reaches the server either).
     let other = try FakeSerialServer()
@@ -455,7 +455,7 @@ func eventually(_ condition: () async -> Bool) async -> Bool {
     other.send("abc")
     #expect(await eventually { await broken.endOffset == 3 })
     do {
-      _ = try await broken.wait(for: "x", since: 0, timeout: .seconds(2))
+      _ = try await broken.wait(for: "x+", since: 0, timeout: .seconds(2))
       Issue.record("expected engine_error")
     } catch let error as VMLabError {
       #expect(error.code == .engineError)
@@ -469,6 +469,54 @@ func eventually(_ condition: () async -> Bool) async -> Bool {
     #expect(found?.hasSuffix("/vmlab-match") == true)
     #expect(SerialMatcher.locate(environment: ["VMLAB_MATCH_HELPER": "/bin/ls"]) == "/bin/ls")
     #expect(SerialMatcher.locate(environment: ["VMLAB_MATCH_HELPER": "/nonexistent"]) == nil)
+  }
+
+  /// A plain literal (escaped punctuation allowed) is matched in-process: no matcher is needed or
+  /// launched, and offsets are bytes.
+  @Test func literalPatternsNeedNoMatcher() async throws {
+    #expect(SerialMatcher.literal(of: "login:") == "login:")
+    #expect(SerialMatcher.literal(of: "\\$ ") == "$ ")
+    #expect(SerialMatcher.literal(of: "a\\.b\\(c\\)") == "a.b(c)")
+    for regex in ["=+", "\\$ $", "^x", "a|b", "[ab]", "\\d", "x{2}", "(?i)x", "a.b", ""] {
+      #expect(SerialMatcher.literal(of: regex) == nil, "\(regex)")
+    }
+    let server = try FakeSerialServer()
+    defer { server.cleanUp() }
+    let channel = SerialChannel(socketPath: server.path, logURL: server.logURL, matcherPath: nil)
+    try await channel.start()
+    server.accept()
+    server.send("café prompt$ ")
+    #expect(await eventually { await channel.endOffset == 14 })
+    let match = try await channel.wait(for: "prompt\\$ ", since: 0, timeout: .seconds(1))
+    #expect(match == SerialMatch(match: "prompt$ ", start: 6, offset: 14))
+    #expect(await channel.matcherPIDs.isEmpty)
+    await channel.stop()
+  }
+
+  /// A matcher that takes longer to start than the wait's whole timeout does not make an ordinary
+  /// pattern time out: start-up time is added to the deadline.
+  @Test(.timeLimit(.minutes(1))) func slowMatcherStartDoesNotCountAgainstTheTimeout()
+    async throws
+  {
+    let server = try FakeSerialServer()
+    defer { server.cleanUp() }
+    let real = try #require(SerialMatcher.locate(environment: [:]))
+    let script = server.directory.appending(path: "slow-match")
+    try "#!/bin/sh\nsleep 1.5\nexec '\(real)'\n".write(
+      to: script, atomically: true, encoding: .utf8)
+    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+    let channel = SerialChannel(
+      socketPath: server.path, logURL: server.logURL, matcherPath: script.path)
+    try await channel.start()
+    server.accept()
+    server.send("== done\n")
+    #expect(await eventually { await channel.endOffset == 8 })
+    // The first wait gets the spare while it is still starting; the second starts a matcher.
+    let first = try await channel.wait(for: "=+ done", since: 0, timeout: .milliseconds(500))
+    #expect(first == SerialMatch(match: "== done", start: 0, offset: 7))
+    let second = try await channel.wait(for: "d[aeiou]ne", since: 0, timeout: .milliseconds(500))
+    #expect(second.start == 3)
+    await channel.stop()
   }
 
   /// Output arriving a few bytes at a time is matched with correct offsets, with far fewer matcher

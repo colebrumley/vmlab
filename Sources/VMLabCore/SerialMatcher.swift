@@ -6,9 +6,12 @@ import Synchronization
 /// the server kills at the wait's deadline. Swift `Regex` backtracks and cannot be interrupted, so
 /// a pathological pattern run in-process would hold a CPU core after its wait ended; a process can
 /// be killed. One helper serves one wait: it compiles the pattern once, then answers one window of
-/// output after another over its stdin and stdout until it is killed or its stdin closes.
+/// output after another over its stdin and stdout until it is killed or its stdin closes. A
+/// pattern that is a plain literal (`literal(of:)`) needs no helper: the channel finds it with a
+/// byte search in-process, which is linear.
 ///
-/// The framing, every integer little-endian: the server sends the pattern (`u32` length, UTF-8),
+/// The framing, every integer little-endian: the helper first writes one byte, `R`, once it runs
+/// (so the server knows how long launching took). The server sends the pattern (`u32` length, UTF-8),
 /// then each window (`u64` offset of its first byte, `u32` length, the bytes). The helper answers
 /// each window with one byte, `0` for no match, `1` for a match followed by `u64` start, `u64`
 /// end and the matched text (`u32` length, UTF-8), or `2` for a pattern that does not compile
@@ -63,6 +66,7 @@ public enum SerialMatcher {
 
   /// The helper's loop over `input` and `output`; returns its exit status. 0 once the input ends.
   public static func serve(input: Int32 = 0, output: Int32 = 1) -> Int32 {
+    guard writeAll(output, [readyByte]) else { return 1 }
     guard let length = readUInt32(input), Int(length) <= maxFrameBytes,
       let patternBytes = readExact(input, Int(length))
     else { return 1 }
@@ -92,6 +96,49 @@ public enum SerialMatcher {
       }
       guard writeAll(output, reply) else { return 1 }
     }
+  }
+
+  /// The byte the helper writes once it runs.
+  static let readyByte = UInt8(ascii: "R")
+
+  /// The text `pattern` matches when it is a plain literal: no regex syntax but escaped
+  /// punctuation (`\$`, `\.`, `\(`); nil otherwise. Such a pattern is matched byte for byte.
+  public static func literal(of pattern: String) -> String? {
+    var result = ""
+    var iterator = pattern.makeIterator()
+    while let c = iterator.next() {
+      switch c {
+      case "\\":
+        guard let next = iterator.next(), next.isASCII, next.isPunctuation || next.isSymbol
+        else { return nil }
+        result.append(next)
+      case "^", "$", ".", "|", "?", "*", "+", "(", ")", "[", "]", "{", "}":
+        return nil
+      default:
+        // Whitespace and letters stand for themselves; `#` and the like only matter in extended
+        // syntax, which a pattern can turn on only with `(?x)`, already refused above.
+        result.append(c)
+      }
+    }
+    return result.isEmpty ? nil : result
+  }
+
+  /// The first occurrence of `literal`'s UTF-8 bytes in `bytes`, which start at offset `base`.
+  public static func search(literal: [UInt8], in bytes: [UInt8], base: UInt64) -> SerialMatch? {
+    guard !literal.isEmpty, bytes.count >= literal.count else { return nil }
+    let index: Int? = bytes.withUnsafeBytes { haystack in
+      literal.withUnsafeBytes { needle in
+        guard
+          let found = memmem(
+            haystack.baseAddress, haystack.count, needle.baseAddress, needle.count)
+        else { return nil }
+        return haystack.baseAddress!.distance(to: UnsafeRawPointer(found))
+      }
+    }
+    guard let index else { return nil }
+    return SerialMatch(
+      match: String(decoding: literal, as: UTF8.self), start: base + UInt64(index),
+      offset: base + UInt64(index + literal.count))
   }
 
   /// The first match of `regex` in `bytes`, which start at offset `base`, with byte offsets.
@@ -192,10 +239,12 @@ public enum SerialMatcher {
   private final class BundleToken {}
 }
 
-/// One running `vmlab-match` for one wait. `scan` (blocking, on a thread of the caller's) launches
-/// the helper on first use and sends it a window; `kill` sends `SIGKILL` at once, so a scan in
+/// One `vmlab-match` process, launched ahead of need (a channel keeps one warm spare) or by the
+/// first scan of the wait it serves. `start` and `scan` block, so they run on threads of their
+/// own, never on an actor; `kill` never blocks: it sends `SIGKILL` at once, and a launch or scan in
 /// progress returns `.killed` as soon as the helper's stdout closes. Foundation's `Process` reaps
-/// the child; `exited` reports when it has.
+/// the child. The time a scan spent waiting for the helper to start is `launchWait`, which the
+/// channel adds to the wait's deadline: a busy host's spawn is not the pattern's matching time.
 final class MatchHelperProcess: @unchecked Sendable {
   enum Outcome: Sendable {
     case found(SerialMatch)
@@ -205,56 +254,152 @@ final class MatchHelperProcess: @unchecked Sendable {
     case failed(VMLabError)
   }
 
+  private enum State {
+    case idle
+    case launching
+    case ready(input: Int32, output: Int32)
+    case failed(VMLabError)
+    case killed
+  }
+
   let path: String
-  let pattern: String
-  private let lock = NSLock()
+  private let condition = NSCondition()
+  private var state = State.idle
   private var process: Process?
   private var toHelper: FileHandle?
   private var fromHelper: FileHandle?
-  private var killed = false
-  private let reaped = HostProcess.Flag()
+  private var pattern: String?
+  private var headerSent = false
+  private var waitedForLaunch: Duration = .zero
+  private var scanWaiting = false
 
-  init(path: String, pattern: String) {
-    self.path = path
-    self.pattern = pattern
-  }
+  init(path: String) { self.path = path }
 
   /// The helper's pid once launched.
-  var pid: pid_t? {
-    lock.lock()
-    defer { lock.unlock() }
-    return process?.processIdentifier
+  var pid: pid_t? { locked { process?.processIdentifier } }
+
+  /// True while the helper is being started and a scan is waiting for it.
+  var scanIsWaitingForLaunch: Bool { locked { scanWaiting } }
+
+  /// How long scans have waited for the helper to start so far.
+  var launchWait: Duration { locked { waitedForLaunch } }
+
+  /// The pattern this helper will run; set once, before its first scan.
+  func assign(pattern: String) { locked { self.pattern = pattern } }
+
+  /// Starts the helper and waits for its ready byte, unless it was started or killed already.
+  func start() {
+    condition.lock()
+    guard case .idle = state else {
+      condition.unlock()
+      return
+    }
+    state = .launching
+    condition.unlock()
+    let process = Process()
+    process.executableURL = URL(filePath: path)
+    process.arguments = []
+    let input = Pipe()
+    let output = Pipe()
+    process.standardInput = input
+    process.standardOutput = output
+    process.standardError = FileHandle.nullDevice
+    // A write to a helper that died must fail with EPIPE, not raise SIGPIPE in the server.
+    _ = fcntl(input.fileHandleForWriting.fileDescriptor, F_SETNOSIGPIPE, 1)
+    var next: State
+    do {
+      try process.run()
+      condition.lock()
+      self.process = process
+      toHelper = input.fileHandleForWriting
+      fromHelper = output.fileHandleForReading
+      let wasKilled: Bool
+      if case .killed = state { wasKilled = true } else { wasKilled = false }
+      if wasKilled { Darwin.kill(process.processIdentifier, SIGKILL) }
+      condition.unlock()
+      let ready = SerialMatcher.readExact(output.fileHandleForReading.fileDescriptor, 1)
+      next =
+        ready == [SerialMatcher.readyByte]
+        ? .ready(
+          input: input.fileHandleForWriting.fileDescriptor,
+          output: output.fileHandleForReading.fileDescriptor)
+        : .failed(SerialMatcher.missing(path, detail: "it exited at start"))
+    } catch {
+      next = .failed(SerialMatcher.missing(path, detail: "\(error)"))
+    }
+    condition.lock()
+    if case .killed = state {
+    } else {
+      state = next
+      if case .failed = next, let process = self.process, process.isRunning {
+        Darwin.kill(process.processIdentifier, SIGKILL)
+      }
+    }
+    condition.broadcast()
+    condition.unlock()
   }
 
-  /// True once the helper has exited and been reaped.
-  var exited: Bool { reaped.isSet }
-
-  /// Matches `bytes` (starting at offset `base`) in the helper. Blocks; never call it on an actor.
+  /// Matches `bytes` (starting at offset `base`) in the helper, launching it first if need be.
   func scan(_ bytes: [UInt8], base: UInt64) -> Outcome {
-    let launched: (input: Int32, output: Int32)
-    switch launchIfNeeded() {
-    case .success(let fds): launched = fds
-    case .failure(let outcome): return outcome
+    let fds: (input: Int32, output: Int32)
+    let header: [UInt8]?
+    condition.lock()
+    if case .idle = state {
+      condition.unlock()
+      let started = ContinuousClock.now
+      locked { scanWaiting = true }
+      start()
+      locked {
+        scanWaiting = false
+        waitedForLaunch += ContinuousClock.now - started
+      }
+      condition.lock()
     }
-    var frame: [UInt8] = []
-    frame.reserveCapacity(bytes.count + 12)
+    if case .launching = state {
+      let started = ContinuousClock.now
+      scanWaiting = true
+      while case .launching = state { condition.wait() }
+      scanWaiting = false
+      waitedForLaunch += ContinuousClock.now - started
+    }
+    switch state {
+    case .ready(let input, let output):
+      fds = (input, output)
+    case .failed(let error):
+      condition.unlock()
+      return .failed(error)
+    case .killed, .idle, .launching:
+      condition.unlock()
+      return .killed
+    }
+    if headerSent {
+      header = nil
+    } else {
+      var bytes: [UInt8] = []
+      SerialMatcher.appendString(pattern ?? "", to: &bytes)
+      header = bytes
+      headerSent = true
+    }
+    condition.unlock()
+    var frame = header ?? []
+    frame.reserveCapacity(frame.count + bytes.count + 12)
     SerialMatcher.appendUInt64(base, to: &frame)
     SerialMatcher.appendUInt32(UInt32(bytes.count), to: &frame)
     frame.append(contentsOf: bytes)
-    guard SerialMatcher.writeAll(launched.input, frame),
-      let kind = SerialMatcher.readExact(launched.output, 1)?.first
+    guard SerialMatcher.writeAll(fds.input, frame),
+      let kind = SerialMatcher.readExact(fds.output, 1)?.first
     else { return lostHelper() }
     switch kind {
     case 0:
       return .none
     case 1:
-      guard let start = SerialMatcher.readUInt64(launched.output),
-        let end = SerialMatcher.readUInt64(launched.output),
-        let text = SerialMatcher.readString(launched.output)
+      guard let start = SerialMatcher.readUInt64(fds.output),
+        let end = SerialMatcher.readUInt64(fds.output),
+        let text = SerialMatcher.readString(fds.output)
       else { return lostHelper() }
       return .found(SerialMatch(match: text, start: start, offset: end))
     case 2:
-      let reason = SerialMatcher.readString(launched.output) ?? "unknown"
+      let reason = SerialMatcher.readString(fds.output) ?? "unknown"
       return .failed(
         VMLabError.invalidRequest(
           field: "pattern", reason: "not a valid regular expression: \(reason)",
@@ -266,67 +411,31 @@ final class MatchHelperProcess: @unchecked Sendable {
 
   /// Ends the helper with `SIGKILL` (or keeps it from launching). Safe to call more than once.
   func kill() {
-    lock.lock()
-    defer { lock.unlock() }
-    killed = true
+    condition.lock()
+    defer { condition.unlock() }
+    state = .killed
     if let process, process.isRunning { Darwin.kill(process.processIdentifier, SIGKILL) }
-  }
-
-  private enum Launch {
-    case success((input: Int32, output: Int32))
-    case failure(Outcome)
-  }
-
-  private func launchIfNeeded() -> Launch {
-    lock.lock()
-    defer { lock.unlock() }
-    if killed { return .failure(.killed) }
-    if let toHelper, let fromHelper {
-      return .success((toHelper.fileDescriptor, fromHelper.fileDescriptor))
-    }
-    let process = Process()
-    process.executableURL = URL(filePath: path)
-    process.arguments = []
-    let input = Pipe()
-    let output = Pipe()
-    process.standardInput = input
-    process.standardOutput = output
-    process.standardError = FileHandle.nullDevice
-    let reaped = self.reaped
-    process.terminationHandler = { _ in _ = reaped.set() }
-    // A write to a helper that died must fail with EPIPE, not raise SIGPIPE in the server.
-    _ = fcntl(input.fileHandleForWriting.fileDescriptor, F_SETNOSIGPIPE, 1)
-    do {
-      try process.run()
-    } catch {
-      _ = reaped.set()
-      return .failure(.failed(SerialMatcher.missing(path, detail: "\(error)")))
-    }
-    self.process = process
-    toHelper = input.fileHandleForWriting
-    fromHelper = output.fileHandleForReading
-    var header: [UInt8] = []
-    SerialMatcher.appendString(pattern, to: &header)
-    guard SerialMatcher.writeAll(input.fileHandleForWriting.fileDescriptor, header) else {
-      Darwin.kill(process.processIdentifier, SIGKILL)
-      return .failure(.failed(SerialMatcher.missing(path, detail: "it exited at start")))
-    }
-    return .success(
-      (input.fileHandleForWriting.fileDescriptor, output.fileHandleForReading.fileDescriptor))
+    condition.broadcast()
   }
 
   /// The helper's pipes broke: `.killed` when `kill` did it, else a crash, reported as such.
   private func lostHelper() -> Outcome {
-    lock.lock()
-    defer { lock.unlock() }
-    if killed { return .killed }
-    killed = true
+    condition.lock()
+    defer { condition.unlock() }
+    if case .killed = state { return .killed }
+    state = .killed
     if let process, process.isRunning { Darwin.kill(process.processIdentifier, SIGKILL) }
     return .failed(
       VMLabError(
         code: .engineError, message: "The serial pattern matcher exited during a match.",
         hint: "Try the wait again; if it repeats, the pattern may exhaust the matcher's memory.",
         data: ["tool": .string(SerialMatcher.executableName), "path": .string(path)]))
+  }
+
+  private func locked<T>(_ body: () -> T) -> T {
+    condition.lock()
+    defer { condition.unlock() }
+    return body()
   }
 
   deinit {
