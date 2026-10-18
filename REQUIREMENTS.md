@@ -390,14 +390,34 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   `console=ttyAMA0 root=/dev/vda1` and reach `login:` on serial.
 
 - [x] **R-306 Custom devices**
-  `Requirements.extra.qemuArgs: [String]` is passed through verbatim for the `custom_devices`
-  feature, after vmlab's own arguments. The options are an allowlist (`-device`, `-global`,
-  `-drive`, `-blockdev`, `-object`, `-chardev`, `-netdev`, `-nic`, `-rtc`, `-boot`, `-smbios`,
-  `-fw_cfg`, `-action`, `-usb`, `-no-reboot`, `-no-shutdown`; bug hunt BH-1 found the earlier
-  denylist let `-incoming exec:` and `mon:` chardevs run host commands): anything else, `exec:`,
-  `mon:` or `cmd:` in a value, host fd/script/helper keys, chardev and netdev types off their
-  lists, host-passthrough devices, and host paths outside the R-1102 path policy, inside
-  `VMLAB_HOME` or naming an existing unix socket raise `invalid_request`.
+  `Requirements.extra.qemuArgs: [String]` is passed to QEMU for the `custom_devices` feature,
+  after vmlab's own arguments. Every option is checked against `ExtraSpec.allowedQEMUOptions`
+  (bug hunt BH-1 found a denylist let `-incoming exec:` and `mon:` chardevs run host commands; the
+  owner then widened the list to everything that cannot run host code, open a host monitor or
+  descriptor, reach a host path outside the policy or pass host hardware through). Allowed:
+  `-device`, `-global`, `-drive`, `-blockdev`, `-object`, `-chardev`, `-netdev`, `-nic`, `-net`,
+  `-rtc`, `-boot`, `-smbios`, `-fw_cfg`, `-action`, `-usb`, `-no-reboot`, `-no-shutdown`, `-cpu`
+  (replaces vmlab's; `host`/`max` only under qemu-hvf, `host` only there), `-machine`/`-M`
+  (properties merged into vmlab's `-machine`; another board only under qemu-tcg; `accel=` and
+  boot keys refused), `-icount` (qemu-tcg only), `-d`, `-dfilter`, `-D`, `-trace`, `-numa`,
+  `-overcommit`, `-mem-prealloc`, `-mem-path`, `-cdrom`, `-hda`..`-hdd`, `-fda`, `-fdb`, `-sd`,
+  `-mtdblock`, `-option-rom`, `-acpitable`, `-audiodev`/`-audio` (none, wav), `-tpmdev emulator`,
+  `-vga`, `-usbdevice`, `-virtfs`/`-fsdev` (local, synth), `-iscsi`, `-msg`, `-compat`, `-uuid`,
+  `-k`, `-seed`, `-watchdog-action`, `-echr`, `-dump-vmstate`, `-enable-sync-profile`,
+  `-only-migratable`, `-no-fd-bootchk`, `-win2k-hack`; extra serial ports are a `-chardev` plus
+  `-device pci-serial`/`isa-serial`/`virtconsole`, since vmlab keeps `-serial`. Always refused,
+  each with its reason: monitors (`-qmp`, `-monitor`, `-mon`, `-nographic`), `-serial`,
+  `-parallel`/`-debugcon` (legacy chardev strings), display and GDB options, boot images,
+  `-smp`/`-m`, `-accel`, process options, `-snapshot`/`-loadvm`, `-incoming`, `-add-fd`,
+  `-sandbox`, `-readconfig`, `-set`, Xen; `exec:`, `mon:` or `cmd:` in a value; host
+  fd/script/helper/smb keys; tap, bridge, vmnet, l2tpv3, vde netdevs; `dbus-vmstate` and remote
+  objects; types off an option's list; and host paths outside the R-1102 path policy, inside
+  `VMLAB_HOME` or naming an existing unix socket, all `invalid_request`. The owner's
+  `"allowHostCode": true` in `VMLAB_HOME/config.json` (never a tool argument) additionally permits
+  `-plugin`, `-semihosting`, `-semihosting-config`, passthrough devices (`usb-host`, `vfio-*`,
+  `vhost-*`, `u2f-passthru`, `ccid-card-emulated`), host serial/parallel/tty/braille chardevs,
+  `vhost-user`/`vhost-vdpa` netdevs, `-tpmdev passthrough`, `-audiodev coreaudio` and host-device
+  objects; their host paths still follow the path policy.
   **Verify:** unit tests for pass-through and the denylist.
 
 - [x] **R-307 qcow2 checkpoints and the live-snapshot probe**
@@ -854,7 +874,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
 - [x] **R-1102 Security review of the tool surface**
   Paths in `vm_file`, `vm_memory_dump`, `images register` and `shared_dir` are canonicalised and
   must be under the user's home or `/tmp` unless `allowAnyPath` is set in `~/.vmlab/config.json`;
-  `extra.qemuArgs` keeps its allowlist (R-306) and its host paths follow the same policy; `vm_introspect raw` keeps its allowlist; no tool executes a
+  `extra.qemuArgs` keeps its option checks (R-306) and its host paths follow the same policy; `vm_introspect raw` keeps its allowlist; no tool executes a
   host shell with model-supplied strings unquoted (all host subprocesses use argument arrays).
   **Verify:** unit tests for the path policy and a grep test that no `Process` in the tree is
   given a `/bin/sh -c` with interpolated input.
@@ -1032,12 +1052,22 @@ result also carries `vm` (id and name) where a VM is involved and `warnings: [St
   "network": { "mode": "nat", "segment": "cluster-a", "forwards": [{ "guest": 22 }, { "guest": 8080, "host": 18080 }] },
   "image": "debian-13-arm64",
   "boot": { "mode": "kernel", "kernel": "…", "initrd": "…", "cmdline": "console=ttyAMA0", "haltAtStart": false },
-  "provision": { "packages": ["jq"], "runCommands": ["…"], "userData": null },
+  "provision": { "packages": ["jq"], "runCommands": ["…"], "userData": null, "sudoPassword": null },
+  "share": { "host": "/Users/me/project", "guest": "/mnt/host" },
   "extra": { "qemuArgs": [] }
 }
 ```
 
-Every field but `guest` has a default (Appendix G); `resources` values are capped there too. `require` defaults to `[]`, which lands on a VZ
+`extra.qemuArgs` takes the QEMU options R-306 lists (`-cpu` replaces vmlab's, `-machine`
+properties merge into vmlab's) and refuses the rest with `invalid_request` naming the argument;
+`-plugin`, `-semihosting` and passthrough devices need the owner's `allowHostCode`.
+
+Every field but `guest` has a default (Appendix G); `resources` values are capped there too.
+On a macOS guest `share.guest` defaults to `/Volumes/My Shared Files` (Apple's automount tag); any
+other path is mounted at every boot by the `io.vmlab.share` LaunchDaemon that first boot installs
+with sudo, so the image must record the login password or `provision.sudoPassword` must give it
+(else `invalid_request` before cloning). `sudoPassword` is macOS only, kept in `<vm>/sudo.pass`
+(0600), and never written to `vm.json` or `provision.json`. `require` defaults to `[]`, which lands on a VZ
 profile. The result of `vm_create` repeats the resolved plan so the model knows what it has.
 
 ## Appendix D — Error codes
@@ -1090,7 +1120,7 @@ six 4 GB guests with the default reserve; macOS 26.6 → VZ save/restore APIs pr
 
 ```
 ~/.vmlab/                      (VMLAB_HOME)
-  config.json                  reserveGB, parallelStarts, allowAnyPath, ignoreMemoryPressure, defaults
+  config.json                  reserveGB, parallelStarts, allowAnyPath, ignoreMemoryPressure, allowHostCode, defaults
   host-facts.json              slow probe results
   board.json                   session board (R-002; never committed)
   images/<name>/               image.json, disk.(raw|qcow2), kernel/, checksums

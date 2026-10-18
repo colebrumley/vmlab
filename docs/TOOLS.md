@@ -565,7 +565,7 @@ The `requirements` object of `vm_plan`, `vm_create` and `fleet` (`Requirements` 
 | `boot.loadAddress` | string |  | Guest physical address for binary, hex such as 0x40080000 (mode binary). |
 | `boot.mode` | `disk` \| `kernel` \| `firmware` \| `binary`, default `disk` |  | disk boots the image; kernel boots kernel/initrd directly; firmware boots a supplied firmware image; binary loads a raw image at loadAddress and starts the CPU there. |
 | `extra` | object |  | Engine-specific additions. |
-| `extra.qemuArgs` | array of string |  | Arguments appended verbatim after vmlab's own (implies custom_devices, so QEMU), e.g. ["-device", "virtio-rng-pci"]. Only -device, -global, -drive, -blockdev, -object, -chardev, -netdev, -nic, -rtc, -boot, -smbios, -fw_cfg, -action, -usb, -no-reboot and -no-shutdown are allowed; host paths must be absolute, under the home or /tmp, and outside VMLAB_HOME. |
+| `extra.qemuArgs` | array of string |  | QEMU arguments after vmlab's own (implies custom_devices, so QEMU), e.g. ["-device", "virtio-rng-pci"]. Devices, drives, objects, chardevs, user-mode netdevs, -cpu (replaces vmlab's; host or max under qemu-hvf), -machine properties (merged into vmlab's; no accel=), -icount, -d, -D, -trace, -numa, -overcommit and more are allowed. Refused: monitors, -serial (vmlab's console; add -chardev plus -device pci-serial), -incoming, -add-fd, -set, -readconfig, exec:/mon:/cmd:, fd/script/helper keys, tap/bridge/vmnet; -plugin, -semihosting and passthrough devices need the owner's allowHostCode. Host paths must be absolute, under the home or /tmp, and outside VMLAB_HOME. |
 | `image` | string |  | Image or template name (images list). Omitted: the default image for the guest. |
 | `network` | object |  | Networking; omitted means NAT. |
 | `network.forwards` | array of object |  | Guest ports to make reachable from the host. |
@@ -577,6 +577,7 @@ The `requirements` object of `vm_plan`, `vm_create` and `fleet` (`Requirements` 
 | `provision` | object |  | First-boot provisioning beyond vmlab's own setup. |
 | `provision.packages` | array of string |  | Packages cloud-init installs on first boot (Linux only). |
 | `provision.runCommands` | array of string |  | Commands run in order on first boot: as root after cloud-init (Linux), or over SSH as the login user (macOS). The first that fails stops the rest; vm_inspect reports it as provision_failed. |
+| `provision.sudoPassword` | string |  | macOS only: the guest login user's password, for sudo. Needed only for a share.guest other than /Volumes/My Shared Files on an image that records no password (macos-base has one). Kept in the VM directory, never in vm.json or provision.json. |
 | `provision.userData` | string |  | cloud-init user-data merged after vmlab's own (its keys win, lists append); must start with #cloud-config, #!, #cloud-boothook or #include (Linux only). |
 | `require` | array of `exec_ssh` \| `exec_agent` \| `gui` \| `gui_preboot` \| `gui_desktop` \| `gui_accel` \| `serial` \| `gdb` \| `introspection` \| `memory_dump` \| `direct_kernel_boot` \| `custom_firmware` \| `custom_devices` \| `halt_at_start` \| `checkpoint_disk` \| `checkpoint_live` \| `pause` \| `net_nat` \| `net_fast` \| `net_segment` \| `net_port_forward` \| `net_none` \| `rosetta` \| `nested_virt` \| `shared_dir` \| `cloud_init` \| `many_guests` |  | Features the VM must have; a profile lacking any is ruled out. Default [] (VZ). |
 | `resources` | object |  | Guest resources; each omitted field takes the guest's default. |
@@ -584,5 +585,5 @@ The `requirements` object of `vm_plan`, `vm_create` and `fleet` (`Requirements` 
 | `resources.diskGB` | integer, 1–65536 |  | Disk size in GB. |
 | `resources.memoryGB` | integer, 1–4096 |  | Guest memory in GB. |
 | `share` | object |  | A host directory mounted read-write in the guest (implies shared_dir): 9p under QEMU (the guest kernel needs 9p; Debian's cloud kernel has none), virtiofs under VZ. |
-| `share.guest` | string, default `/mnt/host` |  | Absolute guest path it is mounted at. A macOS guest always mounts it at /Volumes/My Shared Files. |
+| `share.guest` | string, default `/mnt/host` |  | Absolute guest path it is mounted at. macOS: default /Volumes/My Shared Files (automounted); any other path is mounted at every boot by a LaunchDaemon that first boot installs with sudo, so the image must record the login password or provision.sudoPassword must give it. |
 | `share.host` | string |  | Absolute host path of an existing directory under your home or /tmp. Omitted: the VM's own shared/ directory (vm_inspect endpoints.share). |

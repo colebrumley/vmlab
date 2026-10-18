@@ -6,7 +6,7 @@ import VMLabCore
 
 @Suite struct VZMacBackendTests {
   /// A home with `macos-base` recorded as pulled, a store, and a backend over a fake `tart`.
-  static func sandbox(config: URL = TartTests.fixture) throws -> (
+  static func sandbox(config: URL = TartTests.fixture, password: String? = "admin") throws -> (
     home: URL, store: Store, backend: VZMacBackend, fake: FakeTart
   ) {
     let home = TartTests.temporary()
@@ -16,7 +16,7 @@ import VMLabCore
     let pulled = PulledImage(
       name: "macos-base", guest: GuestSpec(os: .macos, arch: .arm64),
       source: "ghcr.io/cirruslabs/macos-tahoe-base:latest", format: .tart, checksum: nil,
-      files: [:], login: ImageLogin(user: "admin", password: "admin"), pulledAt: Date(),
+      files: [:], login: ImageLogin(user: "admin", password: password), pulledAt: Date(),
       tartVM: "ghcr.io/cirruslabs/macos-tahoe-base:latest")
     let encoder = JSONEncoder()
     encoder.dateEncodingStrategy = .iso8601
@@ -160,7 +160,7 @@ import VMLabCore
   }
 
   /// CX-27: shared_dir on a macOS guest is a virtiofs device with the automount tag, which macOS
-  /// mounts at /Volumes/My Shared Files by itself; a share elsewhere in the guest is refused.
+  /// mounts at /Volumes/My Shared Files by itself; a share elsewhere uses vmlab's own tag.
   @Test func sharedDirUsesTheMacOSAutomountTag() async throws {
     let clone = TartVMFiles(directory: URL(filePath: "/Users/x/.tart/vms/vm-test01"))
     let tart = try TartVMConfig.read(from: TartTests.fixture.deletingLastPathComponent())
@@ -186,18 +186,49 @@ import VMLabCore
       VZRunnerConfig.macOS(record: record, clone: clone, config: tart, vmDirectory: vm)
         .directoryShares.isEmpty)
 
-    // create refuses a guest path macOS will not mount the share at.
+    // A share elsewhere is a device under vmlab's tag, reported at its own path.
+    record.share = SharedDirSpec(host: "/Users/x/project", guest: "/Users/admin/host share")
+    #expect(
+      VZRunnerConfig.macOS(record: record, clone: clone, config: tart, vmDirectory: vm)
+        .directoryShares == [.init(tag: "vmlab-share0", path: "/Users/x/project")])
+    #expect(SharedDirSpec.of(record)?.guestPath(for: .vzMacOS) == "/Users/admin/host share")
+
+    // The image's password is enough for a share elsewhere; the automount path needs none.
     let (home, store, backend, _) = try Self.sandbox()
     defer { try? FileManager.default.removeItem(at: home) }
     let elsewhere = try store.update(id: try Self.create(store).id) {
-      $0.share = SharedDirSpec(guest: "/mnt/host")
+      $0.share = SharedDirSpec(guest: "/Users/admin/hostshare")
+    }
+    try await backend.create(elsewhere, plan: Self.plan)
+    let automount = try store.update(id: try Self.create(store).id) {
+      $0.share = SharedDirSpec(guest: SharedDirSpec.macOSAutomountPath)
+    }
+    try await backend.create(automount, plan: Self.plan)
+  }
+
+  /// A share off the automount path needs sudo in the guest: with no password in the image and
+  /// none given, create refuses before cloning, naming provision.sudoPassword; with
+  /// `<vm>/sudo.pass` it clones, and the automount path never needs a password.
+  @Test func shareElsewhereWithoutAPasswordIsRefusedBeforeCloning() async throws {
+    let (home, store, backend, fake) = try Self.sandbox(password: nil)
+    defer { try? FileManager.default.removeItem(at: home) }
+    let elsewhere = try store.update(id: try Self.create(store).id) {
+      $0.share = SharedDirSpec(guest: "/Users/admin/hostshare")
     }
     let error = await #expect(throws: VMLabError.self) {
       try await backend.create(elsewhere, plan: Self.plan)
     }
-    #expect(error?.data["field"] == .string("share.guest"))
+    #expect(error?.code == .invalidRequest)
+    #expect(error?.data["field"] == .string("provision.sudoPassword"))
+    #expect(error?.hint.contains("provision.sudoPassword") == true)
+    #expect(!fake.calls.withLock { $0 }.contains { $0.first == "clone" })
+
+    try SudoPassword.write("s3cret", in: store.directory(of: elsewhere.id))
+    try await backend.create(elsewhere, plan: Self.plan)
+    #expect(fake.calls.withLock { $0 }.contains { $0.first == "clone" })
+
     let automount = try store.update(id: try Self.create(store).id) {
-      $0.share = SharedDirSpec(guest: SharedDirSpec.macOSAutomountPath)
+      $0.share = SharedDirSpec()
     }
     try await backend.create(automount, plan: Self.plan)
   }

@@ -174,3 +174,95 @@ extension MacProvisioningTests {
     #expect(text == "Ethernet 2\n")
   }
 }
+
+extension MacProvisioningTests {
+  static let awkwardPath = #"/Users/admin/it's a "share" & <more>"#
+
+  /// A share off the automount path: check mount_virtiofs, stage the plist, install and
+  /// bootstrap io.vmlab.share with sudo (the password on stdin only), wait for the mount; all in
+  /// provision.json with the given sudo password nowhere in a command.
+  @Test func shareElsewhereInstallsTheLaunchDaemon() async throws {
+    let dir = try Self.directory()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let guest = FakeGuest()
+    var provisioner = Self.provisioner(dir, guest: guest, vnc: nil)
+    provisioner.sharePath = Self.awkwardPath
+    provisioner.sudoPassword = "sudo-s3cret"
+    try await provisioner.provision(ip: "192.168.64.20")
+    let calls = guest.calls.withLock { $0 }
+    let names = try #require(ProvisionReport.load(from: dir)).steps.map(\.name)
+    #expect(
+      names == [
+        "ssh", "authorized_keys", "hostname", "share_check", "share_plist", "share_daemon",
+        "share_mount",
+      ])
+    #expect(calls.contains { $0.command == "test -x /sbin/mount_virtiofs" })
+    let plist = try #require(calls.first { $0.command.contains("cat > /tmp/io.vmlab.share.plist") })
+    #expect(plist.input == MacProvisioner.sharePlist(path: Self.awkwardPath))
+    let daemon = try #require(calls.first { $0.command.contains("launchctl bootstrap") })
+    #expect(daemon.command.hasPrefix("sudo -S -p '' "))
+    #expect(daemon.command.contains(MacProvisioner.shareDaemonPath))
+    #expect(daemon.input == "sudo-s3cret\n")
+    // Every sudo step takes the given password, not the image's.
+    #expect(
+      calls.filter { $0.command.hasPrefix("sudo") }.allSatisfy { $0.input == "sudo-s3cret\n" })
+    #expect(!calls.contains { $0.command.contains("sudo-s3cret") })
+    let report = try String(contentsOf: ProvisionReport.url(in: dir), encoding: .utf8)
+    #expect(!report.contains("sudo-s3cret"))
+    #expect(MacProvisioner.isProvisioned(dir))
+  }
+
+  /// The plist parses, and its ProgramArguments carry the path verbatim (an argument, never shell
+  /// text); the share_mount command quotes it as one shell word.
+  @Test func sharePathsAreQuotedNotInterpreted() throws {
+    let data = Data(MacProvisioner.sharePlist(path: Self.awkwardPath).utf8)
+    let plist = try #require(
+      try PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any])
+    #expect(plist["Label"] as? String == "io.vmlab.share")
+    #expect(plist["RunAtLoad"] as? Bool == true)
+    let arguments = try #require(plist["ProgramArguments"] as? [String])
+    #expect(
+      arguments == ["/bin/sh", "-c", MacProvisioner.shareScript, Self.awkwardPath, "vmlab-share0"])
+    for path in [Self.awkwardPath, "/a b/'c'", "/$(touch /tmp/x)`id`"] {
+      let echoed = ProcessRunner().run(
+        "/bin/sh", ["-c", "printf %s " + MacProvisioner.shellQuote(path)])
+      #expect(echoed?.output == path)
+    }
+    var provisioner = Self.provisioner(TartTests.temporary(), guest: FakeGuest(), vnc: nil)
+    provisioner.sharePath = Self.awkwardPath
+    let mount = try #require(provisioner.steps().first { $0.name == "share_mount" })
+    #expect(mount.command.hasSuffix(" " + MacProvisioner.shellQuote(Self.awkwardPath)))
+    // Both scripts parse, and share_mount finds a mount `mount` lists (here the host's own /).
+    #expect(ProcessRunner().run("/bin/sh", ["-n", "-c", MacProvisioner.shareScript])?.status == 0)
+    provisioner.sharePath = "/"
+    let root = try #require(provisioner.steps().first { $0.name == "share_mount" })
+    #expect(ProcessRunner().run("/bin/sh", ["-c", root.command])?.status == 0)
+    // The automount path, or no share, needs no steps.
+    provisioner.sharePath = nil
+    #expect(!provisioner.steps().contains { $0.name.hasPrefix("share_") })
+  }
+
+  /// No mount_virtiofs in the guest: provisioning fails at share_check with a reason saying so.
+  @Test func missingMountVirtiofsFailsAtShareCheck() async throws {
+    let dir = try Self.directory()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    var provisioner = Self.provisioner(
+      dir, guest: FakeGuest { $0.contains("mount_virtiofs") ? 1 : 0 }, vnc: nil)
+    provisioner.sharePath = "/Users/admin/hostshare"
+    let error = await #expect(throws: VMLabError.self) {
+      try await provisioner.provision(ip: "192.168.64.20")
+    }
+    #expect(error?.data["step"] == .string("share_check"))
+    #expect(error?.message.contains("/sbin/mount_virtiofs") == true)
+    let report = try #require(ProvisionReport.load(from: dir))
+    #expect(report.failure?.name == "share_check")
+    #expect(report.steps.suffix(3).map(\.status) == [.skipped, .skipped, .skipped])
+  }
+
+  /// The given sudo password is redacted from a recorded command, like the VNC password.
+  @Test func recordedCommandsRedactTheSudoPassword() {
+    var provisioner = Self.provisioner(TartTests.temporary(), guest: FakeGuest(), vnc: "abcd2345")
+    provisioner.sudoPassword = "hunter22"
+    #expect(provisioner.recorded("x hunter22 abcd2345") == "x <sudo.pass> <vnc.pass>")
+  }
+}
