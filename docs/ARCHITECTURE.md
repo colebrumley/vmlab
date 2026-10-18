@@ -213,7 +213,14 @@ M3-and-macOS-15 inference is the fallback when the runner is absent).
 `VZCheckpoints` (R-608) is the vz-linux `CheckpointProvider`, handed out by
 `VZBackend.checkpoints(_:)` in any state and by `VZRunningVM.checkpoints`: each checkpoint is
 `<vm>/checkpoints/<id>/` with `clonefile(2)` clones of `disk.raw`, `efi-vars.bin` and
-`machine-id.bin`; `disk` mode needs the guest not running; `live` pauses, has the runner
+`machine-id.bin`, plus the VM's first-boot record (`provisioned`, `provision.json`, `provision.log`)
+and `provisioning.json` naming which of those it holds, so a restore brings back or removes them with
+the disk they describe (CX-26: a pre-provisioning disk has no vmlab key, so the next start must
+provision again; a checkpoint without the manifest leaves them alone). Files are replaced all or none
+(`VZCheckpoints.replace`: copies to temporaries, then `RENAME_SWAP`s); a restore first writes
+`<vm>/.vmlab-swap-journal.json` (`SwapJournal`: each swap with the destination's old and the copy's
+inode) and removes it when every swap is made, and `VZCheckpoints.recover` swaps back whatever a dead
+process left made, at the next checkpoint create or restore and at every VZ start (`startSuspended`); `disk` mode needs the guest not running; `live` pauses, has the runner
 `saveMachineStateTo` `state.vzvmsave`, clones the files and the `vz-config.json` the machine was
 built from, and resumes; a live restore ends the runner, clones the files back, starts a held
 (`--hold`) runner from that configuration, restores and resumes (unless the VM was paused), then
@@ -246,9 +253,12 @@ the lease, recorded as `runtime.ip` (and `runtime.serialSocket`); a lease that c
 the `tart` CLI (`Tart.locate`, `clone`, `setDiskSize`, `delete`, under `TART_HOME` or `~/.tart`) and reads a clone's
 `config.json` (`TartVMConfig`, Tart 2.x `version: 1`; any other layout is `engine_error`). Create runs
 `tart clone <ref> <vm-id>` from the ref the image record names (`PulledImage.tartVM`) and records the
-clone's directory as `VMRecord.tartClone` (a `resources.diskGB` larger than the clone's `disk.img` runs `tart set <vm-id> --disk-size`, decimal GB; smaller is `invalid_request`; the guest's APFS container is not grown); start builds `VZRunnerConfig.macOS` (boot `.macOS` with the
+clone's directory as `VMRecord.tartClone`, with `resources.cpus`/`memoryGB` raised to the clone's `cpuCountMin`/`memorySizeMin` where the request was below them so admission counts what the runner gives (CX-29) (a `resources.diskGB` larger than the clone's `disk.img` runs `tart set <vm-id> --disk-size`, decimal GB; smaller is `invalid_request`; the guest's APFS container is not grown); start builds `VZRunnerConfig.macOS` (boot `.macOS` with the
 base64 hardware model and machine identifier and `nvram.bin` as auxiliary storage, `disk.img`, the
-clone's MAC, no console, always a Mac display) and waits for that MAC's lease; stop, kill, pause and
+clone's MAC, no console, always a Mac display, and the record's share as a virtiofs device with the
+automount tag `com.apple.virtio-fs.automount` (`VZRunnerConfig.macOSAutomountTag`), which macOS
+mounts at `/Volumes/My Shared Files` by itself (`SharedDirSpec.macOSAutomountPath`, what
+`vm_inspect` reports; create refuses any other `share.guest`, CX-27)) and waits for that MAC's lease; stop, kill, pause and
 resume are `VZBackend`'s; destroy also `tart delete`s the clone. The runner turns boot `.macOS` into
 a `VZMacPlatformConfiguration`, `VZMacOSBootLoader` and `VZMacGraphicsDeviceConfiguration`.
 `PasswordSSH` runs `ssh` with the image password through an askpass script
@@ -266,7 +276,8 @@ Screen Sharing (`DisplayEndpoint.forVM`, `hostSide: false`, R-607). Steps
 go to `<vm>/provision.log` and, as `ProvisionStep`s (`ssh`, `authorized_keys`, `hostname`,
 `screen_sharing`, the VNC password shown as `<vnc.pass>`), to `<vm>/provision.json`, so `vm_inspect`
 surfaces a failed first boot as `provision_failed`; a failure is `provision_failed` naming the step,
-and the runner is killed. `SSHProvisioner` then appends the request's `runCommands` to that report
+and the runner is killed. A guest with network `none` (no NIC, so no lease) is not provisioned
+and not marked: start returns it running, reachable only by checkpoints and lifecycle (CX-28). `SSHProvisioner` then appends the request's `runCommands` to that report
 (`ProvisionReport.hasRequestedSteps` says whether they ran; nothing runs after a failed first boot). Password authentication stays enabled.
 
 **`VMLabRFB`** (library). A VNC (RFB) client: framebuffer updates to PNG, pointer and key events. It

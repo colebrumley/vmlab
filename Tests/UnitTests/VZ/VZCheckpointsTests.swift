@@ -142,6 +142,130 @@ import VMLabCore
     #expect(try leftovers(in: f.dir).isEmpty)
   }
 
+  /// CX-26: the first-boot record travels with the disk. A checkpoint taken before provisioning
+  /// restores a disk without the VM's key, so the `provisioned` marker and the report go too and
+  /// the next start provisions again; a later checkpoint brings them back.
+  @Test func provisioningFilesFollowTheDisk() async throws {
+    let f = try Fixture()
+    defer { f.cleanUp() }
+    let provider = f.provider()
+    try await provider.create(id: "cp-before", mode: .disk)
+    for name in VZCheckpoints.provisioningFiles {
+      try Data("\(name) v1".utf8).write(to: f.dir.appending(path: name))
+    }
+    try await provider.create(id: "cp-after", mode: .disk)
+    try await provider.restore(id: "cp-before", mode: .disk)
+    for name in VZCheckpoints.provisioningFiles {
+      #expect(!FileManager.default.fileExists(atPath: f.dir.appending(path: name).path))
+    }
+    #expect(!MacProvisioner.isProvisioned(f.dir))
+    try await provider.restore(id: "cp-after", mode: .disk)
+    for name in VZCheckpoints.provisioningFiles {
+      #expect(try f.file(name) == "\(name) v1")
+    }
+    #expect(try leftovers(in: f.dir).isEmpty)
+
+    // A checkpoint from before CX-26 (no manifest) leaves them as they are.
+    let old = VZCheckpoints.directory(of: "cp-before", vmDirectory: f.dir)
+    try FileManager.default.removeItem(at: old.appending(path: VZCheckpoints.provisioningManifest))
+    try await provider.restore(id: "cp-before", mode: .disk)
+    #expect(MacProvisioner.isProvisioned(f.dir))
+  }
+
+  /// A failed swap also puts back a provisioning file the restore had already removed.
+  @Test func aFailedRestoreKeepsTheProvisioningFiles() async throws {
+    let f = try Fixture()
+    defer { f.cleanUp() }
+    let report = ProvisionReport.url(in: f.dir)
+    try Data("report v1".utf8).write(to: report)
+    try await f.provider().create(id: "cp-hhhhhh", mode: .disk)
+    try Data("marker".utf8).write(to: MacProvisioner.marker(in: f.dir))
+    try Data("report v2".utf8).write(to: report)
+    let folder = VZCheckpoints.directory(of: "cp-hhhhhh", vmDirectory: f.dir)
+    let ops = VZCheckpoints.FileOps(
+      copy: VZCheckpoints.FileOps.system.copy,
+      exchange: { a, b in
+        // The marker's removal comes before the report's swap; fail the report's.
+        if b.lastPathComponent == "provision.json" { throw POSIXError(.EIO) }
+        try VZCheckpoints.FileOps.system.exchange(a, b)
+      })
+    #expect(throws: VMLabError.self) {
+      try VZCheckpoints.load(
+        f.provider().files, provisioning: f.provider().provisioning, from: folder, using: ops)
+    }
+    #expect(MacProvisioner.isProvisioned(f.dir))
+    #expect(try f.file("provision.json") == "report v2")
+    #expect(try f.file("disk.raw") == "disk.raw v1")
+    #expect(try leftovers(in: f.dir).isEmpty)
+  }
+
+  /// P3: a restore that dies between its swaps (here: every swap after the first fails, the
+  /// rollback's too, as if the process were gone) leaves a journal; the next checkpoint call or
+  /// start swaps the made ones back, so the VM never runs a checkpoint's disk with its current
+  /// EFI variables.
+  @Test func anInterruptedRestoreIsRolledBackFromItsJournal() async throws {
+    let f = try Fixture()
+    defer { f.cleanUp() }
+    try await f.provider().create(id: "cp-iiiiii", mode: .disk)
+    for name in VZCheckpoints.clonedFiles {
+      try Data("\(name) v2".utf8).write(to: f.dir.appending(path: name))
+    }
+    let failing = FailingOn(0)
+    let ops = VZCheckpoints.FileOps(
+      copy: VZCheckpoints.FileOps.system.copy,
+      exchange: { a, b in
+        failing.calls += 1
+        if failing.calls > 1 { throw POSIXError(.EIO) }
+        try VZCheckpoints.FileOps.system.exchange(a, b)
+      })
+    let folder = VZCheckpoints.directory(of: "cp-iiiiii", vmDirectory: f.dir)
+    let journal = VZCheckpoints.journal(vmDirectory: f.dir)
+    #expect(throws: VMLabError.self) {
+      try VZCheckpoints.load(f.provider().files, from: folder, using: ops, journal: journal)
+    }
+    // Half done: the checkpoint's disk beside the current EFI variables, and the journal.
+    #expect(try f.file("disk.raw") == "disk.raw v1")
+    #expect(try f.file("efi-vars.bin") == "efi-vars.bin v2")
+    #expect(FileManager.default.fileExists(atPath: journal.path))
+
+    // The next checkpoint call recovers before anything else.
+    try await f.provider().create(id: "cp-jjjjjj", mode: .disk)
+    for name in VZCheckpoints.clonedFiles {
+      #expect(try f.file(name) == "\(name) v2")
+    }
+    #expect(!FileManager.default.fileExists(atPath: journal.path))
+    #expect(try leftovers(in: f.dir).isEmpty)
+  }
+
+  /// A journal that outlives its restore (copied back here after the restore succeeded) finds
+  /// no previous file in its temporaries, so recovery changes nothing and removes it.
+  @Test func aStaleJournalChangesNothing() async throws {
+    let f = try Fixture()
+    defer { f.cleanUp() }
+    try await f.provider().create(id: "cp-kkkkkk", mode: .disk)
+    for name in VZCheckpoints.clonedFiles {
+      try Data("\(name) v2".utf8).write(to: f.dir.appending(path: name))
+    }
+    let journal = VZCheckpoints.journal(vmDirectory: f.dir)
+    // Keep a copy of the journal as it was before the swaps.
+    let saved = f.home.appending(path: "journal-copy.json")
+    let ops = VZCheckpoints.FileOps(
+      copy: VZCheckpoints.FileOps.system.copy,
+      exchange: { a, b in
+        if !FileManager.default.fileExists(atPath: saved.path) {
+          try FileManager.default.copyItem(at: journal, to: saved)
+        }
+        try VZCheckpoints.FileOps.system.exchange(a, b)
+      })
+    let folder = VZCheckpoints.directory(of: "cp-kkkkkk", vmDirectory: f.dir)
+    try VZCheckpoints.load(f.provider().files, from: folder, using: ops, journal: journal)
+    #expect(try f.file("disk.raw") == "disk.raw v1")
+    try FileManager.default.copyItem(at: saved, to: journal)
+    try VZCheckpoints.recover(journal: journal)
+    #expect(try f.file("disk.raw") == "disk.raw v1")
+    #expect(!FileManager.default.fileExists(atPath: journal.path))
+  }
+
   func leftovers(in dir: URL) throws -> [String] {
     try FileManager.default.contentsOfDirectory(atPath: dir.path).filter { $0.contains(".vmlab-") }
   }

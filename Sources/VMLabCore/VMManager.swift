@@ -112,7 +112,8 @@ public actor VMManager {
       throw error
     }
     await log(stored.id, "created (\(plan.profile.rawValue))")
-    return stored
+    // The backend may have recorded more (a Tart clone, CX-29's effective resources).
+    return (try? store.load(id: stored.id)) ?? stored
   }
 
   // MARK: Lifecycle

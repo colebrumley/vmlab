@@ -2,13 +2,19 @@ import Foundation
 import VMLabCore
 
 extension VZRunnerConfig {
+  /// The virtiofs tag macOS guests mount by themselves at `/Volumes/My Shared Files`
+  /// (`VZVirtioFileSystemDeviceConfiguration.macOSGuestAutomountTag`).
+  public static let macOSAutomountTag = "com.apple.virtio-fs.automount"
+
   /// The macOS machine for `record` from its Tart clone: the record's resources (Appendix G macOS
   /// defaults, never below the image's `cpuCountMin`/`memorySizeMin`), `VZMacOSBootLoader` on a
   /// Mac platform from `config.json` and `nvram.bin`, `disk.img`, one NAT NIC with the clone's
   /// MAC (so Tart's own lease lookup agrees) unless the network is `none`, no console (VZ gives
-  /// macOS guests none), the balloon, and always a Mac display: Screen Sharing needs one.
+  /// macOS guests none), the balloon, always a Mac display (Screen Sharing needs one), and with
+  /// `vmDirectory` the record's share over virtiofs under `macOSAutomountTag`.
   public static func macOS(
-    record: VMRecord, clone: TartVMFiles, config: TartVMConfig, segmentAttachSocket: String? = nil
+    record: VMRecord, clone: TartVMFiles, config: TartVMConfig, segmentAttachSocket: String? = nil,
+    vmDirectory: URL? = nil
   ) -> VZRunnerConfig {
     var network: [Network] =
       record.network.mode == .disabled
@@ -20,6 +26,12 @@ extension VZRunnerConfig {
     let resources = ResourceLimits.resolve(record.resources, for: .macos)
     let cpus = max(resources.cpus ?? 4, config.cpuCountMin)
     let memory = max(UInt64(resources.memoryGB ?? 8) << 30, config.memorySizeMin)
+    // CX-27: the record's share (given the VM directory its default lives in), automounted.
+    let shares = vmDirectory.flatMap { dir in
+      SharedDirSpec.of(record).map {
+        [DirectoryShare(tag: macOSAutomountTag, path: $0.hostDirectory(vmDirectory: dir).path)]
+      }
+    }
     return VZRunnerConfig(
       cpus: cpus,
       memoryBytes: memory,
@@ -32,14 +44,16 @@ extension VZRunnerConfig {
       memoryBalloon: true,
       graphics: Graphics(
         width: config.display?.width ?? 1024, height: config.display?.height ?? 768,
-        pixelsPerInch: 72))
+        pixelsPerInch: 72),
+      directoryShares: shares ?? [])
   }
 }
 
 /// The `vz-macos` backend: create `tart clone`s the pulled image (an APFS clone, seconds) and
 /// records the clone's directory in `vm.json`; start runs the clone's files in our own `vmlab-vz`
 /// runner (`VZRunnerConfig.macOS`), so pause, stop and the control socket are the same as
-/// `vz-linux`; the first start provisions the guest over SSH (R-606, `MacProvisioner`); destroy
+/// `vz-linux`; the first start provisions the guest over SSH (R-606, `MacProvisioner`), unless
+/// the network is `none` (CX-28: no address, so no provisioning); destroy
 /// `tart delete`s the clone.
 public struct VZMacBackend: Backend {
   public let profile: Profile = .vzMacOS
@@ -99,10 +113,21 @@ public struct VZMacBackend: Backend {
         code: .imageNotFound, message: "Image \(name) is not a pulled Tart image",
         hint: "Run vmlab images pull macos-base.", data: ["image": .string(name)])
     }
+    // CX-27: macOS mounts the share at one place only.
+    if let share = SharedDirSpec.of(record) {
+      if let guest = share.guest, guest != SharedDirSpec.macOSAutomountPath {
+        throw VMLabError.invalidRequest(
+          field: "share.guest",
+          reason:
+            "a macOS guest mounts the share at \(SharedDirSpec.macOSAutomountPath), not \(guest)",
+          hint: "Leave share.guest out (or set it to \(SharedDirSpec.macOSAutomountPath)).")
+      }
+      try share.checkHostDirectory(vmDirectory: store.directory(of: record.id))
+    }
     let tart = try tart()
     let clone = try tart.clone(pulled.tartVM ?? pulled.source, to: record.id)
     do throws(VMLabError) {
-      _ = try TartVMConfig.read(from: clone.directory)
+      let tartConfig = try TartVMConfig.read(from: clone.directory)
       for file in [clone.disk, clone.nvram]
       where !FileManager.default.fileExists(atPath: file.path) {
         throw TartVMConfig.layoutError(file, "missing from the clone")
@@ -115,7 +140,13 @@ public struct VZMacBackend: Backend {
         try VZDisk.refuseShrink(current: current, toBytes: target, diskGB: diskGB, image: name)
         if current < target { try tart.setDiskSize(record.id, gigabytes: diskGB) }
       }
-      try store.update(id: record.id) { $0.tartClone = clone.directory.path }
+      // CX-29: the runner never goes below the image's minimums; vm.json says what the guest
+      // gets, so start admission and the inventory count it.
+      let resources = Self.effectiveResources(record.resources, config: tartConfig)
+      try store.update(id: record.id) {
+        $0.tartClone = clone.directory.path
+        $0.resources = resources
+      }
       let dir = store.directory(of: record.id)
       // VMManager makes the key first (R-400); this keeps a direct create complete.
       try SSHKeys.generate(in: dir, comment: "vmlab-\(record.id)", runner: commands)
@@ -124,6 +155,20 @@ public struct VZMacBackend: Backend {
       try? tart.delete(record.id)
       throw error
     }
+  }
+
+  /// `resources` with CPUs and memory raised to the image's `cpuCountMin` and `memorySizeMin`
+  /// (memory rounded up to whole GiB) where the request, or its Appendix G default, is below
+  /// them; fields already at or above the minimums are left as they are.
+  static func effectiveResources(_ resources: ResourceSpec, config: TartVMConfig) -> ResourceSpec {
+    let resolved = ResourceLimits.resolve(resources, for: .macos)
+    var effective = resources
+    if (resolved.cpus ?? 4) < config.cpuCountMin { effective.cpus = config.cpuCountMin }
+    let gib: UInt64 = 1 << 30
+    let minimumGB = Int(
+      clamping: config.memorySizeMin / gib + (config.memorySizeMin % gib == 0 ? 0 : 1))
+    if (resolved.memoryGB ?? 8) < minimumGB { effective.memoryGB = minimumGB }
+    return effective
   }
 
   /// Launches the runner on the clone's files, then waits up to `leaseTimeout` for the lease of
@@ -139,18 +184,19 @@ public struct VZMacBackend: Backend {
     if let held = try await runner.startSuspended(record) { return held }
     let clone = TartVMFiles(directory: URL(filePath: path))
     let tartConfig = try TartVMConfig.read(from: clone.directory)
+    let dir = store.directory(of: record.id)
+    // VZ refuses to start with a missing shared directory; say which field instead.
+    try SharedDirSpec.of(record)?.checkHostDirectory(vmDirectory: dir)
     let config = VZRunnerConfig.macOS(
       record: record, clone: clone, config: tartConfig,
       segmentAttachSocket: record.segment.map {
         SegmentStore(home: store.home).attachSocket(of: $0.segment).path
-      })
-    let handle = try await launcher.launch(
-      vmDirectory: store.directory(of: record.id), config: config)
+      }, vmDirectory: dir)
+    let handle = try await launcher.launch(vmDirectory: dir, config: config)
     var runtime = handle.runtime
     if case .nat(let mac?) = config.network.first {
       runtime.ip = await DHCPLeases.waitForIP(mac: mac, path: leasePath, timeout: leaseTimeout)
     }
-    let dir = store.directory(of: record.id)
     if !MacProvisioner.isProvisioned(dir) {
       do throws(VMLabError) {
         try await provision(record, ip: runtime.ip)
@@ -170,8 +216,11 @@ public struct VZMacBackend: Backend {
     DisplayEndpoint.isProvisioned(record)
   }
 
-  /// R-606: the first boot's SSH provisioning (`MacProvisioner`).
+  /// R-606: the first boot's SSH provisioning (`MacProvisioner`). CX-28: a guest with network
+  /// `none` has no NIC and so no address to provision over; that is expected, not a failure, so
+  /// it is skipped and not marked done (no vmlab key, hostname or Screen Sharing in the guest).
   func provision(_ record: VMRecord, ip: String?) async throws(VMLabError) {
+    guard record.network.mode != .disabled else { return }
     let dir = store.directory(of: record.id)
     guard let ip else {
       throw VMLabError(

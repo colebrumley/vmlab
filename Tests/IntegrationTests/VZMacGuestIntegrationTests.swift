@@ -129,6 +129,40 @@ import VMLabVZ
     await guest.teardown()
   }
 
+  /// CX-27: `shared_dir` on a macOS guest: a file in the VM's `shared/` directory on the host is
+  /// readable in the guest at /Volumes/My Shared Files (the automount tag), and one written there
+  /// shows up on the host.
+  @Test(.enabled(if: ready && hostHasRoom()), .timeLimit(.minutes(12)))
+  func sharedDirIsAutomountedInTheGuest() async throws {
+    let guest = try await Self.makeGuest(features: [.execSSH, .sharedDir], suffix: "s")
+    do {
+      let shared = guest.directory.appending(path: "shared", directoryHint: .isDirectory)
+      try FileManager.default.createDirectory(at: shared, withIntermediateDirectories: true)
+      try Data("from the host\n".utf8).write(to: shared.appending(path: "hello.txt"))
+      let started = try #require(
+        try await guest.manager.performAdmitted(.start, on: guest.record.id))
+      let ip = try #require(started.runtime?.ip)
+      let mount = SharedDirSpec.macOSAutomountPath
+      var output: CommandOutput? = nil
+      let clock = ContinuousClock()
+      let deadline = clock.now.advanced(by: .seconds(120))
+      while clock.now < deadline {
+        output = Self.keySSH(guest, host: ip, command: "cat '\(mount)/hello.txt'")
+        if output?.status == 0 { break }
+        try await Task.sleep(for: .seconds(3))
+      }
+      #expect(output?.output.contains("from the host") == true, "\(output?.output ?? "nothing")")
+      let wrote = Self.keySSH(guest, host: ip, command: "echo from the guest > '\(mount)/back.txt'")
+      #expect(wrote?.status == 0, "\(wrote?.output ?? "nothing")")
+      let back = try? String(contentsOf: shared.appending(path: "back.txt"), encoding: .utf8)
+      #expect(back?.contains("from the guest") == true)
+    } catch {
+      await guest.teardown()
+      throw error
+    }
+    await guest.teardown()
+  }
+
   static func point(_ x: Int, _ y: Int) -> JSONValue {
     .array([.number(Double(x)), .number(Double(y))])
   }

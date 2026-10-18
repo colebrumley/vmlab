@@ -283,6 +283,15 @@ public struct SharedDirSpec: Codable, Sendable, Hashable {
 
   public var guestPath: String { guest ?? Self.defaultGuestPath }
 
+  /// Where a macOS guest mounts the share by itself (CX-27: the automount virtiofs tag); a
+  /// `vz-macos` share is always there.
+  public static let macOSAutomountPath = "/Volumes/My Shared Files"
+
+  /// The guest path the share is mounted at under `profile`.
+  public func guestPath(for profile: Profile) -> String {
+    profile == .vzMacOS ? Self.macOSAutomountPath : guestPath
+  }
+
   /// The host directory of a VM whose directory is `vmDirectory`.
   public func hostDirectory(vmDirectory: URL) -> URL {
     host.map { URL(filePath: $0).standardizedFileURL }

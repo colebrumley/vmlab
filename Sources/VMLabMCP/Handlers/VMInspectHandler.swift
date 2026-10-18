@@ -119,7 +119,7 @@ struct VMInspectHandler: ToolHandler {
     if let share = SharedDirSpec.of(record) {
       endpoints["share"] = .object([
         "host": .string(share.hostDirectory(vmDirectory: store.directory(of: record.id)).path),
-        "guest": .string(share.guestPath),
+        "guest": .string(share.guestPath(for: record.profile)),
       ])
     }
     return endpoints
