@@ -163,41 +163,6 @@ public struct PortForward: Codable, Sendable, Hashable {
   }
 }
 
-/// A host directory shared into the guest (`shared_dir`; virtiofs on VZ, R-603, 9p on QEMU,
-/// R-404). The share at index N has the device tag `share<N>` and is mounted at `guest`, default
-/// `/mnt/share<N>`.
-public struct ShareSpec: Codable, Sendable, Hashable {
-  /// Absolute host path of an existing directory.
-  public var host: String
-  /// Absolute guest path of the mount point; nil is `/mnt/share<N>`.
-  public var guest: String?
-  public var readOnly: Bool
-
-  /// The most shares one VM takes.
-  public static let maxCount = 8
-
-  public init(host: String, guest: String? = nil, readOnly: Bool = false) {
-    self.host = host
-    self.guest = guest
-    self.readOnly = readOnly
-  }
-
-  enum CodingKeys: String, CodingKey { case host, guest, readOnly }
-
-  public init(from decoder: any Decoder) throws {
-    let c = try decoder.container(keyedBy: CodingKeys.self)
-    host = try c.decode(String.self, forKey: .host)
-    guest = try c.decodeIfPresent(String.self, forKey: .guest)
-    readOnly = try c.decodeIfPresent(Bool.self, forKey: .readOnly) ?? false
-  }
-
-  /// The device tag of the share at `index`.
-  public static func tag(_ index: Int) -> String { "share\(index)" }
-
-  /// Where the share at `index` is mounted.
-  public func guestPath(index: Int) -> String { guest ?? "/mnt/share\(index)" }
-}
-
 public struct NetworkSpec: Codable, Sendable, Hashable {
   public enum Mode: String, CaseIterable, Codable, Sendable {
     case nat
@@ -298,6 +263,81 @@ public struct BootSpec: Codable, Sendable, Hashable {
   }
 }
 
+/// The host directory a request shares into the guest (R-404, `share`; implies `shared_dir`),
+/// mounted read-write at `guest` (default `/mnt/host`): 9p under QEMU, virtiofs under VZ (R-603).
+/// A request that requires `shared_dir` without `share` gets the VM's own `<vm>/shared/`.
+public struct SharedDirSpec: Codable, Sendable, Hashable {
+  public static let defaultGuestPath = "/mnt/host"
+  /// The device tag both engines use.
+  public static let tag = "share0"
+
+  /// An absolute host path of an existing directory; nil is `<vm>/shared/`.
+  public var host: String?
+  /// An absolute guest path (no whitespace: it is an fstab field).
+  public var guest: String?
+
+  public init(host: String? = nil, guest: String? = nil) {
+    self.host = host
+    self.guest = guest
+  }
+
+  public var guestPath: String { guest ?? Self.defaultGuestPath }
+
+  /// The host directory of a VM whose directory is `vmDirectory`.
+  public func hostDirectory(vmDirectory: URL) -> URL {
+    host.map { URL(filePath: $0).standardizedFileURL }
+      ?? vmDirectory.appending(path: "shared", directoryHint: .isDirectory)
+  }
+
+  /// The share `record` mounts, or nil: the request's `share`, or the default one when the
+  /// request asked for `shared_dir` (granting it alone, as every profile does, mounts nothing).
+  public static func of(_ record: VMRecord) -> SharedDirSpec? {
+    if let share = record.share { return share }
+    guard record.plan?.requests(.sharedDir) == true, record.features.contains(.sharedDir) else {
+      return nil
+    }
+    return SharedDirSpec()
+  }
+
+  /// Throws `invalid_request` for a relative path or a guest path an fstab line cannot hold.
+  public func validate() throws(VMLabError) {
+    if let host {
+      guard host.hasPrefix("/"), !host.contains("\n"), !host.contains("\0") else {
+        throw .invalidRequest(
+          field: "share.host", reason: "\(host) is not an absolute path",
+          hint: "Give the absolute path of a host directory, such as /Users/me/project.")
+      }
+    }
+    if let guest {
+      let bad = guest.unicodeScalars.contains {
+        $0.properties.isWhitespace || $0.value < 0x20 || $0 == "\\" || $0 == "\""
+      }
+      guard guest.hasPrefix("/"), guest != "/", !bad else {
+        throw .invalidRequest(
+          field: "share.guest",
+          reason: "\(guest) is not an absolute guest path without spaces, quotes or backslashes",
+          hint: "Use a path such as /mnt/host.")
+      }
+    }
+  }
+
+  /// Throws `invalid_request` unless the host directory exists (checked at create and start).
+  public func checkHostDirectory(vmDirectory: URL) throws(VMLabError) {
+    let url = hostDirectory(vmDirectory: vmDirectory)
+    if host == nil {
+      try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+    }
+    var isDirectory: ObjCBool = false
+    guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory),
+      isDirectory.boolValue
+    else {
+      throw .invalidRequest(
+        field: "share.host", reason: "\(url.path) is not an existing directory",
+        hint: "Create the directory first, or give the path of one that exists.")
+    }
+  }
+}
+
 /// Engine-specific additions to a request (R-306). `qemuArgs` are appended verbatim after
 /// vmlab's own QEMU arguments; naming any implies `custom_devices`. Options vmlab owns (its
 /// control sockets and process handling) are refused with `invalid_request`.
@@ -356,15 +396,15 @@ public struct Requirements: Codable, Sendable, Hashable {
   public var image: String?
   public var boot: BootSpec?
   public var extra: ExtraSpec?
-  /// Host directories to share into the guest (implies `shared_dir`).
-  public var shares: [ShareSpec]
+  /// A host directory to mount in the guest (R-404); implies `shared_dir`.
+  public var share: SharedDirSpec?
 
   /// Builds a request and checks it as decoding would.
   public init(
     guest: GuestSpec, require: [Feature] = [], prefer: [Feature] = [],
     resources: ResourceSpec = ResourceSpec(), network: NetworkSpec = NetworkSpec(),
     image: String? = nil, boot: BootSpec? = nil, extra: ExtraSpec? = nil,
-    shares: [ShareSpec] = []
+    share: SharedDirSpec? = nil
   ) throws(VMLabError) {
     self.guest = guest
     self.require = require
@@ -374,12 +414,12 @@ public struct Requirements: Codable, Sendable, Hashable {
     self.image = image
     self.boot = boot
     self.extra = extra
-    self.shares = shares
+    self.share = share
     try validate()
   }
 
   enum CodingKeys: String, CodingKey {
-    case guest, require, prefer, resources, network, image, boot, extra, shares
+    case guest, require, prefer, resources, network, image, boot, extra, share
   }
 
   public init(from decoder: any Decoder) throws {
@@ -392,7 +432,7 @@ public struct Requirements: Codable, Sendable, Hashable {
     image = try c.decodeIfPresent(String.self, forKey: .image)
     boot = try c.decodeIfPresent(BootSpec.self, forKey: .boot)
     extra = try c.decodeIfPresent(ExtraSpec.self, forKey: .extra)
-    shares = try c.decodeIfPresent([ShareSpec].self, forKey: .shares) ?? []
+    share = try c.decodeIfPresent(SharedDirSpec.self, forKey: .share)
     try validate()
   }
 
@@ -484,7 +524,7 @@ public struct Requirements: Codable, Sendable, Hashable {
     if let extra, !extra.qemuArgs.isEmpty {
       named.append((.customDevices, "extra.qemuArgs"))
     }
-    if !shares.isEmpty { named.append((.sharedDir, "shares")) }
+    if share != nil { named.append((.sharedDir, "share")) }
     return named
   }
 
@@ -533,35 +573,8 @@ public struct Requirements: Codable, Sendable, Hashable {
       }
     }
     try extra?.validate()
-    try validateShares()
+    try share?.validate()
     try checkContradictions()
-  }
-
-  private func validateShares() throws(VMLabError) {
-    guard shares.count <= ShareSpec.maxCount else {
-      throw .invalidRequest(
-        field: "shares", reason: "at most \(ShareSpec.maxCount) shares, got \(shares.count)",
-        hint: "Share a common parent directory instead.")
-    }
-    var mounts = Set<String>()
-    for (index, share) in shares.enumerated() {
-      guard share.host.hasPrefix("/") else {
-        throw .invalidRequest(
-          field: "shares[\(index)].host", reason: "\(share.host) is not an absolute path",
-          hint: "Give the host directory as an absolute path.")
-      }
-      let guestPath = share.guestPath(index: index)
-      guard guestPath.hasPrefix("/"), guestPath != "/" else {
-        throw .invalidRequest(
-          field: "shares[\(index)].guest", reason: "\(guestPath) is not an absolute path below /",
-          hint: "Give the guest mount point as an absolute path, such as /mnt/data.")
-      }
-      guard mounts.insert(guestPath).inserted else {
-        throw .invalidRequest(
-          field: "shares[\(index)].guest", reason: "two shares mount at \(guestPath)",
-          hint: "Give each share its own guest path.")
-      }
-    }
   }
 
   private func checkContradictions() throws(VMLabError) {

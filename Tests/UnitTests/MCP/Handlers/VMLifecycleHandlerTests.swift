@@ -53,7 +53,7 @@ import VMLabCore
     #expect(f.backend.operations == [.create, .start])
   }
 
-  @Test func unknownVMAndUnbuiltActionsAreRefused() async throws {
+  @Test func unknownVMAndCheckpointStopAreRefused() async throws {
     let f = try Fixture()
     defer { f.cleanUp() }
     let missing = await #expect(throws: VMLabError.self) {
@@ -61,8 +61,6 @@ import VMLabCore
     }
     #expect(missing?.code == .vmNotFound)
     _ = try await f.create(["autostart": .bool(false)])
-    let clone = await #expect(throws: VMLabError.self) { try await Self.act("clone", in: f) }
-    #expect(clone?.code == .invalidRequest)
     let checkpoint = await #expect(throws: VMLabError.self) {
       try await Self.act("checkpoint_stop", in: f)
     }
@@ -98,5 +96,57 @@ import VMLabCore
     #expect(!f.backend.operations.contains(.start))
     #expect(try f.context.store.find("web").state == .created)
     await gate.release(held)
+  }
+
+  // MARK: clone (R-803)
+
+  static func lifecycle(_ arguments: [String: JSONValue], in f: Fixture) async throws(VMLabError)
+    -> ToolResult
+  {
+    try await ToolHandlers.call("vm_lifecycle", arguments: .object(arguments), context: f.context)
+  }
+
+  @Test func cloneMakesANewCreatedVM() async throws {
+    let f = try Fixture()
+    defer { f.cleanUp() }
+    _ = try await f.create(["autostart": .bool(false)])
+    _ = try await ToolHandlers.call(
+      "vm_checkpoint",
+      arguments: .object([
+        "vm": .string("web"), "action": .string("create"), "name": .string("A"),
+      ]), context: f.context)
+    let result = try await Self.lifecycle(
+      [
+        "vm": .string("web"), "action": .string("clone"), "name": .string("web-2"),
+        "from": .string("A"),
+      ], in: f)
+    #expect(result.value["vm"]?["name"] == .string("web-2"))
+    #expect(result.value["source"]?["name"] == .string("web"))
+    #expect(result.value["state"] == .string("created"))
+    #expect(result.value["from"] == .string("A"))
+    #expect(result.value["plan"]?["profile"] == .string("qemu-hvf"))
+    #expect(result.value["backingChain"]?.arrayValue?.count == 1)
+    let clone = try f.context.store.find("web-2")
+    #expect(clone.clonedFrom?.checkpointName == "A")
+
+    // Without a name the clone is named by its id.
+    let unnamed = try await Self.lifecycle(
+      ["vm": .string("web"), "action": .string("clone")], in: f)
+    #expect(unnamed.value["vm"]?["name"] == unnamed.value["vm"]?["id"])
+  }
+
+  /// R-805: destroy refuses while a clone's disk reads this one, unless force.
+  @Test func destroyNeedsForceWhileAClonesDiskDependsOnIt() async throws {
+    let f = try Fixture()
+    defer { f.cleanUp() }
+    _ = try await f.create(["autostart": .bool(false)])
+    _ = try await Self.lifecycle(
+      ["vm": .string("web"), "action": .string("clone"), "name": .string("copy")], in: f)
+    let refused = await #expect(throws: VMLabError.self) { try await Self.act("destroy", in: f) }
+    #expect(refused?.code == .invalidRequest)
+    let forced = try await Self.lifecycle(
+      ["vm": .string("web"), "action": .string("destroy"), "force": .bool(true)], in: f)
+    #expect(forced.value["state"] == .string("destroyed"))
+    #expect(forced.warnings.contains { $0.hasPrefix("destroyed with force") })
   }
 }

@@ -46,7 +46,7 @@ import VMLabVZ
     let created = try await manager.create(
       VMRecord(
         id: "", profile: .vzLinux, guest: plan.guest, features: [], image: "debian-13-arm64",
-        shares: [ShareSpec(host: shared.path)]),
+        share: SharedDirSpec(host: shared.path)),
       plan: plan)
     let started = try #require(try await manager.perform(.start, on: created.id))
     defer {
@@ -55,9 +55,9 @@ import VMLabVZ
     let key = store.directory(of: created.id).appending(path: "id_ed25519")
     let ip = try #require(started.runtime?.ip, "no DHCP lease for the guest's MAC")
 
-    // cloud-init mounts share0 at /mnt/share0.
+    // cloud-init mounts share0 at /mnt/host (SharedDirSpec.defaultGuestPath).
     let before = await VZGuestSSH.poll(
-      key: key, host: ip, command: "cat /mnt/share0/before.txt", within: .seconds(300))
+      key: key, host: ip, command: "cat /mnt/host/before.txt", within: .seconds(300))
     #expect(before?.output == "written before boot\n", "share not mounted: \(before?.output ?? "")")
 
     try "written after boot\n".write(
@@ -65,14 +65,14 @@ import VMLabVZ
     let clock = ContinuousClock()
     let written = clock.now
     let after = await VZGuestSSH.poll(
-      key: key, host: ip, command: "cat /mnt/share0/after.txt", within: .seconds(10))
+      key: key, host: ip, command: "cat /mnt/host/after.txt", within: .seconds(10))
     #expect(after?.output == "written after boot\n")
     print("host file seen in the guest after \(clock.now - written) (ssh round trips included)")
 
     // runcmd registers Rosetta with binfmt_misc after the package install.
     let hello = await VZGuestSSH.poll(
       key: key, host: ip,
-      command: "test -e /proc/sys/fs/binfmt_misc/rosetta && /mnt/share0/hello",
+      command: "test -e /proc/sys/fs/binfmt_misc/rosetta && /mnt/host/hello",
       within: .seconds(420))
     #expect(hello?.status == 0, "hello failed: \(hello?.output ?? "nothing")")
     #expect(hello?.output == "Hello from x86_64 via Rosetta\n")

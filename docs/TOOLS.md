@@ -276,7 +276,7 @@ Copy files between the host and the guest over SSH. push copies the host path lo
 | `vm` | string | yes | The VM's id (vm-xxxxxx) or name, as vm_list or vm_create returned it. |
 | `action` | `push` \| `pull` | yes | Direction of the copy. |
 | `remote` | string | yes | Path in the guest. |
-| `local` | string |  | Path on the host (push: required; pull: optional). |
+| `local` | string |  | Absolute path on the host (push: required; pull: optional). |
 
 **Result**
 
@@ -344,7 +344,7 @@ The guest's serial console, captured from the first byte of boot. read returns t
 
 ## `vm_debug`
 
-Debug the guest CPU through its GDB stub. info gives the endpoint a human can attach to and whether vmlab is attached; halt stops the CPU; continue resumes; step executes one instruction; wait blocks until the CPU stops (breakpoint, watchpoint) or timeoutSeconds; breakpoint_add sets one at address (kind software, hardware, or a watch_* watchpoint over size bytes); breakpoint_remove clears it; breakpoints lists them; registers reads them; read_memory returns size bytes at address as hex (with ASCII up to 256 bytes); write_memory writes hex data. Addresses are numbers in 0x hex; no symbols. Needs gdb; require halt_at_start to debug from the first instruction.
+Debug the guest CPU through its GDB stub. info gives the endpoint a human can attach to and whether vmlab is attached; halt stops the CPU; continue resumes; step executes one instruction; wait blocks until the CPU stops (breakpoint, watchpoint) or timeoutSeconds; breakpoint_add sets one at address (kind software, hardware, or a watch_* watchpoint over size bytes); breakpoint_remove clears it; breakpoints lists them; registers reads them; read_memory returns size bytes at address as hex (with ASCII up to 256 bytes); write_memory writes hex data. Addresses are numbers in 0x hex; no symbols. Needs gdb; require halt_at_start to debug from the first instruction. The first action that needs the stub attaches, and QEMU stops the guest when a debugger attaches; continue resumes it. Breakpoints set on a running CPU leave it running.
 
 **Errors:** `vm_not_found`, `wrong_state`, `capability_missing`, `invalid_request`, `debug_busy`, `timeout`, `engine_error`
 
@@ -358,14 +358,16 @@ Debug the guest CPU through its GDB stub. info gives the endpoint a human can at
 | `data` | string |  | write_memory: the bytes as hex, e.g. 1f2003d5. |
 | `kind` | `software` \| `hardware` \| `watch_write` \| `watch_read` \| `watch_access`, default `software` |  | breakpoint_add, breakpoint_remove: the kind of stop point. |
 | `size` | integer, ≥ 1 |  | read_memory: bytes to read; watchpoints: bytes to watch. |
-| `thread` | string |  | The thread (CPU) to act on, as registers or info names it. |
+| `symbolFile` | string |  | A host path to the guest's symbol file (vmlinux, a kernel .debug), recorded for the info output so a human can load it; vmlab resolves no symbols. |
+| `thread` | string |  | step, continue, registers, read_memory, write_memory: the thread (CPU) to act on, as a stop reports it (e.g. p01.02). |
 | `timeoutSeconds` | integer, ≥ 1, default `30` |  | wait: the longest to block. |
 
 **Result**
 
 ```
 { stopped, reason?, pc?, registers?: { <name>: hex }, bytes?: hex, ascii?,
-  breakpoints?: [ { address, kind, size? } ], endpoint, attached }
+  breakpoints?: [ { address, kind, size? } ], endpoint, attached,
+  info: connect: { gdb, lldb }, symbolFile, note }
 ```
 
 ## `vm_introspect`
@@ -435,7 +437,10 @@ Named snapshots of a VM, kept as a tree. create saves one (mode live includes me
 ```
 create: { checkpoint: { id, name, parent?, mode, createdAt, state, manifestPath?, note? } }
 list: { current?, nodes: [ checkpoint ] }; restore: { checkpoint, state }; delete: { deleted }
-diff: { files, packages, services, defaults, users, loginItems, path }
+diff: { from, to, path, files, packages, services, defaults, users, loginItems, profiles },
+each section { added, removed, changed, truncated, entries (at most 500) }: files
+{ path, change, kind, changes: { size|mode|sha256|kind|mtime: { old, new } } }, defaults
+{ domain, key, change, old, new }, the others { name, change, old, new }
 ```
 
 ## `vm_manifest`
@@ -455,7 +460,7 @@ Take a manifest of the running guest over SSH: files under paths (size, mode, mt
 **Result**
 
 ```
-{ id, path, counts: { files, packages, services, defaults, users, loginItems } }
+{ id, path, profile, counts: { files, packages, services, defaults, users, loginItems, profiles } }
 ```
 
 ## `vm_logs`
@@ -562,7 +567,6 @@ The `requirements` object of `vm_plan`, `vm_create` and `fleet` (`Requirements` 
 | `resources.cpus` | integer, ≥ 1 |  | Virtual CPUs. |
 | `resources.diskGB` | integer, ≥ 1 |  | Disk size in GB. |
 | `resources.memoryGB` | integer, ≥ 1 |  | Guest memory in GB. |
-| `shares` | array of object |  | Host directories mounted in the guest (implies shared_dir): virtiofs under VZ, 9p under QEMU, tagged share0, share1, ... in order. |
-| `shares[].host` | string | yes | Absolute host path of an existing directory. |
-| `shares[].guest` | string |  | Absolute guest mount point; default /mnt/share<N> for the Nth share (from 0). |
-| `shares[].readOnly` | boolean, default `false` |  | Mount it read-only in the guest. |
+| `share` | object |  | A host directory mounted read-write in the guest (implies shared_dir): 9p under QEMU (the guest kernel needs 9p; Debian's cloud kernel has none), virtiofs under VZ. |
+| `share.guest` | string, default `/mnt/host` |  | Absolute guest path it is mounted at. |
+| `share.host` | string |  | Absolute host path of an existing directory. Omitted: the VM's own shared/ directory (vm_inspect endpoints.share). |

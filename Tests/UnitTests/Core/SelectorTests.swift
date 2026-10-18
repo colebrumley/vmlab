@@ -74,6 +74,21 @@ import Testing
     #expect(Self.profile(try Self.plan(Self.arm, require: [.serial, .gdb])) == .qemuHVF)
   }
 
+  /// R-702: a `no` from `qemu_hvf_gdb` turns gdb off on qemu-hvf with its reason, and an arm64
+  /// guest that requires gdb lands on qemu-tcg.
+  @Test func gdbWithoutHVFStubIsTCGForArm64() throws {
+    let host = Self.devHost([.qemuHVFGDB: .no])
+    let plan = try Self.plan(Self.arm, require: [.serial, .gdb], host: host).get()
+    #expect(plan.profile == .qemuTCG)
+    guard case .no(let reason) = Capabilities.capabilities(of: .qemuHVF, host: host)[.gdb] else {
+      Issue.record("gdb should be off on qemu-hvf")
+      return
+    }
+    #expect(reason.hasPrefix("GDB under HVF unsupported by this QEMU"))
+    #expect(Capabilities.capabilities(of: .qemuHVF, host: Self.devHost())[.gdb] == .yes)
+    #expect(Capabilities.capabilities(of: .qemuHVF, host: host)[.haltAtStart] == .yes)
+  }
+
   @Test func gdbAndLiveCheckpointWithoutHVFSnapshotsIsTCG() throws {
     let plan = try Self.plan(
       Self.arm, require: [.gdb, .checkpointLive],

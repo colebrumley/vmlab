@@ -422,6 +422,56 @@ struct MemoryDumpCommand: ToolCommand {
   }
 }
 
+// MARK: checkpoint
+
+/// `vmlab checkpoint <vm> <action> [name]`: the `vm_checkpoint` tool.
+struct CheckpointCommand: ToolCommand {
+  static let configuration = CommandConfiguration(
+    commandName: "checkpoint",
+    abstract: "Create, list, restore or delete a VM's checkpoints (the vm_checkpoint tool).")
+  static let toolName = "vm_checkpoint"
+
+  @Argument(help: "The VM's id or name.") var vm: String
+  @Argument(help: "create, list, restore, delete or diff.") var action: String
+  @Argument(help: "The checkpoint's name (@latest for the newest).") var name: String?
+  @Option(help: "create: auto, disk or live.") var mode: String?
+  @Option(help: "create: a note kept with the checkpoint.") var note: String?
+  @Flag(help: "create: also take a guest manifest.") var manifest = false
+  @Flag(help: "delete: also delete its descendants.") var recursive = false
+  @Flag(help: "Print the result object as JSON.") var json = false
+
+  func arguments() throws -> JSONValue {
+    var object: [String: JSONValue] = ["vm": .string(vm), "action": .string(action)]
+    if let name { object["name"] = .string(name) }
+    if let mode { object["mode"] = .string(mode) }
+    if let note { object["note"] = .string(note) }
+    if manifest { object["manifest"] = .bool(true) }
+    if recursive { object["recursive"] = .bool(true) }
+    return .object(object)
+  }
+
+  func render(_ result: ToolResult) -> String {
+    let v = result.value
+    func line(_ node: JSONValue, current: String? = nil) -> String {
+      let id = node["id"]?.stringValue ?? "?"
+      let mark = id == current ? "* " : "  "
+      return mark + Human.pad(node["name"]?.stringValue ?? "?", 20) + Human.pad(id, 11)
+        + Human.pad(node["mode"]?.stringValue ?? "", 5) + " parent "
+        + (node["parent"]?.stringValue ?? "-") + "  " + (node["createdAt"]?.stringValue ?? "")
+    }
+    if let nodes = v["nodes"]?.arrayValue {
+      if nodes.isEmpty { return "no checkpoints" }
+      return nodes.map { line($0, current: v["current"]?.stringValue) }.joined(separator: "\n")
+    }
+    if let deleted = v["deleted"] { return "deleted: \(Human.list(deleted))" }
+    if let node = v["checkpoint"] {
+      let state = v["state"]?.stringValue.map { " (VM \($0))" } ?? ""
+      return line(node).trimmingCharacters(in: .whitespaces) + state
+    }
+    return ""
+  }
+}
+
 // MARK: serial
 
 struct SerialCommand: ToolCommand {

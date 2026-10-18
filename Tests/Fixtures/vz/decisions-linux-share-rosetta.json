@@ -18,12 +18,6 @@
       "tag" : "share0"
     },
     {
-      "path" : "/tmp/ro",
-      "readOnly" : true,
-      "rosetta" : false,
-      "tag" : "share1"
-    },
-    {
       "readOnly" : true,
       "rosetta" : true,
       "tag" : "rosetta"

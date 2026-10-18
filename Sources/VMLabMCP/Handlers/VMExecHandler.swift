@@ -3,7 +3,8 @@ import VMLabCore
 
 /// `vm_exec`: one command in a running guest through its exec channel (R-401). `via` picks the
 /// channel: `ssh` needs `exec_ssh`, `agent` needs `exec_agent` (R-403), `auto` takes SSH when it
-/// was granted. A heartbeat is reported while the command runs.
+/// was granted and reaches the guest, else the agent. A heartbeat is reported while the command
+/// runs.
 struct VMExecHandler: ToolHandler {
   static let defaultTimeoutSeconds = 120
 
@@ -112,8 +113,7 @@ struct VMExecHandler: ToolHandler {
     switch via {
     case .ssh: return try vm.channel(.execSSH)
     case .agent: return try vm.channel(.execAgent)
-    case .auto:
-      return vm.features.contains(.execSSH) ? try vm.channel(.execSSH) : try vm.channel(.exec)
+    case .auto: return try vm.channel(.exec)
     }
   }
 }

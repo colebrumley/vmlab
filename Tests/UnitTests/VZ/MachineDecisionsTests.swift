@@ -64,24 +64,21 @@ import VMLabVZ
     #expect(try desktopOnly.decisions(limits: Self.limits).graphics == nil)
   }
 
-  /// R-603: shares become virtiofs devices `share0`...; Rosetta only when the plan asked for it.
+  /// R-603: the share becomes the virtiofs device `share0`; Rosetta only when the plan asked.
   @Test func sharesAndRosettaAreVirtiofsDevices() throws {
     var record = Self.record(features: [.execSSH, .serial, .sharedDir, .rosetta])
-    record.shares = [
-      ShareSpec(host: "/Users/me/src"), ShareSpec(host: "/tmp/ro", guest: "/ro", readOnly: true),
-    ]
+    record.share = SharedDirSpec(host: "/Users/me/src", guest: "/src")
     #expect(
       try VZRunnerConfig.linux(record: record, vmDirectory: Self.dir).decisions(limits: Self.limits)
         .fileSystems == [
-          .init(tag: "share0", path: "/Users/me/src", readOnly: false),
-          .init(tag: "share1", path: "/tmp/ro", readOnly: true),
+          .init(tag: "share0", path: "/Users/me/src", readOnly: false)
         ])
     record.plan = Plan(
       profile: .vzLinux, guest: record.guest, resources: record.resources,
       features: record.features, requested: [.sharedDir, .rosetta], estimatedStartupSeconds: 30)
     let decisions = try VZRunnerConfig.linux(record: record, vmDirectory: Self.dir)
       .decisions(limits: Self.limits)
-    try Self.assertSnapshot(decisions, "decisions-linux-shares-rosetta.json")
+    try Self.assertSnapshot(decisions, "decisions-linux-share-rosetta.json")
     #expect(
       decisions.fileSystems.last == .init(tag: "rosetta", path: nil, readOnly: true, rosetta: true))
   }

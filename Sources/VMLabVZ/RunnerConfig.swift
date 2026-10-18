@@ -150,8 +150,8 @@ public struct VZRunnerConfig: Codable, Sendable, Hashable {
   /// for the rest), `.disk` boot (default) through EFI with `<vm>/efi-vars.bin` or `.kernel` boot
   /// through `VZLinuxBootLoader`, `<vm>/disk.raw`, `<vm>/seed.iso` read-only when `seed`, one NAT
   /// NIC with `stableMAC(for:)` unless the network is `none`, the console appended to
-  /// `<vm>/console.log` and served on `<vm>/serial.sock`, the record's shares over virtiofs
-  /// (`share0`, ...), Rosetta when the plan asked for `rosetta`, the balloon, and graphics only when `gui` was granted.
+  /// `<vm>/console.log` and served on `<vm>/serial.sock`, the record's share (`SharedDirSpec.of`) over virtiofs
+  /// as `share0`, Rosetta when the plan asked for `rosetta`, the balloon, and graphics only when `gui` was granted.
   public static func linux(
     record: VMRecord, vmDirectory: URL, boot: BootSpec? = nil, seed: Bool = true
   ) throws(VMLabError) -> VZRunnerConfig {
@@ -190,10 +190,12 @@ public struct VZRunnerConfig: Codable, Sendable, Hashable {
       serialSocket: vmDirectory.appending(path: "serial.sock").path,
       memoryBalloon: true,
       graphics: record.features.contains(.gui) ? Graphics() : nil,
-      directoryShares: record.shares.enumerated().map {
-        DirectoryShare(
-          tag: ShareSpec.tag($0.offset), path: $0.element.host, readOnly: $0.element.readOnly)
-      },
+      directoryShares: SharedDirSpec.of(record).map {
+        [
+          DirectoryShare(
+            tag: SharedDirSpec.tag, path: $0.hostDirectory(vmDirectory: vmDirectory).path)
+        ]
+      } ?? [],
       rosetta: wantsRosetta(record))
   }
 

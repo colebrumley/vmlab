@@ -36,7 +36,7 @@ struct VMCreateHandler: ToolHandler {
     let draft = VMRecord(
       id: "", name: name, profile: plan.profile, guest: plan.guest, features: plan.features,
       resources: plan.resources, image: image, network: requirements.network,
-      boot: requirements.boot, extra: requirements.extra, shares: requirements.shares)
+      boot: requirements.boot, extra: requirements.extra, share: requirements.share)
     let manager = context.manager
     let created = try await context.progress.during(
       "creating the VM", every: context.heartbeat

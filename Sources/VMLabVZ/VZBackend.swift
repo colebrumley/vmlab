@@ -62,16 +62,15 @@ public struct VZBackend: Backend {
           hint: "Check free disk space and permissions under VMLAB_HOME.")
       }
     }
-    try Self.checkShares(record.shares)
+    let share = SharedDirSpec.of(record)
+    try share?.checkHostDirectory(vmDirectory: dir)
     let key = try SSHKeys.generate(in: dir, comment: "vmlab-\(record.id)", runner: commands)
     let seed = CloudInitConfig(
       instanceID: record.id, hostname: Self.hostname(for: record), user: pulled.login.user,
       sshPublicKey: key, gui: try Self.guiStack(plan: plan, vmDirectory: dir),
-      mounts: record.shares.enumerated().map {
-        GuestMount(
-          tag: ShareSpec.tag($0.offset), guestPath: $0.element.guestPath(index: $0.offset),
-          kind: .virtiofs, readOnly: $0.element.readOnly)
-      },
+      mounts: share.map {
+        [GuestMount(tag: SharedDirSpec.tag, guestPath: $0.guestPath, kind: .virtiofs)]
+      } ?? [],
       console: .hvc0,
       dhcpIdentifierMAC: record.network.mode == .disabled
         ? nil : VZRunnerConfig.stableMAC(for: record.id),
@@ -86,20 +85,6 @@ public struct VZBackend: Backend {
       throw VMLabError(
         code: .internal, message: "Cannot write the cloud-init seed: \(error)",
         hint: "Check that the VM directory is writable.")
-    }
-  }
-
-  /// `invalid_request` for a share whose host directory does not exist (VZ would refuse to start).
-  static func checkShares(_ shares: [ShareSpec]) throws(VMLabError) {
-    for (index, share) in shares.enumerated() {
-      var isDirectory: ObjCBool = false
-      guard FileManager.default.fileExists(atPath: share.host, isDirectory: &isDirectory),
-        isDirectory.boolValue
-      else {
-        throw VMLabError.invalidRequest(
-          field: "shares[\(index)].host", reason: "\(share.host) is not a directory on the host",
-          hint: "Create the directory first, or share an existing one.")
-      }
     }
   }
 
@@ -133,6 +118,8 @@ public struct VZBackend: Backend {
   /// it as `runtime.ip` (nil when none appeared; the guest still runs).
   public func start(_ record: VMRecord) async throws(VMLabError) -> VMRuntime {
     let dir = store.directory(of: record.id)
+    // VZ refuses to start with a missing shared directory; say which field instead.
+    try SharedDirSpec.of(record)?.checkHostDirectory(vmDirectory: dir)
     // R-604: a kernel boot takes the image's (extracted, uncompressed) kernel when none was given.
     let boot =
       record.boot == nil
