@@ -70,9 +70,7 @@ struct GenDocs: ParsableCommand {
     case hostFacts = "host-facts"
   }
 
-  @Argument(
-    help: "features (docs/FEATURES.md), tools (docs/TOOLS.md) or host-facts (this host's slow probes)"
-  )
+  @Argument(help: "features (docs/FEATURES.md), tools (docs/TOOLS.md) or host-facts (live probes)")
   var document: Document
 
   @Option(help: "The slow-probe snapshot the features column reads (docs/dev-host-facts.json).")
