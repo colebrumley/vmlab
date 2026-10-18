@@ -73,8 +73,8 @@ public struct TartVMFiles: Sendable, Hashable {
   public var nvram: URL { directory.appending(path: "nvram.bin") }
 }
 
-/// The `tart` command line, for the three things vmlab asks of it: pull (Core's `ImageStore`),
-/// clone and delete. Tart keeps its VMs under `TART_HOME` (default `~/.tart`) in `vms/<name>/`.
+/// The `tart` command line, for what vmlab asks of it: pull (Core's `ImageStore`), clone,
+/// grow a clone's disk and delete. Tart keeps its VMs under `TART_HOME` (default `~/.tart`) in `vms/<name>/`.
 public struct Tart: Sendable {
   public static let installHint = "brew install cirruslabs/cli/tart"
 
@@ -122,6 +122,14 @@ public struct Tart: Sendable {
   public func clone(_ source: String, to name: String) throws(VMLabError) -> TartVMFiles {
     try run(["clone", source, name], what: "tart clone \(source) \(name)")
     return files(of: name)
+  }
+
+  /// `tart set <name> --disk-size <gigabytes>`: grows the clone's `disk.img` (Tart refuses to
+  /// shrink). The guest's APFS container is not resized by this.
+  public func setDiskSize(_ name: String, gigabytes: Int) throws(VMLabError) {
+    try run(
+      ["set", name, "--disk-size", String(gigabytes)],
+      what: "tart set \(name) --disk-size \(gigabytes)")
   }
 
   /// `tart delete <name>`; a clone that is already gone is not an error.

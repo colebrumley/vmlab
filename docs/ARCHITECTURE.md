@@ -240,14 +240,14 @@ per octet) and finds the newest unexpired lease by MAC. Create reuses (or makes)
 `status` to say `running` (or `stopped` with `hold`); a runner that dies first reports its error as
 a `vmlab-vz-error: <json>` line in `vz.log`. `VMLabVZ.attach(socketPath:)` / `attach(runtime:)`
 reconnect by socket path alone. `VZBackend` (profile `vz-linux`) conforms to Core's `Backend`:
-create clones the pulled raw image to `<vm>/disk.raw` and writes the VM's key and `seed.iso`
+create clones the pulled raw image to `<vm>/disk.raw`, extends it (sparse `ftruncate`, `VZDisk.grow`) to `resources.diskGB` GiB (Linux default 32; a size below the image's is `invalid_request` on `resources.diskGB`, disks only grow; the seed's `growpart`/`resize_rootfs` grow `/` on first boot) and writes the VM's key and `seed.iso`
 (image login user, console `hvc0`, DHCP by MAC, and when the plan provisions a desktop the R-504 `GUIStack` with its x11vnc password in `<vm>/vnc.pass`, the share mounted over virtiofs, Rosetta when wanted; `SharedDirSpec.checkHostDirectory` at create and start), start resolves a kernel boot through `ImageStore.resolvingBoot` (R-604: `VZLinuxBootLoader`, default command line `console=hvc0 root=/dev/vda1 rw`), launches and waits up to `leaseTimeout` for
 the lease, recorded as `runtime.ip` (and `runtime.serialSocket`); a lease that comes later is picked up by `sshEndpoint` (both VZ backends, `VZBackend.lateLease`, keyed by the NAT MAC in `vz-config.json`), which records it under the VM's lock, and `VMManager.refreshingAddress` asks for it without waiting before `attach`, `vm_inspect`, `vm_list` and `vm_computer`; stop/kill wait for the runner to exit. A guest granted `serial` gets one Core `SerialChannel` on `serial.sock` per backend (`VZSerialChannels`, connected at start, reconnected on attach when lost, dropped on stop/kill/destroy), logging to `<vm>/serial.log`; `VZRunningVM` offers that serial channel, exec over SSH to the leased address (`SSHExecChannel`), and no display or checkpoint channel yet (R-503, R-605; its display endpoint is Core's `DisplayEndpoint.forVM`, which `vm_computer` and `vm_inspect` use directly).
 `VZMacBackend` (profile `vz-macos`, R-605) runs macOS guests in the same runner: `Tart.swift` wraps
-the `tart` CLI (`Tart.locate`, `clone`, `delete`, under `TART_HOME` or `~/.tart`) and reads a clone's
+the `tart` CLI (`Tart.locate`, `clone`, `setDiskSize`, `delete`, under `TART_HOME` or `~/.tart`) and reads a clone's
 `config.json` (`TartVMConfig`, Tart 2.x `version: 1`; any other layout is `engine_error`). Create runs
 `tart clone <ref> <vm-id>` from the ref the image record names (`PulledImage.tartVM`) and records the
-clone's directory as `VMRecord.tartClone`; start builds `VZRunnerConfig.macOS` (boot `.macOS` with the
+clone's directory as `VMRecord.tartClone` (a `resources.diskGB` larger than the clone's `disk.img` runs `tart set <vm-id> --disk-size`, decimal GB; smaller is `invalid_request`; the guest's APFS container is not grown); start builds `VZRunnerConfig.macOS` (boot `.macOS` with the
 base64 hardware model and machine identifier and `nvram.bin` as auxiliary storage, `disk.img`, the
 clone's MAC, no console, always a Mac display) and waits for that MAC's lease; stop, kill, pause and
 resume are `VZBackend`'s; destroy also `tart delete`s the clone. The runner turns boot `.macOS` into

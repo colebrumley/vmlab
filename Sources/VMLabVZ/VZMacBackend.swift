@@ -107,6 +107,13 @@ public struct VZMacBackend: Backend {
       where !FileManager.default.fileExists(atPath: file.path) {
         throw TartVMConfig.layoutError(file, "missing from the clone")
       }
+      if let diskGB = record.resources.diskGB {
+        // Tart counts decimal gigabytes and only grows (`tart set --disk-size`).
+        let target = UInt64(diskGB) * 1_000_000_000
+        let current = VZDisk.size(of: clone.disk)
+        try VZDisk.refuseShrink(current: current, toBytes: target, diskGB: diskGB, image: name)
+        if current < target { try tart.setDiskSize(record.id, gigabytes: diskGB) }
+      }
       try store.update(id: record.id) { $0.tartClone = clone.directory.path }
       let dir = store.directory(of: record.id)
       // VMManager makes the key first (R-400); this keeps a direct create complete.

@@ -52,16 +52,24 @@ public struct VZBackend: Backend {
     }
     let dir = store.directory(of: record.id)
     let disk = dir.appending(path: "disk.raw")
+    let source = images.imageDirectory(name).appending(path: raw)
+    let diskGB = ResourceLimits.resolve(record.resources, for: .linux).diskGB
+    if let diskGB {
+      try VZDisk.refuseShrink(
+        current: VZDisk.size(of: source), toBytes: UInt64(diskGB) << 30, diskGB: diskGB,
+        image: name)
+    }
     if !FileManager.default.fileExists(atPath: disk.path) {
       do {
-        try FileManager.default.copyItem(
-          at: images.imageDirectory(name).appending(path: raw), to: disk)
+        try FileManager.default.copyItem(at: source, to: disk)
       } catch {
         throw VMLabError(
           code: .internal, message: "Cannot clone \(name) to \(disk.path): \(error)",
           hint: "Check free disk space and permissions under VMLAB_HOME.")
       }
     }
+    // Sparse growth of the clone; cloud-init's growpart and resizefs grow the root on first boot.
+    if let diskGB { try VZDisk.grow(disk, toBytes: UInt64(diskGB) << 30) }
     let share = SharedDirSpec.of(record)
     try share?.checkHostDirectory(vmDirectory: dir)
     let key = try SSHKeys.generate(in: dir, comment: "vmlab-\(record.id)", runner: commands)
@@ -267,6 +275,41 @@ public struct VZBackend: Backend {
           data: ["vm": .string(record.id), "pid": .number(Double(pid))])
       }
       try? await Task.sleep(for: .milliseconds(100))
+    }
+  }
+}
+
+/// Sizing of a VZ guest's disk to `resources.diskGB`: disks only grow.
+enum VZDisk {
+  /// The file's length in bytes; 0 when it cannot be read.
+  static func size(of url: URL) -> UInt64 {
+    let attributes = try? FileManager.default.attributesOfItem(atPath: url.path)
+    return (attributes?[.size] as? NSNumber)?.uint64Value ?? 0
+  }
+
+  /// `invalid_request` on `resources.diskGB` when the image's disk is already larger than asked.
+  static func refuseShrink(current: UInt64, toBytes target: UInt64, diskGB: Int, image: String)
+    throws(VMLabError)
+  {
+    guard current > target else { return }
+    let imageGB = Int((current + (1 << 30) - 1) >> 30)
+    throw VMLabError.invalidRequest(
+      field: "resources.diskGB",
+      reason: "\(diskGB) GB is smaller than image \(image)'s disk (\(imageGB) GB); disks only grow",
+      hint: "Ask for at least \(imageGB) GB.")
+  }
+
+  /// Extends `url` to `target` bytes (`ftruncate`, so sparse on APFS); never shrinks it.
+  static func grow(_ url: URL, toBytes target: UInt64) throws(VMLabError) {
+    guard size(of: url) < target else { return }
+    do {
+      let handle = try FileHandle(forWritingTo: url)
+      defer { try? handle.close() }
+      try handle.truncate(atOffset: target)
+    } catch {
+      throw VMLabError(
+        code: .internal, message: "Cannot grow \(url.path) to \(target) bytes: \(error)",
+        hint: "Check free disk space under VMLAB_HOME.")
     }
   }
 }

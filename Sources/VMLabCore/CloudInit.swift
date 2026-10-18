@@ -310,6 +310,10 @@ public enum CloudInit {
           ])
         ])
       ),
+      // The images enable these modules already; said here so a disk grown to diskGB (VZ's
+      // sparse extension, QEMU's larger overlay) always gets its root partition and fs grown.
+      ("growpart", .map([("mode", "auto"), ("devices", .list(["/"]))])),
+      ("resize_rootfs", true),
       ("package_update", .bool(config.packageUpdate)),
       ("packages", .list(packages.map(YAML.string))),
     ]

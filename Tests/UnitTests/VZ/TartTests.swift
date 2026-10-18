@@ -6,7 +6,8 @@ import VMLabCore
 @testable import VMLabVZ
 
 /// Stands in for `tart`: `clone <src> <name>` makes `<home>/vms/<name>/` from the fixture
-/// `config.json` plus empty `disk.img` and `nvram.bin`; `delete <name>` removes it.
+/// `config.json` plus empty `disk.img` and `nvram.bin`; `set <name> --disk-size <GB>` extends
+/// `disk.img`; `delete <name>` removes it.
 final class FakeTart: CommandRunning {
   let home: URL
   let config: URL
@@ -29,6 +30,15 @@ final class FakeTart: CommandRunning {
         try Data().write(to: dir.appending(path: "disk.img"))
         try Data().write(to: dir.appending(path: "nvram.bin"))
       } catch { return CommandOutput(status: 1, output: "\(error)") }
+      return CommandOutput(status: 0, output: "")
+    case "set" where arguments.count == 4 && arguments[2] == "--disk-size":
+      let disk = home.appending(path: "vms").appending(path: arguments[1]).appending(
+        path: "disk.img")
+      guard let gb = UInt64(arguments[3]), let handle = try? FileHandle(forWritingTo: disk) else {
+        return CommandOutput(status: 1, output: "bad set")
+      }
+      defer { try? handle.close() }
+      try? handle.truncate(atOffset: gb * 1_000_000_000)
       return CommandOutput(status: 0, output: "")
     case "delete" where arguments.count == 2:
       try? fm.removeItem(at: home.appending(path: "vms").appending(path: arguments[1]))

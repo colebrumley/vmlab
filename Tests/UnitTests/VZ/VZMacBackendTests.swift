@@ -127,4 +127,65 @@ import VMLabCore
     #expect(config.cpus == 2 && config.memoryBytes == 4 << 30)
     #expect(config.network.isEmpty)
   }
+
+  /// resources.diskGB grows the clone's disk with `tart set --disk-size`; a size below the
+  /// clone's is refused with invalid_request and the clone deleted.
+  @Test func diskGBGrowsTheCloneAndRefusesShrinking() async throws {
+    let (home, store, backend, fake) = try Self.sandbox()
+    defer { try? FileManager.default.removeItem(at: home) }
+    var record = try store.update(id: try Self.create(store).id) {
+      $0.resources = ResourceSpec(diskGB: 2)
+    }
+    try await backend.create(record, plan: Self.plan)
+    let clone = home.appending(path: "tart/vms").appending(path: record.id)
+    #expect(fake.calls.withLock { $0.contains(["set", record.id, "--disk-size", "2"]) })
+    #expect(VZDisk.size(of: clone.appending(path: "disk.img")) == 2_000_000_000)
+
+    let (home2, store2, backend2, fake2) = try Self.sandbox()
+    defer { try? FileManager.default.removeItem(at: home2) }
+    record = try store2.update(id: try Self.create(store2).id) {
+      $0.resources = ResourceSpec(diskGB: 1)
+    }
+    // A clone whose disk is already 3 GB: the fake clones, then the size check runs.
+    let tartHome = home2.appending(path: "tart")
+    let big = Tart(
+      executable: "/opt/homebrew/bin/tart", home: tartHome,
+      commands: GrowingClone(inner: fake2, bytes: 3_000_000_000))
+    let refusing = VZMacBackend(store: store2, tart: { () throws(VMLabError) in big })
+    _ = backend2
+    do {
+      try await refusing.create(record, plan: Self.plan)
+      Issue.record("a diskGB below the clone's disk was accepted")
+    } catch {
+      #expect(error.code == .invalidRequest)
+      #expect(error.data["field"] == .string("resources.diskGB"))
+    }
+    #expect(!fake2.calls.withLock { $0.contains { $0.first == "set" } })
+    #expect(
+      !FileManager.default.fileExists(
+        atPath: tartHome.appending(path: "vms").appending(path: record.id).path))
+  }
+}
+
+/// A `tart` whose clones come out with a `bytes`-long disk.
+final class GrowingClone: CommandRunning {
+  let inner: FakeTart
+  let bytes: UInt64
+  init(inner: FakeTart, bytes: UInt64) {
+    self.inner = inner
+    self.bytes = bytes
+  }
+
+  func run(_ executable: String, _ arguments: [String]) -> CommandOutput? {
+    let output = inner.run(executable, arguments)
+    if arguments.first == "clone", arguments.count == 3, output?.status == 0 {
+      let disk = inner.home.appending(path: "vms").appending(path: arguments[2]).appending(
+        path: "disk.img")
+      if let handle = try? FileHandle(forWritingTo: disk) {
+        try? handle.truncate(atOffset: bytes)
+        try? handle.close()
+      }
+    }
+    return output
+  }
 }

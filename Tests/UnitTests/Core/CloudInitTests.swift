@@ -43,6 +43,11 @@ enum RubyYAML {
     #expect(users[0]["lock_passwd"] as? Bool == true)
     #expect(users[0]["ssh_authorized_keys"] as? [String] == [Self.key])
     #expect(doc["packages"] as? [String] == ["qemu-guest-agent"])
+    // A disk grown to diskGB gets its root partition and filesystem grown on first boot.
+    let growpart = try #require(doc["growpart"] as? [String: Any])
+    #expect(growpart["mode"] as? String == "auto")
+    #expect(growpart["devices"] as? [String] == ["/"])
+    #expect(doc["resize_rootfs"] as? Bool == true)
     let runcmd = try #require(doc["runcmd"] as? [[String]])
     #expect(runcmd.contains(["systemctl", "enable", "--now", "qemu-guest-agent"]))
     #expect(runcmd.contains(["systemctl", "enable", "--now", "serial-getty@ttyAMA0.service"]))

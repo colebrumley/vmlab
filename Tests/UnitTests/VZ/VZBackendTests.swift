@@ -38,7 +38,10 @@ import VMLabCore
     try await backend.create(record, plan: plan)
 
     let dir = store.directory(of: record.id)
-    #expect(try Data(contentsOf: dir.appending(path: "disk.raw")) == Data("raw disk".utf8))
+    // Grown (sparse) to the Linux default of 32 GiB, the image's bytes first.
+    let disk = dir.appending(path: "disk.raw")
+    #expect(VZDisk.size(of: disk) == 32 << 30)
+    #expect(try FileHandle(forReadingFrom: disk).read(upToCount: 8) == Data("raw disk".utf8))
     let publicKey = try String(
       contentsOf: dir.appending(path: "id_ed25519.pub"), encoding: .utf8)
     #expect(publicKey.hasPrefix("ssh-ed25519 "))
@@ -57,6 +60,28 @@ import VMLabCore
     try await backend.create(record, plan: plan)
     #expect(
       try String(contentsOf: dir.appending(path: "id_ed25519.pub"), encoding: .utf8) == publicKey)
+  }
+
+  /// resources.diskGB extends the raw clone (sparse) to that many GiB; below the image's disk it
+  /// is refused with invalid_request before anything is copied.
+  @Test func diskGBGrowsTheRawCloneAndRefusesShrinking() throws {
+    let dir = FileManager.default.temporaryDirectory.appending(path: "vmlab-vzdisk-\(UUID())")
+    defer { try? FileManager.default.removeItem(at: dir) }
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    let disk = dir.appending(path: "disk.raw")
+    try Data("raw disk".utf8).write(to: disk)
+    try VZDisk.grow(disk, toBytes: 3 << 30)
+    #expect(VZDisk.size(of: disk) == 3 << 30)
+    #expect(try FileHandle(forReadingFrom: disk).read(upToCount: 8) == Data("raw disk".utf8))
+    try VZDisk.grow(disk, toBytes: 1 << 30)
+    #expect(VZDisk.size(of: disk) == 3 << 30)
+    do {
+      try VZDisk.refuseShrink(current: 3 << 30, toBytes: 2 << 30, diskGB: 2, image: "debian")
+      Issue.record("shrinking was accepted")
+    } catch {
+      #expect(error.code == .invalidRequest)
+      #expect(error.data["field"] == .string("resources.diskGB"))
+    }
   }
 
   /// Rosetta is shared only when the request asked for it, not whenever the profile grants it.
