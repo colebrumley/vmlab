@@ -78,6 +78,14 @@ the `ResourceLimits` of one `VMLAB_HOME`. A `ToolResult` is the Appendix C resul
 or a terminal line. Built so far: `host_facts`, `host_doctor` (minimal; R-203 completes it),
 `vm_plan` (an unsatisfiable request is a result with `satisfiable: false`, never an error),
 `vm_list` and `vm_inspect`. `VMLabMCP.version` is the package version.
+`Server/MCPServer.swift` is the server (`VMLabServer.run(context:input:output:)`, used by
+`vmlab serve`): it reconciles the store, then serves the SDK's `StdioTransport` until stdin closes.
+`initialize` (server `vmlab`, the package version) and `ping` are the SDK's; `tools/list` sends
+`ToolHandlers.specs`; `tools/call` runs `ToolHandlers.call` and answers `content: [text(JSON)]`
+plus one `image` block per `ToolResult.images`, a `VMLabError` as `isError: true` with the
+Appendix D object as the text, and an unknown tool as JSON-RPC error -32602. When the call carries
+`_meta.progressToken`, `ToolContext.progress` (a `ToolProgress`) sends `notifications/progress`
+with it; otherwise it is `.none`.
 
 **`vmlab`** (executable). The CLI on swift-argument-parser: every MCP tool as a subcommand with
 `--json` output, `vmlab serve` for the MCP server, `vmlab doctor`, and the hidden `vmlab gen-docs`
@@ -85,7 +93,7 @@ that `scripts/gen-docs.sh` uses. A tool subcommand conforms to `ToolCommand` (`S
 it turns its flags into the tool's JSON arguments and calls the same `ToolHandlers.call` as
 `tools/call`, printing the result object with `--json` or a short human rendering; a `VMLabError` goes
 to stderr (the Appendix D object with `--json`) with exit status 1. Built: `facts`, `doctor`, `plan`,
-`list`, `inspect`, `--version`; `vmlab images pull|list|remove` (R-300) still calls `ImageStore`
+`list`, `inspect`, `serve`, `--version`; `vmlab images pull|list|remove` (R-300) still calls `ImageStore`
 directly until the `images` handler lands. It bootstraps logging and hands off to Core and `VMLabMCP`.
 
 **`vmlab-vz`** (executable). The VZ runner: one process per Virtualization.framework guest, so a

@@ -263,7 +263,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   linux --require serial,gdb --json` prints a `Plan` or an `Unsatisfiable`; unit test for the
   argument parsing of `plan`.
 
-- [ ] **R-201 MCP server over stdio**
+- [x] **R-201 MCP server over stdio**
   `vmlab serve` runs an MCP server with the official Swift SDK: `initialize`, `tools/list`,
   `tools/call`, `ping`, and `notifications/progress` for long calls (create, pull, checkpoint
   restore). Tool results are `content: [text(JSON)]`, plus an `image` content block for
