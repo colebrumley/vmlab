@@ -74,7 +74,7 @@ Check the host's prerequisites (QEMU, Tart, Rosetta, the signed VZ runner and it
 
 ## `images`
 
-Manage the guest image cache in ~/.vmlab/images. list shows pulled and available images; pull downloads and verifies one by name (large pulls need confirm: true); remove deletes a pulled image; register adds a local disk image (path, guest, arch, format), an IPSW (path ending .ipsw) or a kernel (kernel, initrd); template_create turns the stopped VM vm into the template name for vm_create image: name and fleets; prune removes images no VM or template uses; extract_kernel copies the kernel, initrd, System.map and config out of a pulled Linux image for direct kernel boot. vm_create pulls what it needs itself, so call this to inspect or to pre-pull.
+Manage the guest image cache in ~/.vmlab/images. list shows pulled and available images; pull downloads and verifies one by name (large pulls need confirm: true; a changed upstream image is not pulled over one a VM uses); remove deletes a pulled image no VM uses; register adds a local disk image (path, guest, arch, format), an IPSW (path ending .ipsw) or a kernel (kernel, initrd); template_create turns the stopped VM vm into the template name for vm_create image: name and fleets; prune removes images no VM or template uses; extract_kernel copies the kernel, initrd, System.map and config out of a pulled Linux image for direct kernel boot. vm_create pulls what it needs itself, so call this to inspect or to pre-pull.
 
 **Errors:** `invalid_request`, `image_not_found`, `confirm_required`, `host_missing_tool`, `vm_not_found`, `wrong_state`
 

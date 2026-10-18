@@ -361,12 +361,14 @@ public actor ImageStore {
     return rows
   }
 
-  /// Deletes `images/<name>/`; false when it was not there.
+  /// Deletes `images/<name>/`; false when it was not there. Refuses (`checkUnused`) while a VM's
+  /// disk reads the image.
   @discardableResult
   public func remove(_ name: String) throws -> Bool {
     try Self.validate(name)
     let url = imageDirectory(name)
     guard FileManager.default.fileExists(atPath: url.path) else { return false }
+    try checkUnused(name, "remove")
     try FileManager.default.removeItem(at: url)
     return true
   }
@@ -419,6 +421,12 @@ public actor ImageStore {
       return PullResult(image: existing, changed: false)
     }
 
+    // CX-2: QEMU overlays name this disk as their backing file and VZ disks were cloned from
+    // it; replacing it under them would corrupt them, so a changed upstream image waits until
+    // no VM uses the pulled one.
+    if existing != nil || FileManager.default.fileExists(atPath: disk.path) {
+      try checkUnused(name, "replace")
+    }
     try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
     let partial = folder.appending(path: diskName + ".partial")
     try? FileManager.default.removeItem(at: partial)
@@ -455,6 +463,43 @@ public actor ImageStore {
       pulledAt: now())
     try write(record)
     return PullResult(image: record, changed: true)
+  }
+
+  /// The VMs whose disk reads `images/<name>/`: those created from it (`image`) and those whose
+  /// backing chain names a file in its directory (clones). Nil when a VM record cannot be read,
+  /// since the image that VM uses is then unknown.
+  public nonisolated func users(of name: String) -> [VMRecord]? {
+    guard let listed = try? Store(home: directory.deletingLastPathComponent()).list(),
+      listed.unreadable.isEmpty
+    else { return nil }
+    let prefix = imageDirectory(name).standardizedFileURL.path + "/"
+    return listed.records.filter { record in
+      record.image == name
+        || (record.backingChain ?? []).contains {
+          URL(filePath: $0).standardizedFileURL.path.hasPrefix(prefix)
+        }
+    }
+  }
+
+  /// `invalid_request` (field `name`, data `vms`) when a VM uses `name` or a VM record cannot be
+  /// read: removing or replacing the image would leave those VMs unbootable.
+  nonisolated func checkUnused(_ name: String, _ verb: String) throws(VMLabError) {
+    guard let users = users(of: name) else {
+      throw VMLabError.invalidRequest(
+        field: "name", reason: "cannot \(verb) \(name): a VM record cannot be read, so the VMs "
+          + "using it are unknown",
+        hint: "Run vmlab doctor or fix the unreadable record under vms/, then retry.")
+    }
+    guard !users.isEmpty else { return }
+    let names = users.map { "\($0.name) (\($0.id))" }.joined(separator: ", ")
+    throw VMLabError(
+      code: .invalidRequest,
+      message: "Cannot \(verb) image \(name): the disks of \(names) read it",
+      hint: "Destroy those VMs first (or keep the image you have).",
+      data: [
+        "field": .string("name"), "reason": .string("VMs use this image"),
+        "image": .string(name), "vms": .array(users.map { .string($0.id) }),
+      ])
   }
 
   // MARK: Steps

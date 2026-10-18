@@ -39,7 +39,8 @@ extension ImageStore {
 
   /// `images prune`: removes every image no name in `referenced` uses.
   public func prune(referenced: Set<String>) throws -> [PrunedImage] {
-    let doomed = unreferenced(referenced)
+    // An image only a clone's backing chain reads is not in `referenced`; it stays too.
+    let doomed = unreferenced(referenced).filter { users(of: $0.name)?.isEmpty == true }
     for image in doomed { try remove(image.name) }
     return doomed
   }

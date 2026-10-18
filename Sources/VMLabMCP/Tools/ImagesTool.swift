@@ -5,8 +5,9 @@ extension ToolSpec {
     name: "images",
     summary:
       "Manage the guest image cache in ~/.vmlab/images. list shows pulled and available images; "
-      + "pull downloads and verifies one by name (large pulls need confirm: true); remove deletes "
-      + "a pulled image; register adds a local disk image (path, guest, arch, format), an IPSW "
+      + "pull downloads and verifies one by name (large pulls need confirm: true; a changed "
+      + "upstream image is not pulled over one a VM uses); remove deletes a pulled image no VM "
+      + "uses; register adds a local disk image (path, guest, arch, format), an IPSW "
       + "(path ending .ipsw) or a kernel (kernel, initrd); template_create turns the stopped VM "
       + "vm into the template name for vm_create image: name and fleets; prune removes images "
       + "no VM or template uses; extract_kernel copies the kernel, initrd, System.map and config "
