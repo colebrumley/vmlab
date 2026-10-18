@@ -100,13 +100,34 @@ public final class QEMUBackend: Backend {
     let target = SSHEndpoint(runtime: machine.runtime).map {
       SSHTarget(record: record, endpoint: $0, store: store)
     }
-    return QEMURunningVM(record: record, machine: machine, ssh: target)
+    return QEMURunningVM(
+      record: record, machine: machine, checkpoints: try checkpointProvider(record), ssh: target)
   }
 
   public func sshEndpoint(_ record: VMRecord, timeout: Duration) async -> SSHEndpoint? {
     SSHEndpoint(runtime: record.runtime)
       ?? machines.withLock({ $0[record.id] }).flatMap { SSHEndpoint(runtime: $0.runtime) }
   }
+
+  /// Checkpoints work on a stopped guest too (`qemu-img`), so they need no attach.
+  public func checkpoints(_ record: VMRecord) async throws(VMLabError) -> any CheckpointProvider {
+    try checkpointProvider(record)
+  }
+
+  func checkpointProvider(_ record: VMRecord) throws(VMLabError) -> QEMUCheckpoints {
+    QEMUCheckpoints(backend: self, record: record, liveAllowed: liveSnapshotsAllowed(record))
+  }
+
+  /// Live checkpoints: always under TCG; under HVF when the plan granted `checkpoint_live` or the
+  /// host fact `qemu_hvf_live_snapshot` (in this home's `host-facts.json`) is `yes`.
+  public func liveSnapshotsAllowed(_ record: VMRecord) -> Bool {
+    if profile == .qemuTCG || record.features.contains(.checkpointLive) { return true }
+    let facts = try? SlowProbes.load(from: SlowProbes.url(home: store.home))
+    return facts?.result(.qemuHVFLiveSnapshot) == .yes
+  }
+
+  /// The host's QEMU, located on first use.
+  public func installation() throws(VMLabError) -> QEMUInstallation { try locate() }
 
   // MARK: Helpers
 
@@ -178,14 +199,19 @@ public struct QEMURunningVM: RunningVM {
   public let profile: Profile
   public let features: [Feature]
   public let machine: QEMUMachine
+  public let checkpoints: any CheckpointProvider
   /// Where SSH reaches the guest: its forwarded loopback port; nil with networking off.
   public let ssh: SSHTarget?
 
-  public init(record: VMRecord, machine: QEMUMachine, ssh: SSHTarget? = nil) {
+  public init(
+    record: VMRecord, machine: QEMUMachine, checkpoints: any CheckpointProvider,
+    ssh: SSHTarget? = nil
+  ) {
     id = record.id
     profile = record.profile
     features = record.features
     self.machine = machine
+    self.checkpoints = checkpoints
     self.ssh = ssh
   }
 
@@ -195,30 +221,16 @@ public struct QEMURunningVM: RunningVM {
   }
   public var gdb: GDBEndpoint? { machine.runtime.gdbEndpoint.flatMap(GDBEndpoint.init(runtime:)) }
   public var introspection: (any Introspection)? { QMPIntrospection(qmp: machine.qmp) }
+  public var memoryDump: (any MemoryDumper)? { QMPMemoryDumper(qmp: machine.qmp) }
   /// SSH through the forwarded port (R-400); R-403 adds the guest agent.
   public var exec: any ExecChannel {
     if let ssh { return SSHExecChannel(target: ssh) }
     return NotYetBuilt(vm: id, channel: "exec", item: "R-403: the guest has no network for SSH")
   }
-  public var checkpoints: any CheckpointProvider {
-    NotYetBuilt(vm: id, channel: "checkpoints", item: "R-307")
-  }
-}
-
-/// `query` runs QMP `query-<query>` (R-311 widens this).
-struct QMPIntrospection: Introspection {
-  let qmp: QMPClient
-
-  func query(_ query: String, arguments: [String: JSONValue]) async throws(VMLabError) -> JSONValue
-  {
-    try await QEMUBackend.lift {
-      try await qmp.execute("query-\(query)", arguments: arguments.isEmpty ? nil : arguments)
-    }
-  }
 }
 
 /// A channel the QEMU backend does not provide yet; every call is `guest_unreachable`.
-struct NotYetBuilt: ExecChannel, CheckpointProvider {
+struct NotYetBuilt: ExecChannel {
   let vm: String
   let channel: String
   let item: String
@@ -231,7 +243,4 @@ struct NotYetBuilt: ExecChannel, CheckpointProvider {
   }
 
   func run(_ request: ExecRequest) async throws(VMLabError) -> ExecResult { throw error }
-  func create(id: String, mode: CheckpointMode) async throws(VMLabError) { throw error }
-  func restore(id: String, mode: CheckpointMode) async throws(VMLabError) { throw error }
-  func delete(id: String) async throws(VMLabError) { throw error }
 }
