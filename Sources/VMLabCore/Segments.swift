@@ -121,7 +121,8 @@ public struct SegmentStore: Sendable {
 
   /// `[a-z0-9-]`, starting with a letter or digit, at most 32 characters (as `vmlab-switch`).
   public static func isValidName(_ name: String) -> Bool {
-    guard let first = name.utf8.first, name.utf8.count <= maxNameLength, first != UInt8(ascii: "-") else {
+    guard let first = name.utf8.first, name.utf8.count <= maxNameLength, first != UInt8(ascii: "-")
+    else {
       return false
     }
     return name.utf8.allSatisfy { c in

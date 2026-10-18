@@ -58,7 +58,9 @@ import VMLabCore
     ("vm_checkpoint", ["name"], "maxLength", Double(VMRecord.maxNameLength)),
     ("net_segment", ["name"], "maxLength", Double(SegmentStore.maxNameLength)),
     // requirements (vm_plan, vm_create, fleet): Requirements.validate.
-    ("vm_create", ["requirements", "resources", "cpus"], "maximum", Double(ResourceLimits.maxCPUs)),
+    (
+      "vm_create", ["requirements", "resources", "cpus"], "maximum", Double(ResourceLimits.maxCPUs)
+    ),
     (
       "vm_create", ["requirements", "resources", "memoryGB"], "maximum",
       Double(ResourceLimits.maxMemoryGB)
@@ -102,7 +104,8 @@ import VMLabCore
     let computer = ToolSpec.vmComputer.description
     #expect(computer.contains("\(VMComputerHandler.maxSettleMs) ms"))
     #expect(computer.contains("\(DisplayRect.coordinateLimit)"))
-    #expect(ToolSpec.vmMemoryDump.description.contains("\(VMMemoryDumpHandler.confirmAbove >> 20) MB"))
+    #expect(
+      ToolSpec.vmMemoryDump.description.contains("\(VMMemoryDumpHandler.confirmAbove >> 20) MB"))
   }
 
   static func property(_ schema: JSONValue, _ path: [String]) -> [String: JSONValue]? {
