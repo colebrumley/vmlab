@@ -213,6 +213,7 @@ public final class QEMUBackend: Backend {
         sshPublicKey: key.trimmingCharacters(in: .whitespacesAndNewlines),
         // R-504: the desktop only; QEMU's VNC socket is the display, so no VNC server.
         gui: plan.provisionsDesktop ? GUIStack(vncPassword: nil) : nil)
+      config?.applyTemplate(images.pulled(image)?.template)
     }
     return QEMULaunchRequest(
       record: record, plan: plan, layout: layout, baseImage: base, boot: boot, seed: config,

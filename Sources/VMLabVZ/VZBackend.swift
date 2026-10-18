@@ -59,11 +59,12 @@ public struct VZBackend: Backend {
       }
     }
     let key = try SSHKeys.generate(in: dir, comment: "vmlab-\(record.id)", runner: commands)
-    let seed = CloudInitConfig(
+    var seed = CloudInitConfig(
       instanceID: record.id, hostname: Self.hostname(for: record), user: pulled.login.user,
       sshPublicKey: key, gui: try Self.guiStack(plan: plan, vmDirectory: dir), console: .hvc0,
       dhcpIdentifierMAC: record.network.mode == .disabled
         ? nil : VZRunnerConfig.stableMAC(for: record.id))
+    seed.applyTemplate(pulled.template)
     do {
       try CloudInit.makeSeed(
         seed, directory: dir.appending(path: "seed"), iso: dir.appending(path: "seed.iso"),

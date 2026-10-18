@@ -714,7 +714,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   **Verify:** integration: clone, boot, the clone has the checkpoint's file; the original is
   untouched.
 
-- [ ] **R-804 Templates**
+- [x] **R-804 Templates**
   `images template create <vm> <name>`: a stopped VM becomes a template (its disk copied into
   `~/.vmlab/images/<name>/` with `image.json` carrying the guest and the provisioning already done,
   the SSH key removed from `authorized_keys` so each child gets its own). `vm_create image:

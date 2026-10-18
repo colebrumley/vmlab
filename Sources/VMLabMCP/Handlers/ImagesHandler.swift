@@ -3,12 +3,13 @@ import VMLabCore
 
 /// `images`: list, pull and remove over `ImageStore` (R-300); `pull` reports progress while it
 /// downloads. extract_kernel and the kernel form of register are R-305's; registering a disk
-/// (R-1002), template_create (R-804) and prune (R-1003) are refused until their items land.
+/// (R-1002) and prune (R-1003) are refused until their items land. template_create (R-804) copies a
+/// stopped VM's disk into a template image.
 struct ImagesHandler: ToolHandler {
   var spec: ToolSpec { .images }
 
   static let owners = [
-    "register": "R-1002", "template_create": "R-804", "prune": "R-1003",
+    "register": "R-1002", "prune": "R-1003",
   ]
 
   func call(_ arguments: ToolArguments, context: ToolContext) async throws(VMLabError)
@@ -51,6 +52,28 @@ struct ImagesHandler: ToolHandler {
         }
       }
       return Self.kernelResult(files, context)
+    case "template_create":
+      let name = try Self.name(arguments)
+      guard let vm = try arguments.string("vm"), !vm.isEmpty else {
+        throw VMLabError.invalidRequest(
+          field: "vm", reason: "template_create needs the stopped VM to copy",
+          hint: "Add vm: the VM's name or id.")
+      }
+      let record = try context.store.find(vm)
+      let directory = context.store.directory(of: record.id)
+      let images = context.images
+      let image = try await context.progress.during(
+        "copying \(record.id) into template \(name)", every: context.heartbeat
+      ) { () throws(VMLabError) -> PulledImage in
+        try await images.createTemplate(name, from: record, vmDirectory: directory)
+      }
+      let folder = images.imageDirectory(name)
+      return ToolResult([
+        "name": .string(name), "path": .string(folder.path),
+        "files": .array(
+          image.files.values.sorted().map { .string(folder.appending(path: $0).path) }),
+        "vm": .object(["id": .string(record.id), "name": .string(record.name)]),
+      ])
     case "register" where try arguments.string("kernel") != nil:
       let name = try Self.name(arguments)
       guard try arguments.string("path") == nil else {
@@ -104,7 +127,7 @@ struct ImagesHandler: ToolHandler {
     var row: [String: JSONValue] = [
       "name": .string(listing.name), "guest": .string(listing.guest.os.rawValue),
       "arch": .string(listing.guest.arch.rawValue), "format": .string(listing.format.rawValue),
-      "pulled": .bool(listing.pulled != nil), "template": .bool(false),
+      "pulled": .bool(listing.pulled != nil), "template": .bool(listing.pulled?.template != nil),
     ]
     if let pulled = listing.pulled {
       let folder = context.images.imageDirectory(listing.name)

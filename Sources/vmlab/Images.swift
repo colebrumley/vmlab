@@ -3,13 +3,15 @@ import Foundation
 import VMLabCore
 import VMLabMCP
 
-/// `vmlab images pull|list|remove|register|extract-kernel`: the `images` tool's handler, one
+/// `vmlab images pull|list|remove|register|extract-kernel|template create`: the `images` tool's handler, one
 /// subcommand per action.
 struct Images: ParsableCommand {
   static let configuration = CommandConfiguration(
     commandName: "images",
     abstract: "Pull, list and remove guest images (the images tool).",
-    subcommands: [Pull.self, List.self, Remove.self, Register.self, ExtractKernel.self]
+    subcommands: [
+      Pull.self, List.self, Remove.self, Register.self, ExtractKernel.self, Template.self,
+    ]
   )
 
   struct Pull: ToolCommand {
@@ -113,6 +115,32 @@ struct Images: ParsableCommand {
     }
 
     func render(_ result: ToolResult) -> String { Images.renderKernel(result, "Extracted") }
+  }
+
+  /// `vmlab images template create <vm> <name>` (R-804).
+  struct Template: ParsableCommand {
+    static let configuration = CommandConfiguration(
+      abstract: "Make templates from stopped VMs.", subcommands: [Create.self])
+
+    struct Create: ToolCommand {
+      static let configuration = CommandConfiguration(
+        abstract: "Copy a stopped VM's disk into a template image for vm_create and fleets.")
+      static let toolName = "images"
+
+      @Argument(help: "The stopped VM (name or id).") var vm: String
+      @Argument(help: "The template's image name.") var name: String
+      @Flag(help: "Print the result object as JSON.") var json = false
+
+      func arguments() throws -> JSONValue {
+        .object([
+          "action": .string("template_create"), "vm": .string(vm), "name": .string(name),
+        ])
+      }
+
+      func render(_ result: ToolResult) -> String {
+        "Made template \(name) from \(vm) in \(result.value["path"]?.stringValue ?? "?")"
+      }
+    }
   }
 
   /// A path given on the command line, made absolute against the working directory.

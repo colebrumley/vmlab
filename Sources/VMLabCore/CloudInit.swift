@@ -136,6 +136,12 @@ public struct CloudInitConfig: Codable, Sendable, Hashable {
   /// User-supplied `user-data`, merged after ours (cloud-config, shell script, boothook or
   /// include). Its cloud-config keys win; lists are appended.
   public var extraUserData: String?
+  /// `authorized_keys` lines removed at every boot before sshd starts: a template's parent key
+  /// (R-804, `TemplateInfo.revokedKeys`).
+  public var revokedKeys: [String] = []
+  /// Whether first boot runs `apt-get update`; false for a template child, whose packages are
+  /// already installed (R-804).
+  public var packageUpdate: Bool = true
 
   public init(
     instanceID: String, hostname: String, user: String, sshPublicKey: String,
@@ -204,7 +210,11 @@ public enum CloudInit {
       }
     }
 
-    var entries: [(String, YAML)] = [
+    var entries: [(String, YAML)] = []
+    if let revoke = revokeCommand(user: config.user, keys: config.revokedKeys) {
+      entries.append(("bootcmd", .list([revoke])))
+    }
+    entries += [
       ("hostname", .string(config.hostname)),
       ("fqdn", .string(config.hostname)),
       ("manage_etc_hosts", true),
@@ -223,7 +233,7 @@ public enum CloudInit {
           ])
         ])
       ),
-      ("package_update", true),
+      ("package_update", .bool(config.packageUpdate)),
       ("packages", .list(packages.map(YAML.string))),
     ]
     if !config.mounts.isEmpty {

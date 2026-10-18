@@ -185,10 +185,13 @@ public struct PulledImage: Codable, Sendable, Hashable {
   public var pulledAt: Date
   /// The release of the kernel in `files["kernel"]` when it was extracted (R-305).
   public var kernelVersion: String?
+  /// Set when the image is a template made from a VM (R-804); additive, schema 1 still.
+  public var template: TemplateInfo?
 
   public init(
     name: String, guest: GuestSpec, source: String, format: ImageFormat, checksum: Checksum?,
-    files: [String: String], login: ImageLogin, pulledAt: Date, kernelVersion: String? = nil
+    files: [String: String], login: ImageLogin, pulledAt: Date, kernelVersion: String? = nil,
+    template: TemplateInfo? = nil
   ) {
     self.schemaVersion = Self.currentSchemaVersion
     self.name = name
@@ -199,6 +202,7 @@ public struct PulledImage: Codable, Sendable, Hashable {
     self.files = files
     self.login = login
     self.kernelVersion = kernelVersion
+    self.template = template
     // Whole seconds, so the record equals what image.json (ISO 8601) reads back.
     self.pulledAt = Date(timeIntervalSince1970: pulledAt.timeIntervalSince1970.rounded(.down))
   }
