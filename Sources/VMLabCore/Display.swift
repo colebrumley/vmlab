@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 
 // MARK: - Display endpoint per profile (R-503)
 
@@ -100,4 +101,159 @@ extension DisplayEndpoint {
     }
     return .object(object)
   }
+}
+
+// MARK: - Display sessions (R-502)
+
+/// A rectangle in guest pixels: origin at the top left, rows downward.
+public struct DisplayRect: Codable, Sendable, Hashable {
+  public var x: Int
+  public var y: Int
+  public var width: Int
+  public var height: Int
+
+  public init(x: Int, y: Int, width: Int, height: Int) {
+    self.x = x
+    self.y = y
+    self.width = width
+    self.height = height
+  }
+
+  /// The rectangle between corners `[x0, y0]` and `[x1, y1]` (exclusive), as tool arguments give it.
+  public init(corners x0: Int, _ y0: Int, _ x1: Int, _ y1: Int) {
+    self.init(x: min(x0, x1), y: min(y0, y1), width: abs(x1 - x0), height: abs(y1 - y0))
+  }
+
+  public var json: JSONValue {
+    .object([
+      "x": .number(Double(x)), "y": .number(Double(y)), "width": .number(Double(width)),
+      "height": .number(Double(height)),
+    ])
+  }
+}
+
+/// The image encodings a screenshot can be returned in.
+public enum DisplayImageFormat: String, Codable, Sendable, CaseIterable {
+  case png, jpeg
+}
+
+/// How a screenshot is cropped, scaled and encoded (R-505).
+public struct ScreenshotRequest: Sendable, Hashable {
+  public static let defaultMaxEdge = 1280
+  public static let defaultQuality = 80
+
+  public var format: DisplayImageFormat
+  /// JPEG quality 1 to 100; ignored for PNG.
+  public var quality: Int
+  /// The long edge of the returned image; nil keeps full resolution (zoom). Never upscales.
+  public var maxEdge: Int?
+  /// The part of the screen to return; nil is the whole screen.
+  public var region: DisplayRect?
+  /// An earlier screenshot's id: return only what changed since.
+  public var diffFrom: String?
+
+  public init(
+    format: DisplayImageFormat = .png, quality: Int = Self.defaultQuality,
+    maxEdge: Int? = Self.defaultMaxEdge, region: DisplayRect? = nil, diffFrom: String? = nil
+  ) {
+    self.format = format
+    self.quality = quality
+    self.maxEdge = maxEdge
+    self.region = region
+    self.diffFrom = diffFrom
+  }
+}
+
+/// One screenshot: the image the model sees and where it sits on the guest screen.
+public struct ScreenCapture: Sendable, Hashable {
+  /// The id a later screenshot may name in `diffFrom`.
+  public var id: String
+  /// The guest screen size in pixels (unscaled).
+  public var width: Int
+  public var height: Int
+  /// Image pixels per guest pixel: guest = frame origin + image / scale.
+  public var scale: Double
+  /// The encoded image; nil when `unchanged`.
+  public var image: Data?
+  public var mimeType: String?
+  /// With `diffFrom`: the guest rectangle the image shows; nil without it.
+  public var changedRegion: DisplayRect?
+  /// With `diffFrom`: nothing changed and no image is returned.
+  public var unchanged: Bool
+
+  public init(
+    id: String, width: Int, height: Int, scale: Double, image: Data?, mimeType: String?,
+    changedRegion: DisplayRect? = nil, unchanged: Bool = false
+  ) {
+    self.id = id
+    self.width = width
+    self.height = height
+    self.scale = scale
+    self.image = image
+    self.mimeType = mimeType
+    self.changedRegion = changedRegion
+    self.unchanged = unchanged
+  }
+}
+
+/// Pointer buttons held during a pointer event. Wheel buttons are pressed and released to scroll
+/// one notch (RFB and X11 convention).
+public struct DisplayButtons: OptionSet, Sendable, Hashable {
+  public let rawValue: UInt8
+  public init(rawValue: UInt8) { self.rawValue = rawValue }
+
+  public static let left = DisplayButtons(rawValue: 1 << 0)
+  public static let middle = DisplayButtons(rawValue: 1 << 1)
+  public static let right = DisplayButtons(rawValue: 1 << 2)
+  public static let wheelUp = DisplayButtons(rawValue: 1 << 3)
+  public static let wheelDown = DisplayButtons(rawValue: 1 << 4)
+  public static let wheelLeft = DisplayButtons(rawValue: 1 << 5)
+  public static let wheelRight = DisplayButtons(rawValue: 1 << 6)
+}
+
+/// An open connection to one guest display: screenshots and input. The engine-side
+/// implementation (RFB) lives outside Core; the MCP layer holds one per VM.
+public protocol DisplaySession: Sendable {
+  /// The current guest screen size in pixels.
+  func screenSize() async throws(VMLabError) -> (width: Int, height: Int)
+  func screenshot(_ request: ScreenshotRequest) async throws(VMLabError) -> ScreenCapture
+  /// Moves the pointer to (`x`, `y`) in guest pixels with `buttons` held.
+  func pointer(x: Int, y: Int, buttons: DisplayButtons) async throws(VMLabError)
+  /// Strikes a key or chord in xdotool spelling: `Return`, `ctrl+c`, `cmd+shift+4`.
+  func press(_ chord: String) async throws(VMLabError)
+  /// Types `text` one character at a time.
+  func type(_ text: String) async throws(VMLabError)
+  func close() async
+}
+
+/// Opens display sessions on endpoints.
+public protocol DisplayConnector: Sendable {
+  func connect(_ endpoint: DisplayEndpoint) async throws(VMLabError) -> any DisplaySession
+}
+
+/// The display connector this process uses; `vmlab` registers the RFB one at startup.
+public final class DisplayConnectorRegistry: Sendable {
+  private let current = Mutex<(any DisplayConnector)?>(nil)
+
+  public init(_ connector: (any DisplayConnector)? = nil) {
+    current.withLock { $0 = connector }
+  }
+
+  public func register(_ connector: any DisplayConnector) {
+    current.withLock { $0 = connector }
+  }
+
+  /// The registered connector; `internal` when this build registered none.
+  public func connector() throws(VMLabError) -> any DisplayConnector {
+    guard let connector = current.withLock({ $0 }) else {
+      throw VMLabError(
+        code: .internal, message: "No display connector is registered in this process",
+        hint: "This vmlab build cannot reach guest displays; run vmlab doctor.")
+    }
+    return connector
+  }
+}
+
+public enum Displays {
+  public static let shared = DisplayConnectorRegistry()
 }

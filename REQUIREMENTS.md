@@ -493,7 +493,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   on the Debian guest's tty1 login prompt shown by QEMU's VNC, type `debian` + Return; the next
   screenshot shows `Password:` (the image differs from the previous one in the prompt region).
 
-- [ ] **R-502 `vm_computer`**
+- [x] **R-502 `vm_computer`**
   The tool of Appendix C with the computer-use action set: `screenshot` (PNG, scaled so the long
   edge ≤ `maxEdge`, default 1280, with the scale factor returned; coordinates in every other
   action are in the unscaled guest pixel space unless `scaled: true`), `left_click`, `right_click`,

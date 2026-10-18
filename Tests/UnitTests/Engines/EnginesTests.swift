@@ -7,7 +7,10 @@ import VMLabEngines
   @Test func registerAllFillsEveryEngineProfile() throws {
     let registry = BackendRegistry()
     let store = Store(home: FileManager.default.temporaryDirectory.appending(path: "vmlab-engines"))
-    Engines.registerAll(store: store, into: registry)
+    let displays = DisplayConnectorRegistry()
+    #expect(throws: VMLabError.self) { try displays.connector() }
+    Engines.registerAll(store: store, into: registry, displays: displays)
+    #expect(try displays.connector() is RFBDisplayConnector)
     #expect(Set(registry.profiles) == [.qemuHVF, .qemuTCG, .vzLinux])
     #expect(Set(registry.profiles) == Set(Engines.profiles))
     for profile in Engines.profiles {
