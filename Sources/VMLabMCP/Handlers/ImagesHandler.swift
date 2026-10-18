@@ -8,8 +8,6 @@ import VMLabCore
 struct ImagesHandler: ToolHandler {
   var spec: ToolSpec { .images }
 
-  static let owners: [String: String] = [:]
-
   func call(_ arguments: ToolArguments, context: ToolContext) async throws(VMLabError)
     -> ToolResult
   {
@@ -97,14 +95,9 @@ struct ImagesHandler: ToolHandler {
     case "prune":
       return try await Self.prune(confirm: try arguments.bool("confirm"), context: context)
     default:
-      if let owner = Self.owners[action] {
-        throw VMLabError.invalidRequest(
-          field: "action", reason: "images \(action) is not built yet (\(owner))",
-          hint: "list, pull, remove, register, prune and extract_kernel work now.")
-      }
       throw VMLabError.invalidRequest(
         field: "action", reason: "\(action) is not an images action",
-        hint: "Use list, pull or remove.")
+        hint: "Use list, pull, remove, register, extract_kernel, template_create or prune.")
     }
   }
 
