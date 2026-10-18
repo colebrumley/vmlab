@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import Synchronization
 import VMLabCore
 
 /// Everything `QEMUMachine.launch` needs.
@@ -207,15 +208,50 @@ public actor QEMUMachine {
     }
     return try await connect(
       layout: layout, pid: pid, gdbPort: gdbPort, sshPort: sshPort, forwards: forwards,
-      timeout: connectTimeout)
+      timeout: connectTimeout, monitors: monitors(layout))
+  }
+
+  /// The QMP sockets an attach may use: `qmp.sock`, and `qmp2.sock` when the guest has one (a
+  /// guest started before it existed has only the first).
+  static func monitors(_ layout: QEMULayout) -> [String] {
+    [layout.qmpSocket, layout.secondaryQMPSocket].map(\.path).filter {
+      FileManager.default.fileExists(atPath: $0)
+    }
+  }
+
+  /// A QMP client on whichever of `paths` greets first. QEMU leaves a connection to a monitor
+  /// another client holds in its listen backlog, ungreeted, so the monitors are tried at once and
+  /// the losers closed; when none greets within `timeout`, the first one's error is thrown.
+  static func connectFirst(
+    _ paths: [String], connectTimeout: Duration, timeout: Duration = QMPClient.defaultTimeout
+  ) async throws -> QMPClient {
+    guard paths.count > 1 else {
+      return try await QMPClient.connect(
+        socketPath: paths.first ?? "", connectTimeout: connectTimeout, timeout: timeout)
+    }
+    let race = QMPRace(count: paths.count)
+    return try await withCheckedThrowingContinuation { continuation in
+      race.start(continuation)
+      for (index, path) in paths.enumerated() {
+        Task {
+          do {
+            let client = try await QMPClient.connect(
+              socketPath: path, connectTimeout: connectTimeout, timeout: timeout)
+            if !race.win(client) { await client.close() }
+          } catch {
+            race.lose(index, error)
+          }
+        }
+      }
+    }
   }
 
   private static func connect(
     layout: QEMULayout, pid: Int32, gdbPort: Int?, sshPort: Int?, forwards: [PortForward]?,
-    timeout: Duration
+    timeout: Duration, monitors: [String]? = nil
   ) async throws -> QEMUMachine {
-    let qmp = try await QMPClient.connect(
-      socketPath: layout.qmpSocket.path, connectTimeout: timeout)
+    let qmp = try await connectFirst(
+      monitors ?? [layout.qmpSocket.path], connectTimeout: timeout)
     let serial = SerialChannel(socketPath: layout.serialSocket.path, logURL: layout.serialLog)
     do {
       try await serial.start(connectTimeout: timeout)
@@ -394,5 +430,48 @@ public actor QEMUMachine {
       code: .internal, message: "Could not \(what): \(error.localizedDescription)",
       hint: "Check the permissions and free space of VMLAB_HOME.",
       data: ["error": .string("\(error)")])
+  }
+}
+
+/// The outcome of `connectFirst`: the first client to greet, or every attempt's error.
+final class QMPRace: Sendable {
+  private struct State {
+    var continuation: CheckedContinuation<QMPClient, any Error>?
+    var errors: [Int: any Error] = [:]
+    var done = false
+  }
+  private let count: Int
+  private let state = Mutex(State())
+
+  init(count: Int) { self.count = count }
+
+  func start(_ continuation: CheckedContinuation<QMPClient, any Error>) {
+    state.withLock { $0.continuation = continuation }
+  }
+
+  /// True when `client` won; a later winner must close itself.
+  func win(_ client: QMPClient) -> Bool {
+    let continuation = state.withLock { s -> CheckedContinuation<QMPClient, any Error>? in
+      guard !s.done else { return nil }
+      s.done = true
+      defer { s.continuation = nil }
+      return s.continuation
+    }
+    continuation?.resume(returning: client)
+    return continuation != nil
+  }
+
+  func lose(_ index: Int, _ error: any Error) {
+    let finished = state.withLock {
+      s -> (CheckedContinuation<QMPClient, any Error>, any Error)? in
+      s.errors[index] = error
+      guard !s.done, s.errors.count == count, let continuation = s.continuation else {
+        return nil
+      }
+      s.done = true
+      s.continuation = nil
+      return (continuation, s.errors[0] ?? error)
+    }
+    if let (continuation, error) = finished { continuation.resume(throwing: error) }
   }
 }

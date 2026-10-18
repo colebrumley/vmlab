@@ -40,6 +40,8 @@ virtio-keyboard-pci
 virtio-tablet-pci
 -qmp
 unix:/Users/someone/.vmlab/vms/vm-tcga64/qmp.sock,server,wait=off
+-qmp
+unix:/Users/someone/.vmlab/vms/vm-tcga64/qmp2.sock,server,wait=off
 -serial
 unix:/Users/someone/.vmlab/vms/vm-tcga64/serial.sock,server,wait=off
 -vnc

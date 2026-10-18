@@ -204,6 +204,7 @@ public enum QEMUCommandLine {
       ]
     }
     args += ["-qmp", "unix:\(layout.qmpSocket.path),server,wait=off"]
+    args += ["-qmp", "unix:\(layout.secondaryQMPSocket.path),server,wait=off"]
     args += ["-serial", "unix:\(layout.serialSocket.path),server,wait=off"]
     args += ["-vnc", "unix:\(layout.vncSocket.path)"]
     if plan.grants(.gdb) {
