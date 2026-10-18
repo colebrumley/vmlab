@@ -20,4 +20,6 @@ public enum RFBError: Error, Equatable, Sendable {
   case timeout
   /// The framebuffer has no pixels yet.
   case emptyFramebuffer
+  /// A key name in a chord is neither a named key nor a single character.
+  case unknownKey(String)
 }
