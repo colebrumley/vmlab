@@ -218,7 +218,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   **Verify:** unit tests: round-trip; a fixture at each released schema version loads; two
   concurrent saves from two processes (spawned test helper) never corrupt the file.
 
-- [ ] **R-105 Backend protocol and registry**
+- [x] **R-105 Backend protocol and registry**
   `protocol Backend { var profile: Profile; func create(_: VMRecord, plan: Plan) async throws;
   func start/stop/kill/pause/resume/destroy; func attach(_: VMRecord) async throws -> RunningVM }`
   and `protocol RunningVM` exposing optional channel handles: `serial: SerialChannel?`, `display:
