@@ -38,9 +38,16 @@ struct GenDocs: ParsableCommand {
   @Argument(help: "features (docs/FEATURES.md) or tools (docs/TOOLS.md)")
   var document: Document
 
-  func run() {
+  func run() throws {
     switch document {
-    case .features: print(FeatureDocs.markdown(), terminator: "")
+    case .features:
+      // The last column is what this host's slow probes recorded (VMLAB_HOME, default ~/.vmlab).
+      let environment = ProcessInfo.processInfo.environment
+      let home =
+        environment["VMLAB_HOME"].map { URL(filePath: $0) }
+        ?? FileManager.default.homeDirectoryForCurrentUser.appending(path: ".vmlab")
+      let probes = try SlowProbes.load(from: SlowProbes.url(home: home))
+      print(FeatureDocs.markdown(probes: probes), terminator: "")
     case .tools: print(ToolDocs.markdown(), terminator: "")
     }
   }
