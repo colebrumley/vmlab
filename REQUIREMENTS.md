@@ -378,10 +378,11 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   kernel and initrd extracted from the pulled image (`images extract-kernel debian-13-arm64`) with
   `console=ttyAMA0 root=/dev/vda1` and reach `login:` on serial.
 
-- [ ] **R-306 Custom devices**
+- [x] **R-306 Custom devices**
   `Requirements.extra.qemuArgs: [String]` is passed through verbatim for the `custom_devices`
   feature, after vmlab's own arguments, with a denylist (`-qmp`, `-serial`, `-vnc`, `-gdb`,
-  `-pidfile`, `-daemonize`, `-monitor`) that raises `invalid_request`.
+  `-pidfile`, `-daemonize`, `-monitor`, and their equivalents `-s`, `-mon`, `-qmp-pretty`,
+  `-readconfig`) that raises `invalid_request`.
   **Verify:** unit tests for pass-through and the denylist.
 
 - [ ] **R-307 qcow2 checkpoints and the live-snapshot probe**

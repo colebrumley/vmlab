@@ -131,6 +131,16 @@ public enum QEMUCommandLine {
       args += ["-gdb", "tcp:127.0.0.1:\(port)"]
     }
     args += ["-pidfile", layout.pidFile.path, "-display", "none", "-daemonize", "-S"]
+    // R-306: the request's own arguments, verbatim and last, when the plan grants them.
+    if let extra = record.extra, !extra.qemuArgs.isEmpty {
+      guard plan.grants(.customDevices) else {
+        throw VMLabError.invalidRequest(
+          field: "extra.qemuArgs", reason: "the plan does not grant custom_devices",
+          hint: "Require custom_devices, or drop extra.qemuArgs.")
+      }
+      try extra.validate()
+      args += extra.qemuArgs
+    }
     return args
   }
 

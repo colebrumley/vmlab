@@ -544,6 +544,8 @@ The `requirements` object of `vm_plan`, `vm_create` and `fleet` (`Requirements` 
 | `boot.kernel` | string |  | Host path of the kernel image (mode kernel). Omitted: the image's kernel, extracted from it on first use (images extract_kernel). |
 | `boot.loadAddress` | string |  | Guest physical address for binary, hex such as 0x40080000 (mode binary). |
 | `boot.mode` | `disk` \| `kernel` \| `firmware` \| `binary`, default `disk` |  | disk boots the image; kernel boots kernel/initrd directly; firmware boots a supplied firmware image; binary loads a raw image at loadAddress and starts the CPU there. |
+| `extra` | object |  | Engine-specific additions. |
+| `extra.qemuArgs` | array of string |  | Arguments appended verbatim after vmlab's own (implies custom_devices, so QEMU), e.g. ["-device", "virtio-rng-pci"]. -qmp, -serial, -vnc, -gdb, -s, -pidfile, -daemonize, -monitor, -mon and -readconfig are refused: vmlab owns them. |
 | `image` | string |  | Image or template name (images list). Omitted: the default image for the guest. |
 | `network` | object |  | Networking; omitted means NAT. |
 | `network.forwards` | array of object |  | Guest ports to make reachable from the host. |

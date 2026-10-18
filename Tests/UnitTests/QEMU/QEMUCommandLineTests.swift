@@ -117,6 +117,33 @@ import VMLabCore
     #expect(throws: VMLabError.self) { try args(BootSpec(mode: .kernel)) }
   }
 
+  /// R-306: extra.qemuArgs are appended verbatim, last, when the plan grants custom_devices.
+  @Test func customDevicesPassThroughLast() throws {
+    var record = try Self.record("tcg-arm64")
+    record.extra = ExtraSpec(qemuArgs: ["-device", "virtio-rng-pci", "-global", "a.b=c,d"])
+    record.features.append(.customDevices)
+    let args = try QEMUCommandLine.arguments(
+      record: record, plan: Self.plan(for: record), layout: Self.layout(record),
+      options: QEMULaunchOptions(firmware: Self.firmware))
+    #expect(Array(args.suffix(4)) == ["-device", "virtio-rng-pci", "-global", "a.b=c,d"])
+    #expect(args.firstIndex(of: "-S")! < args.count - 4)
+
+    record.features.removeAll { $0 == .customDevices }
+    #expect {
+      try QEMUCommandLine.arguments(
+        record: record, plan: Self.plan(for: record), layout: Self.layout(record),
+        options: QEMULaunchOptions(firmware: Self.firmware))
+    } throws: { ($0 as? VMLabError)?.code == .invalidRequest }
+
+    record.features.append(.customDevices)
+    record.extra = ExtraSpec(qemuArgs: ["-monitor", "stdio"])
+    #expect {
+      try QEMUCommandLine.arguments(
+        record: record, plan: Self.plan(for: record), layout: Self.layout(record),
+        options: QEMULaunchOptions(firmware: Self.firmware))
+    } throws: { ($0 as? VMLabError)?.data["field"] == .string("extra.qemuArgs[0]") }
+  }
+
   @Test func alwaysHaltedDaemonizedAndHeadless() throws {
     let record = try Self.record("hvf")
     let args = try QEMUCommandLine.arguments(

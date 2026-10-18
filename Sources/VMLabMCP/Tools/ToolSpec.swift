@@ -203,6 +203,15 @@ enum Schema {
               "Start with the CPU halted so vm_debug sees the first "
                 + "instruction."),
           ], description: "How the guest boots; omitted means from its disk."),
+        "extra": object(
+          [
+            "qemuArgs": array(
+              string("One QEMU command-line argument."),
+              "Arguments appended verbatim after vmlab's own (implies custom_devices, so QEMU), "
+                + "e.g. [\"-device\", \"virtio-rng-pci\"]. -qmp, -serial, -vnc, -gdb, -s, "
+                + "-pidfile, -daemonize, -monitor, -mon and -readconfig are refused: vmlab owns them."
+            )
+          ], description: "Engine-specific additions."),
       ], required: ["guest"],
       description: "What the VM must be. Only guest is required; every other field has a default.")
   }()

@@ -1,6 +1,7 @@
 import Foundation
 import Testing
-import VMLabCore
+
+@testable import VMLabCore
 
 @Suite struct FeaturesTests {
   static func fixture(_ name: String) throws -> String {
@@ -175,6 +176,35 @@ import VMLabCore
     let mac =
       #"{"guest":{"os":"macos","arch":"arm64"},"boot":{"mode":"binary","binary":"/b","loadAddress":"0x1000"}}"#
     #expect(throws: VMLabError.self) { try Self.decode(mac) }
+  }
+
+  /// R-306: extra.qemuArgs decodes, implies custom_devices, and the denylist is invalid_request.
+  @Test func qemuArgsPassThroughAndDenylist() throws {
+    let ok = try Self.decode(
+      #"{"guest":{"os":"linux","arch":"arm64"},"extra":{"qemuArgs":["-device","virtio-rng-pci"]}}"#)
+    #expect(ok.extra?.qemuArgs == ["-device", "virtio-rng-pci"])
+    #expect(ok.impliedFeatures.map(\.feature) == [.customDevices])
+    let empty = try Self.decode(#"{"guest":{"os":"linux","arch":"arm64"},"extra":{}}"#)
+    #expect(empty.extra?.qemuArgs == [] && empty.impliedFeatures.isEmpty)
+    for denied in [
+      "-qmp", "-serial", "-vnc", "-gdb", "-pidfile", "-daemonize", "-monitor", "--monitor",
+      "-gdb=tcp::1", "-s", "-mon", "-qmp-pretty", "-readconfig",
+    ] {
+      let json =
+        #"{"guest":{"os":"linux","arch":"arm64"},"extra":{"qemuArgs":["-device","x",""#
+        + denied + #"","y"]}}"#
+      #expect {
+        _ = try Self.decode(json)
+      } throws: { error in
+        guard let error = error as? VMLabError else { return false }
+        return error.code == .invalidRequest && error.data["field"] == .string("extra.qemuArgs[2]")
+      }
+    }
+    // A value that merely looks like a denied name is an argument, not an option.
+    #expect(ExtraSpec.optionName("serial") == nil)
+    #expect(ExtraSpec.optionName("--gdb=tcp::1") == "gdb")
+    let mac = #"{"guest":{"os":"macos","arch":"arm64"},"extra":{"qemuArgs":["-device","x"]}}"#
+    #expect(throws: Never.self) { _ = try Self.decode(mac) }
   }
 
   @Test func memberwiseInitValidates() {

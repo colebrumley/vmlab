@@ -263,6 +263,53 @@ public struct BootSpec: Codable, Sendable, Hashable {
   }
 }
 
+/// Engine-specific additions to a request (R-306). `qemuArgs` are appended verbatim after
+/// vmlab's own QEMU arguments; naming any implies `custom_devices`. Options vmlab owns (its
+/// control sockets and process handling) are refused with `invalid_request`.
+public struct ExtraSpec: Codable, Sendable, Hashable {
+  public var qemuArgs: [String]
+
+  /// QEMU options a request may not pass: vmlab's QMP, serial, VNC and GDB endpoints, its pid
+  /// file and daemonizing, and any second monitor. Matched on the option name with one or two
+  /// leading dashes and without an `=value` suffix; `-s` is `-gdb tcp::1234`, `-qmp-pretty`
+  /// and `-mon` are monitors, and `-readconfig` could add any of them from a file.
+  public static let deniedQEMUOptions: Set<String> = [
+    "qmp", "qmp-pretty", "serial", "vnc", "gdb", "s", "pidfile", "daemonize", "monitor", "mon",
+    "readconfig",
+  ]
+
+  public init(qemuArgs: [String] = []) { self.qemuArgs = qemuArgs }
+
+  enum CodingKeys: String, CodingKey { case qemuArgs }
+
+  public init(from decoder: any Decoder) throws {
+    let c = try decoder.container(keyedBy: CodingKeys.self)
+    qemuArgs = try c.decodeIfPresent([String].self, forKey: .qemuArgs) ?? []
+  }
+
+  /// The option name of a QEMU argument (`-device` → `device`, `--gdb=x` → `gdb`), or nil for a
+  /// value.
+  public static func optionName(_ argument: String) -> String? {
+    guard argument.hasPrefix("-"), argument.count > 1 else { return nil }
+    var name = argument.dropFirst()
+    if name.hasPrefix("-") { name = name.dropFirst() }
+    return String(name.prefix { $0 != "=" })
+  }
+
+  /// Throws `invalid_request` naming the first denied option.
+  public func validate() throws(VMLabError) {
+    for (index, argument) in qemuArgs.enumerated() {
+      if let name = Self.optionName(argument), Self.deniedQEMUOptions.contains(name) {
+        throw .invalidRequest(
+          field: "extra.qemuArgs[\(index)]",
+          reason: "\(argument) is managed by vmlab and cannot be passed through",
+          hint: "Drop \(argument); vmlab already wires QMP, serial, VNC, GDB and the process. "
+            + "Use the vm_serial, vm_computer and vm_debug tools instead.")
+      }
+    }
+  }
+}
+
 /// The `requirements` input of `vm_plan`, `vm_create` and `fleet create` (Appendix C). Decoding
 /// rejects a request that contradicts itself with `invalid_request`.
 public struct Requirements: Codable, Sendable, Hashable {
@@ -273,12 +320,13 @@ public struct Requirements: Codable, Sendable, Hashable {
   public var network: NetworkSpec
   public var image: String?
   public var boot: BootSpec?
+  public var extra: ExtraSpec?
 
   /// Builds a request and checks it as decoding would.
   public init(
     guest: GuestSpec, require: [Feature] = [], prefer: [Feature] = [],
     resources: ResourceSpec = ResourceSpec(), network: NetworkSpec = NetworkSpec(),
-    image: String? = nil, boot: BootSpec? = nil
+    image: String? = nil, boot: BootSpec? = nil, extra: ExtraSpec? = nil
   ) throws(VMLabError) {
     self.guest = guest
     self.require = require
@@ -287,11 +335,12 @@ public struct Requirements: Codable, Sendable, Hashable {
     self.network = network
     self.image = image
     self.boot = boot
+    self.extra = extra
     try validate()
   }
 
   enum CodingKeys: String, CodingKey {
-    case guest, require, prefer, resources, network, image, boot
+    case guest, require, prefer, resources, network, image, boot, extra
   }
 
   public init(from decoder: any Decoder) throws {
@@ -303,6 +352,7 @@ public struct Requirements: Codable, Sendable, Hashable {
     network = try c.decodeIfPresent(NetworkSpec.self, forKey: .network) ?? NetworkSpec()
     image = try c.decodeIfPresent(String.self, forKey: .image)
     boot = try c.decodeIfPresent(BootSpec.self, forKey: .boot)
+    extra = try c.decodeIfPresent(ExtraSpec.self, forKey: .extra)
     try validate()
   }
 
@@ -391,6 +441,9 @@ public struct Requirements: Codable, Sendable, Hashable {
       }
       if boot.haltAtStart { named.append((.haltAtStart, "boot.haltAtStart")) }
     }
+    if let extra, !extra.qemuArgs.isEmpty {
+      named.append((.customDevices, "extra.qemuArgs"))
+    }
     return named
   }
 
@@ -438,6 +491,7 @@ public struct Requirements: Codable, Sendable, Hashable {
           hint: "Give boot.loadAddress in hex, such as \"0x40080000\".")
       }
     }
+    try extra?.validate()
     try checkContradictions()
   }
 

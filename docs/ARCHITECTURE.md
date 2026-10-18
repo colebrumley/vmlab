@@ -51,7 +51,8 @@ and tablet, QMP/serial/VNC unix sockets, `-gdb` when granted, `-pidfile`, `-daem
 image or `-bios` ROM, `kernel` `-kernel/-initrd/-append/-dtb` with no firmware, `binary`
 `-device loader,...,cpu-num=0` with no firmware; `QEMUBackend` takes `VMRecord.boot`, fills a
 missing kernel from the image (extracting it on first use) and attaches no disk to a kernel-only
-image. `QMPClient` (an actor over a `QMPTransport`; `UnixQMPTransport` reads on its own thread) does
+image. `VMRecord.extra.qemuArgs` (R-306, `ExtraSpec` in Core, which refuses vmlab's own
+options) go last and verbatim when the plan grants `custom_devices`. `QMPClient` (an actor over a `QMPTransport`; `UnixQMPTransport` reads on its own thread) does
 the greeting and `qmp_capabilities`, matches replies to `vmlab-<n>` ids (QMP errors become
 `engine_error`, silence `timeout`, a closed socket `guest_unreachable`) and broadcasts events to
 every `events()` stream; reconnecting is `connect(socketPath:)` again once the previous client has
