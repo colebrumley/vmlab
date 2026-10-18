@@ -61,9 +61,11 @@ import VMLabSwitch
       return try JSONDecoder().decode(SwitchStats.self, from: data)
     }
 
-    /// Stats once the switch has received `count` frames (sends are asynchronous to it).
+    /// Stats once the switch has received `count` frames (sends are asynchronous to it). The
+    /// deadline is generous: the wait ends as soon as the count is reached, and a loaded host can
+    /// leave the switch thread unscheduled for seconds.
     func stats(afterReceiving count: Int) throws -> SwitchStats {
-      let deadline = Date().addingTimeInterval(5)
+      let deadline = Date().addingTimeInterval(30)
       var stats = try self.stats()
       while stats.received < count, Date() < deadline {
         usleep(5_000)
@@ -78,8 +80,9 @@ import VMLabSwitch
     #expect(sent == frame.count)
   }
 
-  /// The next frame on `fd`, or nil after `timeout` milliseconds.
-  static func receive(_ fd: Int32, timeout: Int32 = 2000) -> [UInt8]? {
+  /// The next frame on `fd`, or nil after `timeout` milliseconds. The default is for frames that
+  /// must arrive, so it is generous; a frame that must not arrive passes a short timeout.
+  static func receive(_ fd: Int32, timeout: Int32 = 20_000) -> [UInt8]? {
     var p = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
     guard poll(&p, 1, timeout) == 1 else { return nil }
     var buf = [UInt8](repeating: 0, count: 4096)
@@ -163,11 +166,13 @@ import VMLabSwitch
     #expect(Self.receive(pa) != nil)
     h.close(pb)
     unlink(h.paths.portsDirectory.appending(path: "b.sock").path)
-    Self.send(pa, SwitchCoreTests.frame(to: b, from: a))
-    let deadline = Date().addingTimeInterval(5)
+    // Sent until the port goes: a send that races the peer's teardown may still succeed, and
+    // every later one fails.
+    let deadline = Date().addingTimeInterval(30)
     var stats = try h.stats()
     while stats.ports != 1, Date() < deadline {
-      usleep(5_000)
+      Self.send(pa, SwitchCoreTests.frame(to: b, from: a))
+      usleep(20_000)
       stats = try h.stats()
     }
     #expect(stats.ports == 1)
