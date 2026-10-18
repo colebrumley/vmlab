@@ -24,6 +24,7 @@ let package = Package(
     .target(name: "VMLabVZ", dependencies: ["VMLabCore"]),
     .target(name: "VMLabRFB", dependencies: ["VMLabCore"]),
     .target(name: "VMLabGDB", dependencies: ["VMLabCore"]),
+    .target(name: "VMLabSwitch"),
     .target(
       name: "VMLabMCP",
       dependencies: ["VMLabCore", .product(name: "MCP", package: "swift-sdk")]
@@ -46,13 +47,16 @@ let package = Package(
     .executableTarget(
       name: "vmlab-switch",
       dependencies: [
-        "VMLabCore",
+        "VMLabCore", "VMLabSwitch",
         .product(name: "ArgumentParser", package: "swift-argument-parser"),
+        .product(name: "Logging", package: "swift-log"),
       ]
     ),
     .testTarget(
       name: "UnitTests",
-      dependencies: ["VMLabCore", "VMLabQEMU", "VMLabVZ", "VMLabRFB", "VMLabGDB", "VMLabMCP"]
+      dependencies: [
+        "VMLabCore", "VMLabQEMU", "VMLabVZ", "VMLabRFB", "VMLabGDB", "VMLabMCP", "VMLabSwitch",
+      ]
     ),
     .testTarget(
       name: "IntegrationTests",

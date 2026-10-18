@@ -1,0 +1,42 @@
+<?xml version="1.0"?>
+<!DOCTYPE feature SYSTEM "gdb-target.dtd">
+<feature name="org.gnu.gdb.aarch64.fpu">
+  <vector id="v2d" type="ieee_double" count="2"/>
+  <union id="aarch64v">
+    <field name="d" type="v2d"/>
+  </union>
+  <reg name="v0" bitsize="128" type="aarch64v" regnum="34"/>
+  <reg name="v1" bitsize="128" type="aarch64v"/>
+  <reg name="v2" bitsize="128" type="aarch64v"/>
+  <reg name="v3" bitsize="128" type="aarch64v"/>
+  <reg name="v4" bitsize="128" type="aarch64v"/>
+  <reg name="v5" bitsize="128" type="aarch64v"/>
+  <reg name="v6" bitsize="128" type="aarch64v"/>
+  <reg name="v7" bitsize="128" type="aarch64v"/>
+  <reg name="v8" bitsize="128" type="aarch64v"/>
+  <reg name="v9" bitsize="128" type="aarch64v"/>
+  <reg name="v10" bitsize="128" type="aarch64v"/>
+  <reg name="v11" bitsize="128" type="aarch64v"/>
+  <reg name="v12" bitsize="128" type="aarch64v"/>
+  <reg name="v13" bitsize="128" type="aarch64v"/>
+  <reg name="v14" bitsize="128" type="aarch64v"/>
+  <reg name="v15" bitsize="128" type="aarch64v"/>
+  <reg name="v16" bitsize="128" type="aarch64v"/>
+  <reg name="v17" bitsize="128" type="aarch64v"/>
+  <reg name="v18" bitsize="128" type="aarch64v"/>
+  <reg name="v19" bitsize="128" type="aarch64v"/>
+  <reg name="v20" bitsize="128" type="aarch64v"/>
+  <reg name="v21" bitsize="128" type="aarch64v"/>
+  <reg name="v22" bitsize="128" type="aarch64v"/>
+  <reg name="v23" bitsize="128" type="aarch64v"/>
+  <reg name="v24" bitsize="128" type="aarch64v"/>
+  <reg name="v25" bitsize="128" type="aarch64v"/>
+  <reg name="v26" bitsize="128" type="aarch64v"/>
+  <reg name="v27" bitsize="128" type="aarch64v"/>
+  <reg name="v28" bitsize="128" type="aarch64v"/>
+  <reg name="v29" bitsize="128" type="aarch64v"/>
+  <reg name="v30" bitsize="128" type="aarch64v"/>
+  <reg name="v31" bitsize="128" type="aarch64v"/>
+  <reg name="fpsr" bitsize="32"/>
+  <reg name="fpcr" bitsize="32"/>
+</feature>
