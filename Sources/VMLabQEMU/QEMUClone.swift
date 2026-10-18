@@ -42,6 +42,7 @@ extension QEMUBackend {
     let frozen: URL
     if let checkpoint {
       frozen = directory.appending(path: "\(checkpoint.id).qcow2")
+      try recordIntent(frozen, of: target)
       if !FileManager.default.fileExists(atPath: frozen.path) {
         let tags = try await checkpointProvider(source).tags()
         guard tags.contains(checkpoint.id) else { throw QEMUCheckpoints.missing(checkpoint.id) }
@@ -70,6 +71,7 @@ extension QEMUBackend {
           data: ["vm": .string(source.id), "state": .string(VMState.running.rawValue)])
       }
       frozen = directory.appending(path: "disk-\(target.id).qcow2")
+      try recordIntent(frozen, of: target)
       try Self.cloneFile(from.disk, to: frozen)
     }
 
@@ -87,6 +89,13 @@ extension QEMUBackend {
       try Self.cloneFile(from.efiVars, to: to.efiVars)
     }
     return try Self.backingChain(of: to.disk, qemuImg: img)
+  }
+
+  /// CX-14: the frozen layer goes into the clone's `backingChain` before it or the overlay is
+  /// made, so `vmlab gc` never takes it for unused after a crash before the manager records the
+  /// full chain (which replaces this one).
+  func recordIntent(_ frozen: URL, of target: VMRecord) throws(VMLabError) {
+    try store.update(id: target.id) { $0.backingChain = [frozen.path] }
   }
 
   /// The files `disk` reads through, nearest first (not `disk` itself).

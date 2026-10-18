@@ -63,6 +63,25 @@ import VMLabCore
     func cleanUp() { try? FileManager.default.removeItem(at: home) }
   }
 
+  /// CX-14: a clone that fails (or crashes) after making the frozen layer but before the
+  /// manager records the chain left no record of it, and gc deleted the layer under the clone.
+  /// The layer is in the clone's backingChain before anything is made.
+  @Test(.enabled(if: ready)) func theFrozenLayerIsRecordedBeforeTheOverlay() async throws {
+    let f = try Fixture()
+    defer { try? FileManager.default.removeItem(at: f.home) }
+    let target = try f.target("copy")
+    // The overlay cannot be made where a directory is.
+    try FileManager.default.createDirectory(
+      at: f.backend.layout(of: target.id).disk, withIntermediateDirectories: true)
+    await #expect(throws: VMLabError.self) {
+      _ = try await f.backend.clone(f.source, checkpoint: nil, into: target)
+    }
+    let frozen = f.backend.layout(of: f.source.id).directory.appending(
+      path: "backing/disk-\(target.id).qcow2")
+    #expect(FileManager.default.fileExists(atPath: frozen.path))
+    #expect(try f.store.load(id: target.id).backingChain == [frozen.path])
+  }
+
   @Test(.enabled(if: ready)) func clonesTheCurrentDiskAndACheckpoint() async throws {
     let f = try Fixture()
     defer { f.cleanUp() }
