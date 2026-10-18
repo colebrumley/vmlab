@@ -730,7 +730,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
 
 ## Phase 9 — Segments and fleets
 
-- [ ] **R-900 `vmlab-switch`**
+- [x] **R-900 `vmlab-switch`**
   A user-space Ethernet switch: one process per segment, `~/.vmlab/segments/<name>/switch.sock`
   (unix datagram); each port is a connected datagram socket; learning MAC table; broadcast
   flooding; frames over 1600 bytes dropped with a count; stats on `stats.sock`. No host

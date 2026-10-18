@@ -43,8 +43,20 @@ guest outlives the server, driven over `control.sock` in the VM directory. It is
 that needs `com.apple.security.virtualization`; `scripts/sign.sh` ad-hoc signs it with
 `Sources/vmlab-vz/vmlab-vz.entitlements` after every build.
 
-**`vmlab-switch`** (executable). A user-space Ethernet switch that joins guests of both engines on a
-private segment, with no root and no `vmnet` (C2).
+**`VMLabSwitch`** (library). The segment switch with no engine and no Core dependency.
+`SwitchCore` is the forwarding logic on integer ports: a learning MAC table with aging, flooding of
+broadcast, multicast and unknown destinations, and counters (`SwitchStats`) for frames over 1600
+bytes, malformed frames and congested ports. `SwitchServer` puts it on sockets in
+`$VMLAB_HOME/segments/<name>/` (`SegmentPaths`): every sender to the unix datagram `switch.sock`
+becomes a port with its own datagram socket connected back to the sender's bound path (how QEMU's
+`-netdev dgram` attaches), `attach(fd:)` adds a port on one end of a `socketpair` (for VZ, R-901),
+a port whose peer is gone is removed on the next send, and a connection to `stats.sock` receives
+the counters as one JSON line. One thread runs a `poll` loop; there is no host connectivity
+through the switch.
+
+**`vmlab-switch`** (executable). `vmlab-switch <name>`: one process per segment running
+`SwitchServer`, with no root and no `vmnet` (C2). It writes `switch.pid`, refuses to start beside a
+live switch for the same segment, and removes its sockets on SIGTERM or SIGINT.
 
 **`UnitTests`** (Swift Testing). Fast tests with no engines; file paths mirror `Sources/`, and
 fixtures come from `Tests/Fixtures/` through `#filePath`.
