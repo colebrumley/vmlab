@@ -332,6 +332,13 @@ public struct Requirements: Codable, Sendable, Hashable {
   private var namedFeatures: [(feature: Feature, field: String)] {
     var named = require.enumerated().map { ($0.element, "require[\($0.offset)]") }
     named += prefer.enumerated().map { ($0.element, "prefer[\($0.offset)]") }
+    return named + impliedFeatures
+  }
+
+  /// The features `network` and `boot` imply, with the field that implies each. The selector
+  /// requires them as if `require` named them.
+  var impliedFeatures: [(feature: Feature, field: String)] {
+    var named: [(feature: Feature, field: String)] = []
     switch network.mode {
     case .nat: named.append((.netNAT, "network.mode"))
     case .disabled: named.append((.netNone, "network.mode"))
