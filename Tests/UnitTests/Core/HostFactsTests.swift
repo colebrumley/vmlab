@@ -62,7 +62,7 @@ import VMLabCore
   }
 
   /// Unknown counts as no for selection and is reported unverified. The matrix-level assertion
-  /// (an unknown probe makes the dependent feature unavailable) belongs to R-102.
+  /// (an unknown probe makes the dependent feature unavailable) is in CapabilitiesTests.
   @Test func unknownCountsAsNoAndIsUnverified() throws {
     #expect(!ProbeResult.unknown.countsAsYes)
     #expect(!ProbeResult.no.countsAsYes)

@@ -52,10 +52,15 @@ let package = Package(
         .product(name: "Logging", package: "swift-log"),
       ]
     ),
+    // Spawned by StoreTests to write one VM record from a second process; not a product.
+    .executableTarget(
+      name: "vmlab-store-helper", dependencies: ["VMLabCore"], path: "Tests/StoreHelper"
+    ),
     .testTarget(
       name: "UnitTests",
       dependencies: [
         "VMLabCore", "VMLabQEMU", "VMLabVZ", "VMLabRFB", "VMLabGDB", "VMLabMCP", "VMLabSwitch",
+        "vmlab-store-helper",
       ]
     ),
     .testTarget(
