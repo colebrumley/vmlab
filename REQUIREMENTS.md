@@ -849,7 +849,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   every `[VERIFY]` row; this document's Appendix B is updated to agree (constraint C7).
   **Verify:** `scripts/gen-docs.sh` output has no `unknown` on the dev host; the C7 check passes.
 
-- [ ] **R-1104 `docs/AGENT.md`: how a model should use vmlab**
+- [x] **R-1104 `docs/AGENT.md`: how a model should use vmlab**
   Written for the model that will connect: the request shape, how to read a plan or an
   unsatisfiable result, the rule "ask for every feature you might need up front because a VM
   cannot change engine", which channel to prefer for which job (serial when the display is dead,

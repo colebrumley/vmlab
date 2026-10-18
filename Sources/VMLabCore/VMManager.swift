@@ -245,11 +245,14 @@ public actor VMManager {
   }
 
   /// The target when the guest answered SSH; neither when it is not one to wait for (no
-  /// `exec_ssh`, networking off); otherwise the warning.
+  /// `exec_ssh`, networking off, or a CPU that starts halted and runs nothing until a debugger
+  /// continues it); otherwise the warning.
   private func waitForSSH(
     _ record: VMRecord, backend: any Backend, timeout limit: Duration? = nil
   ) async -> (target: SSHTarget?, warning: String?) {
-    guard record.features.contains(.execSSH), record.network.mode != .disabled else {
+    guard record.features.contains(.execSSH), record.network.mode != .disabled,
+      record.boot?.haltAtStart != true
+    else {
       return (nil, nil)
     }
     let timeout =

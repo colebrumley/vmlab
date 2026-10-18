@@ -212,6 +212,21 @@ import VMLabCore
     #expect(readiness.targets.isEmpty)
   }
 
+  /// R-1104: a guest whose CPU starts halted answers nothing until a debugger continues it, so
+  /// its start does not wait out the SSH timeout.
+  @Test func startHaltedAtStartDoesNotWait() async throws {
+    let readiness = FakeReadiness(warning: "should not be asked")
+    let f = try Fixture(readiness: readiness)
+    f.backend.reportSSHPort(50022)
+    let draft = VMRecord(
+      id: "", name: "boot", profile: .qemuTCG, guest: GuestSpec(os: .linux, arch: .x86_64),
+      features: [], image: "debian-13-arm64", boot: BootSpec(haltAtStart: true))
+    let vm = try await f.manager.create(draft, plan: f.plan([.execSSH, .gdb, .haltAtStart]))
+    let outcome = try await f.manager.run(.start, on: vm.id)
+    #expect(outcome.warnings.isEmpty)
+    #expect(readiness.targets.isEmpty)
+  }
+
   @Test func startWithNoEndpointWarnsAtOnce() async throws {
     let readiness = FakeReadiness()
     let f = try Fixture(readiness: readiness)
