@@ -25,6 +25,8 @@ let package = Package(
     .target(name: "VMLabRFB", dependencies: ["VMLabCore"]),
     .target(name: "VMLabGDB", dependencies: ["VMLabCore"]),
     .target(name: "VMLabSwitch"),
+    // Names the engines so `vmlab` can register them without importing a backend module (C3).
+    .target(name: "VMLabEngines", dependencies: ["VMLabCore", "VMLabQEMU", "VMLabVZ"]),
     .target(
       name: "VMLabMCP",
       dependencies: [
@@ -35,7 +37,7 @@ let package = Package(
     .executableTarget(
       name: "vmlab",
       dependencies: [
-        "VMLabCore", "VMLabMCP",
+        "VMLabCore", "VMLabMCP", "VMLabEngines",
         .product(name: "ArgumentParser", package: "swift-argument-parser"),
       ]
     ),
@@ -63,7 +65,7 @@ let package = Package(
       name: "UnitTests",
       dependencies: [
         "VMLabCore", "VMLabQEMU", "VMLabVZ", "VMLabRFB", "VMLabGDB", "VMLabMCP", "VMLabSwitch",
-        "vmlab-store-helper", "vmlab",
+        "VMLabEngines", "vmlab-store-helper", "vmlab",
       ]
     ),
     .testTarget(

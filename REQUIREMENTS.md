@@ -103,6 +103,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   Sources/VMLabRFB/        VNC (RFB) client: framebuffer to PNG, pointer and key events
   Sources/VMLabGDB/        GDB remote serial protocol client
   Sources/VMLabMCP/        MCP server: tool schemas, handlers, stdio transport
+  Sources/VMLabEngines/    engine wiring: `Engines.registerAll` registers QEMU and VZ backends at startup
   Sources/vmlab/           CLI executable (ArgumentParser); `vmlab serve` runs the MCP server
   Sources/vmlab-vz/        VZ runner executable: one process per VZ guest, control socket (needs entitlement)
   Sources/vmlab-switch/    user-space Ethernet switch for private segments
@@ -115,7 +116,8 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   **Verify:** `Tests/UnitTests/BoundariesTests.swift` reads every file under `Sources/VMLabCore`
   and asserts none imports `Virtualization`, `MCP`, `VMLabQEMU`, `VMLabVZ`, `VMLabRFB`, `VMLabGDB`;
   and that `Sources/VMLabMCP` and `Sources/vmlab` import no backend module directly (only Core and
-  the `Backends` registry in Core). Test passes on the tree.
+  the `Backends` registry in Core); `Sources/vmlab` may import `VMLabEngines`, the one wiring module
+  that imports the backends to register them, which only `vmlab` imports. Test passes on the tree.
 
 - [x] **R-002 Process scripts and skills**
   Adapt `scripts/board.mjs`, `scripts/tidy.mjs` and `scripts/review.mjs` from the owner's repository
@@ -295,7 +297,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   **Verify:** `vmlab doctor --json` on the dev host lists every prerequisite; a unit test renders a
   fixture report with one missing tool and shows its fix line.
 
-- [ ] **R-204 `vm_plan`, `vm_list`, `vm_inspect` on the server**
+- [x] **R-204 `vm_plan`, `vm_list`, `vm_inspect` on the server**
   Wire R-103, R-104 to the tools. `vm_inspect` returns the record, the runtime endpoints, the
   resolved features (so a model can rediscover what a VM has after a context reset), and the last
   20 events. `vm_plan` returns the plan or the unsatisfiable object
@@ -303,7 +305,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   **Verify:** JSON-RPC test over pipes with the fake backend: `vm_plan` for an impossible request
   returns suggestions; `vm_list` lists a fixture VM.
 
-- [ ] **R-205 Long operations and cancellation**
+- [x] **R-205 Long operations and cancellation**
   Calls that may exceed 10 s (`vm_create` with a pull, `vm_lifecycle start`, `vm_checkpoint restore`,
   `images pull`, `fleet create`) send progress notifications at least every 5 s and honour MCP
   cancellation by cancelling the Swift task; a cancelled create destroys what it made.
@@ -333,7 +335,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   **Verify:** unit test: the generated `user-data` is valid YAML with the expected keys; the ISO is
   produced and `hdiutil` lists `user-data` and `meta-data` inside.
 
-- [ ] **R-302 QEMU process and QMP client**
+- [x] **R-302 QEMU process and QMP client**
   `VMLabQEMU`: builds the command line from a `VMRecord` and `Plan` (Appendix G for defaults):
   `-machine virt -accel hvf` for `qemu-hvf`, `-accel tcg` for `qemu-tcg`, `-cpu host|max`, UEFI from
   Homebrew's edk2 for installed-disk boot, virtio-blk disks, virtio-net, `-qmp

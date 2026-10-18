@@ -1,6 +1,7 @@
 import ArgumentParser
 import Foundation
 import VMLabCore
+import VMLabEngines
 import VMLabMCP
 
 /// The vmlab CLI. Each tool subcommand (`ToolCommand`) calls the `VMLabMCP` handler of the tool
@@ -12,14 +13,17 @@ struct VMLab: AsyncParsableCommand {
     abstract: "Virtual machines for a language model, over MCP.",
     version: VMLabMCP.version,
     subcommands: [
-      FactsCommand.self, DoctorCommand.self, Images.self, PlanCommand.self, ListCommand.self,
-      InspectCommand.self, Serve.self, GenDocs.self,
-      LogsCommand.self,
+      FactsCommand.self, DoctorCommand.self, Images.self, PlanCommand.self, CreateCommand.self,
+      ListCommand.self, InspectCommand.self, StartCommand.self, StopCommand.self,
+      KillCommand.self, PauseCommand.self, ResumeCommand.self, ResetCommand.self,
+      DestroyCommand.self, LogsCommand.self, Serve.self, GenDocs.self,
     ]
   )
 
   static func main() async {
     VMLabLogging.bootstrap()
+    // Every command, `serve` and the tool subcommands alike, reaches engines through `Backends`.
+    Engines.registerAll(store: Store(home: Store.defaultHome()))
     do {
       var command = try parseAsRoot()
       if var command = command as? AsyncParsableCommand {

@@ -11,7 +11,9 @@ import VMLabCore
 
 /// The MCP server on the official Swift SDK: `initialize` and `ping` (the SDK's), `tools/list`
 /// (the built tools, `ToolHandlers.specs`) and `tools/call` (`ToolHandlers.call`), with
-/// `notifications/progress` for calls that carry a progress token. A `VMLabError` is a result with
+/// `notifications/progress` for calls that carry a progress token. `notifications/cancelled`
+/// cancels the Swift task of that call (the SDK tracks it by request id); the handler stops, and
+/// no response is sent. A `VMLabError` is a result with
 /// `isError: true` and the Appendix D object as its text; an unknown tool is a JSON-RPC error.
 public enum VMLabServer {
   /// The `serverInfo.name` sent in `initialize`.
@@ -82,8 +84,17 @@ public enum VMLabServer {
       do {
         let result = try await ToolHandlers.call(
           params.name, arguments: arguments, context: callContext)
+        // A cancelled request gets no response (MCP); the SDK drops it on CancellationError.
+        try Task.checkCancellation()
         return callResult(result)
+      } catch is CancellationError {
+        logger.info("\(params.name) cancelled")
+        throw CancellationError()
       } catch let error as VMLabError {
+        if Task.isCancelled {
+          logger.info("\(params.name) cancelled: \(error.message)")
+          throw CancellationError()
+        }
         logger.info("\(params.name) refused: \(error.code.rawValue): \(error.message)")
         return refusal(error)
       } catch {

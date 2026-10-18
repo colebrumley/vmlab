@@ -16,8 +16,8 @@ import VMLabCore
     let server: Task<Void, any Error>
     let reader: Task<Void, Never>
 
-    init() throws {
-      let context = try ToolHandlerTests.context()
+    init(context: ToolContext? = nil) throws {
+      let context = try context ?? ToolHandlerTests.context()
       self.context = context
       let input = toServer.fileHandleForReading.fileDescriptor
       let output = fromServer.fileHandleForWriting.fileDescriptor
@@ -170,6 +170,49 @@ import VMLabCore
         "_meta": .object(["progressToken": .string("t-1")]),
       ]))
     #expect(try Self.resultObject(response)["vms"] == .array([]))
+    await session.close()
+  }
+
+  /// R-205: `notifications/cancelled` cancels the slow `vm_create` it names; the VM directory is
+  /// gone and no response is sent for that request, while progress arrived before it.
+  @Test func cancelledCreateLeavesNoVMDirectoryAndNoResponse() async throws {
+    let f = try VMCreateHandlerTests.Fixture()
+    f.backend.delayCreate(.seconds(30))
+    let session = try Session(context: f.context)
+    _ = try await session.initialize()
+    try session.send(
+      .object([
+        "id": .number(2), "method": .string("tools/call"),
+        "params": .object([
+          "name": .string("vm_create"),
+          "arguments": .object([
+            "requirements": VMCreateHandlerTests.Fixture.requirements,
+            "allowUnverified": .bool(true), "autostart": .bool(false),
+          ]),
+          "_meta": .object(["progressToken": .string("create-1")]),
+        ]),
+      ]))
+    let deadline = ContinuousClock.now + .seconds(10)
+    while f.backend.operations.isEmpty, ContinuousClock.now < deadline {
+      try await Task.sleep(for: .milliseconds(10))
+    }
+    #expect(f.vmDirectories().count == 1)
+    try session.send(
+      .object([
+        "method": .string("notifications/cancelled"),
+        "params": .object(["requestId": .number(2), "reason": .string("test")]),
+      ]))
+    while !f.vmDirectories().isEmpty, ContinuousClock.now < deadline {
+      try await Task.sleep(for: .milliseconds(10))
+    }
+    #expect(f.vmDirectories().isEmpty)
+    #expect(f.backend.operations == [.create, .destroy])
+    // A later request is answered; the cancelled one never is.
+    _ = try await session.request(3, "tools/call", Self.call("vm_list"))
+    let messages = await session.inbox.messages
+    #expect(!messages.contains { $0["id"] == .number(2) })
+    let progress = messages.filter { $0["method"] == .string("notifications/progress") }
+    #expect(progress.contains { $0["params"]?["progressToken"] == .string("create-1") })
     await session.close()
   }
 

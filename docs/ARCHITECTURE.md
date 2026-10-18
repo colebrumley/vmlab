@@ -4,7 +4,8 @@ vmlab is one Swift package. A model talks MCP over stdio to `vmlab serve`; the M
 are thin adapters over `VMLabCore`, which chooses an engine for each guest and drives it through the
 `Backend` protocol. State lives on disk under `VMLAB_HOME` (Appendix F), so guests outlive the server.
 Constraint C3 is enforced by `Tests/UnitTests/BoundariesTests.swift`: Core imports no engine and no
-MCP module, and `VMLabMCP` and `vmlab` import no backend module.
+MCP module, and `VMLabMCP` and `vmlab` import no backend module; `vmlab` reaches the engines only
+through `VMLabEngines`.
 
 ## Targets
 
@@ -24,7 +25,7 @@ and `EventLog.latestPanic()` reads the newest. Also process-wide logging (`VMLab
 `CodeSignature` reads `codesign` output so `vmlab doctor` can say whether the runner is entitled. `Profile` names the four profiles with their Appendix B tiers. `HostProbe` gathers `HostFacts` (Appendix E fast facts) through an injectable `CommandRunning` and merges the slow probes persisted in `VMLAB_HOME/host-facts.json` (`SlowProbes`), resetting to `unknown` any probe recorded under another macOS or QEMU version; `ProbeResult.countsAsYes` is how selection reads a probe (unknown counts as no). `SlowProbeRunner.swift` is the slow probe registry: an item that owns a probe (`SlowProbe.owner`: R-307, R-309, R-608, R-702) conforms a `SlowProbeRunner` and calls `SlowProbeRunners.register`; `SlowProbeRegistry.runAll` runs them one at a time, persists each `yes` or `no` to `host-facts.json`, and reports a probe with no runner as `not_implemented`, left as it was. `docs/FEATURES.md` reads that file, so recording probes on the development host means running `scripts/gen-docs.sh`.
 `Images.swift` holds the Appendix H catalogue (`ImageCatalogue.builtin`, decoded from JSON into `CatalogImage`) and `ImageStore`, an actor over `VMLAB_HOME/images/<name>/` that pulls (URLSession through an injectable `ImageDownloading`, checksum from the published `SHA512SUMS`/`SHA256SUMS`, qcow2 to raw with `qemu-img` through `CommandRunning`), lists and removes images and records `image.json` (`PulledImage`); a re-pull whose file still matches the published checksum is a no-op. `ImageStore.defaultHome()` resolves `VMLAB_HOME`.
 `CloudInit` builds the NoCloud seed both engines attach: from a plain `CloudInitConfig` (hostname, user, SSH key, packages, optional `GUIStack`, `SegmentNIC`, `GuestMount`s, `ConsoleDevice`, `dhcpIdentifierMAC` (a `network-config` NIC with `dhcp-identifier: mac`, so vmnet's lease file is keyed by the MAC), extra user-data merged last as a MIME part) it emits `user-data`, `meta-data` and `network-config` with a small hand-written YAML emitter (every string double-quoted; no YAML library, C5) and runs `hdiutil makehybrid` to make the `cidata` ISO. `FeatureDocs` renders `docs/FEATURES.md` from the matrix. It depends on swift-log only.
-`Store.swift` holds the VM store: `VMRecord` (the `vm.json` of `vms/<id>/`, with `VMState`, `VMRuntime` endpoints, `CheckpointRef`s and the resolved `[Feature]`), and `Store`, which lists, loads, creates (IDs `vm-` plus six base32 characters, unique names defaulting to the ID), updates and removes records under `VMLAB_HOME` (`Store.defaultHome`). Writes go through a temp file and `rename(2)` under a per-VM `flock` on `locks/<id>.lock` (names under `locks/store.lock`, always taken after a VM lock), so two server processes never corrupt or lose an update; `StoreMigrations` upgrades older `schemaVersion`s step by step, with one fixture per released version in `Tests/Fixtures/store/`. `Store.runningGuests()` is the counter `HostProbe.runningGuests` and the budgets read. `Tests/StoreHelper` builds `vmlab-store-helper`, a test-only executable (no product) that `StoreTests` spawns as the second writer.
+`Store.swift` holds the VM store: `VMRecord` (the `vm.json` of `vms/<id>/`, with `VMState`, `VMRuntime` endpoints, `CheckpointRef`s, the resolved `[Feature]` and the optional creating `Plan`), and `Store`, which lists, loads, creates (IDs `vm-` plus six base32 characters, unique names defaulting to the ID), updates and removes records under `VMLAB_HOME` (`Store.defaultHome`). Writes go through a temp file and `rename(2)` under a per-VM `flock` on `locks/<id>.lock` (names under `locks/store.lock`, always taken after a VM lock), so two server processes never corrupt or lose an update; `StoreMigrations` upgrades older `schemaVersion`s step by step, with one fixture per released version in `Tests/Fixtures/store/`. `Store.runningGuests()` is the counter `HostProbe.runningGuests` and the budgets read. `Tests/StoreHelper` builds `vmlab-store-helper`, a test-only executable (no product) that `StoreTests` spawns as the second writer.
 
 `Lifecycle.swift` holds the lifecycle state machine: `Lifecycle.table` maps each `VMState` and `LifecycleAction` (start, stop, kill, pause, resume, reset, destroy, checkpoint_stop) to a `LifecycleTarget` (a state or `destroyed`); `Lifecycle.transition` throws `wrong_state` with `state` and `legalActions` for any other pair. It also holds reattach: `Store.reconcile(probe:)` checks each record's `runtime.pid` with an injectable `LivenessProbe` (default `kill(pid, 0)` plus a connect to the control or QMP unix socket), marks a live, answering engine `running`, and a gone or silent one `stopped` (`broken` when no `Store.diskCandidates` file exists, `suspended` kept), clearing `runtime` and logging a `lifecycle` event per change. The server calls it at start.
 `Serial.swift` holds `SerialChannel`, an actor over a guest's serial unix stream socket (QEMU's `-serial unix:`, or the `vmlab-vz` bridge, R-602), engine-neutral so both backends share it. `start(connectTimeout:)` connects (retrying while the socket is absent or refusing) and a reader thread feeds bytes in order to the actor, which appends them to `<vm>/serial.log` (`O_APPEND`, never truncated, rotated to `serial.log.1` past 64 MB) and a 4 MB `ByteRing` addressed by absolute byte offsets from the channel's first byte. `read(since:maxBytes:)` and `read(tail:)` return `SerialRead` (`text`, `start`, `offset`, `truncated` when bytes fell out of the ring or were cut); `write(_:)` sends UTF-8 and returns the end offset; `wait(for:since:timeout:)` matches a Swift `Regex` against output at or after `since` (default: the current end) and returns `SerialMatch` (`match`, `start`, `offset` after it), or `timeout`, `guest_unreachable` when the socket closes, `invalid_request` for a bad pattern. `setLineObserver` receives every completed `SerialLine` with its offsets (R-304's panic table hangs there). The socket descriptor is closed exactly once, by the reader, under the lock writes take.
@@ -36,6 +37,27 @@ and `EventLog.latestPanic()` reads the newest. Also process-wide logging (`VMLab
 **`VMLabQEMU`** (library). The QEMU backend: launching and supervising `qemu-system-aarch64`, the QMP
 client, the GDB stub endpoint, and qcow2 internal snapshots. The serial channel itself is Core's
 `SerialChannel`, shared with VZ.
+`QEMUInstallation` finds the binaries and Homebrew's edk2 firmware (`<prefix>/share/qemu`).
+`QEMULayout` names a guest's files in its VM directory (Appendix F) and refuses socket paths that do
+not fit `sockaddr_un` (103 bytes), so tests use a short `/tmp/vmlab-test-*` home. `QEMUCommandLine`
+builds the argument array from a `VMRecord`, `Plan` and `QEMULaunchOptions`: `virt` (arm64) or
+`q35` (x86_64) with `hvf`/`host` or `tcg`/`max`, edk2 pflash code plus `efi-vars.bin`, a
+`disk.qcow2` overlay and `seed.iso` on virtio-blk, user-mode virtio-net with loopback `hostfwd`s and
+a MAC derived from the id, `ramfb` (a linear GOP framebuffer that cloud kernels without DRM keep
+showing; `virtio-gpu-pci` went dark under Debian's cloud kernel), USB and virtio-input keyboard
+and tablet, QMP/serial/VNC unix sockets, `-gdb` when granted, `-pidfile`, `-daemonize`, and always
+`-S`. `QMPClient` (an actor over a `QMPTransport`; `UnixQMPTransport` reads on its own thread) does
+the greeting and `qmp_capabilities`, matches replies to `vmlab-<n>` ids (QMP errors become
+`engine_error`, silence `timeout`, a closed socket `guest_unreachable`) and broadcasts events to
+every `events()` stream; reconnecting is `connect(socketPath:)` again once the previous client has
+gone (QEMU greets one client at a time). `QEMUMachine` prepares the overlay, EFI vars and seed,
+daemonizes QEMU (output to `qemu.log`), connects QMP and the `SerialChannel` while the CPU is
+halted, then sends `cont` unless `haltAtStart`; `attach` reconnects from the pid file, `powerdown`
+sends `system_powerdown` and waits for the process to exit, `kill` sends `quit` then `SIGKILL`.
+`QEMUBackend` is the `Backend` for `qemu-hvf` and `qemu-tcg`: it keeps a `QEMUMachine` per running
+guest (reattaching after a server restart), builds the seed when R-400's `id_ed25519.pub` exists,
+and hands out `QEMURunningVM` (serial, VNC display, GDB, QMP `query-*` introspection; exec and
+checkpoints answer `guest_unreachable` until R-400 and R-307).
 
 **`VMLabVZ`** (library). The Virtualization.framework backend, seen from the server; it never
 imports Virtualization (`BoundariesTests`), which is loaded only in `vmlab-vz`. `ControlProtocol.swift`
@@ -101,14 +123,23 @@ renders `docs/TOOLS.md` from the schemas. `Handlers/` is the behaviour the MCP s
 -> ToolResult`) per built tool, registered in `ToolHandlers.all`; `ToolHandlers.call(name,
 arguments:context:)` checks the JSON arguments against the schema's top level (object, no unknown
 field, required fields present; `ToolArguments` has typed accessors) and runs the handler, and
-`ToolHandlers.specs` is what `tools/list` offers. `ToolContext` holds the `Store`, the `HostProbe` and
-the `ResourceLimits` of one `VMLAB_HOME`. A `ToolResult` is the Appendix C result object (always with
+`ToolHandlers.specs` is what `tools/list` offers. `ToolContext` holds the `Store`, the `HostProbe`,
+the `ResourceLimits`, the `BackendRegistry` with one `VMManager` over it, the `ImageStore` and the
+`StartGating` gate of one `VMLAB_HOME`, plus the call's `progress` and `heartbeat` interval. A `ToolResult` is the Appendix C result object (always with
 `warnings`) plus image blocks; `ToolRendering` turns results and `VMLabError`s into JSON (the MCP text)
 or a terminal line. Built so far: `host_facts`, `host_doctor` (checks with `detail` and `fix`, the runner and its
 entitlement, the probes with owner and date; `probe: true` runs `SlowProbeRunners.shared`),
 `vm_plan` (an unsatisfiable request is a result with `satisfiable: false`, never an error),
-`vm_list`, `vm_inspect` (with the latest `panic` event, or null) and `vm_logs` (events rendered one per
-line, tails of `serial.log` and `provision.log`; `all` is each source in turn, prefixed). `VMLabMCP.version` is the package version.
+`vm_list`, `vm_inspect` (the record, the creating `Plan` that `VMManager.create` stores in
+`VMRecord.plan`, features, endpoints, the last 20 events, the latest `panic` event or null),
+`vm_logs` (events rendered one per line, tails of `serial.log` and `provision.log`; `all` is each
+source in turn, prefixed), `vm_create` (plan, pull the image if missing, `VMManager.create`, then
+start unless `autostart: false`; all or nothing: a cancelled or failed call destroys the VM),
+`vm_lifecycle` (start/stop/kill/pause/resume/reset/destroy; clone waits for R-803) and `images`
+(list/pull/remove). Long calls (R-205) go through `Handlers/LongOperation.swift`: an image pull and
+a start under `StartGate.withStart`, each wrapped in `ToolProgress.during`, which reports a step
+when the work begins and a heartbeat every `ToolContext.heartbeat` (5 s) until it ends; a
+cancelled task becomes `timeout` with `data.cancelled: true`. `VMLabMCP.version` is the package version.
 `Server/MCPServer.swift` is the server (`VMLabServer.run(context:input:output:)`, used by
 `vmlab serve`): it reconciles the store, then serves the SDK's `StdioTransport` until stdin closes.
 `initialize` (server `vmlab`, the package version) and `ping` are the SDK's; `tools/list` sends
@@ -116,16 +147,26 @@ line, tails of `serial.log` and `provision.log`; `all` is each source in turn, p
 plus one `image` block per `ToolResult.images`, a `VMLabError` as `isError: true` with the
 Appendix D object as the text, and an unknown tool as JSON-RPC error -32602. When the call carries
 `_meta.progressToken`, `ToolContext.progress` (a `ToolProgress`) sends `notifications/progress`
-with it; otherwise it is `.none`.
+with it; otherwise it is `.none`. `notifications/cancelled` is handled by the SDK, which cancels
+the Swift task of the named request; the `tools/call` handler then throws `CancellationError`, so
+no response is sent for it.
 
 **`vmlab`** (executable). The CLI on swift-argument-parser: every MCP tool as a subcommand with
 `--json` output, `vmlab serve` for the MCP server, `vmlab doctor`, and the hidden `vmlab gen-docs`
 that `scripts/gen-docs.sh` uses. A tool subcommand conforms to `ToolCommand` (`Sources/vmlab/ToolCommand.swift`):
 it turns its flags into the tool's JSON arguments and calls the same `ToolHandlers.call` as
 `tools/call`, printing the result object with `--json` or a short human rendering; a `VMLabError` goes
-to stderr (the Appendix D object with `--json`) with exit status 1. Built: `facts`, `doctor`, `plan`,
-`list`, `inspect`, `logs`, `serve`, `--version`; `vmlab images pull|list|remove` (R-300) still calls `ImageStore`
-directly until the `images` handler lands. It bootstraps logging and hands off to Core and `VMLabMCP`.
+to stderr (the Appendix D object with `--json`) with exit status 1; a long call's progress messages
+go to stderr. Built: `facts`, `doctor`, `plan`, `create` (the `plan` flags plus `--name`,
+`--no-start`), `list`, `inspect`, `logs`, `start`, `stop`, `kill`, `pause`, `resume`, `reset`,
+`destroy`, `images pull|list|remove`, `serve`, `--version`. It bootstraps logging and hands off to Core and `VMLabMCP`.
+
+**`VMLabEngines`** (library). The engine wiring, and the only module that imports both Core and the
+backends for that purpose: `Engines.registerAll(store:into:)` registers `QEMUBackend` for `qemu-hvf`
+and `qemu-tcg` and `VZBackend` for `vz-linux` in `Backends.shared` (or a given `BackendRegistry`).
+`vmlab` calls it once in `main`, before any command runs, so `serve` and every tool subcommand can
+create and start guests. `vz-macos` joins `Engines.profiles` when `VZBackend` runs macOS guests.
+`BoundariesTests` checks that it imports only Core, QEMU and VZ and that no library imports it.
 
 **`vmlab-vz`** (executable). The VZ runner: one process per Virtualization.framework guest, so a
 guest outlives the server. `vmlab-vz run <vm-dir> [--hold]` writes `vz.pid`, builds the machine from
