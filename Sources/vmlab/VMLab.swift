@@ -3,13 +3,18 @@ import Foundation
 import VMLabCore
 import VMLabMCP
 
-/// The vmlab CLI. Phase 2 (R-2xx) adds the subcommands; `vmlab serve` runs the MCP server.
+/// The vmlab CLI. Each tool subcommand (`ToolCommand`) calls the `VMLabMCP` handler of the tool
+/// it mirrors; subcommands register here as their tools land. `vmlab serve` runs the MCP server.
 @main
 struct VMLab: AsyncParsableCommand {
   static let configuration = CommandConfiguration(
     commandName: "vmlab",
     abstract: "Virtual machines for a language model, over MCP.",
-    subcommands: [Images.self, GenDocs.self]
+    version: VMLabMCP.version,
+    subcommands: [
+      FactsCommand.self, DoctorCommand.self, Images.self, PlanCommand.self, ListCommand.self,
+      InspectCommand.self, GenDocs.self,
+    ]
   )
 
   static func main() async {
@@ -22,11 +27,10 @@ struct VMLab: AsyncParsableCommand {
         try command.run()
       }
     } catch let error as VMLabError {
-      // R-200 replaces this with the shared rendering; until then the Appendix D object as JSON.
-      let encoder = JSONEncoder()
-      encoder.outputFormatting = [.sortedKeys]
-      let text = (try? encoder.encode(error)).map { String(decoding: $0, as: UTF8.self) }
-      FileHandle.standardError.write(Data(((text ?? error.message) + "\n").utf8))
+      // A refusal: the Appendix D object with --json, otherwise code, message and hint.
+      let json = CommandLine.arguments.dropFirst().contains("--json")
+      let text = json ? ToolRendering.json(error) : ToolRendering.text(error)
+      FileHandle.standardError.write(Data((text + "\n").utf8))
       Foundation.exit(1)
     } catch {
       exit(withError: error)

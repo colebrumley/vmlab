@@ -2,8 +2,8 @@ import ArgumentParser
 import Foundation
 import VMLabCore
 
-/// `vmlab images pull|list|remove` over `ImageStore` (R-300). R-200 moves the handlers into the
-/// shared MCP/CLI layer.
+/// `vmlab images pull|list|remove` over `ImageStore` (R-300). It becomes a `ToolCommand` when the
+/// `images` tool gets its handler in `VMLabMCP`.
 struct Images: ParsableCommand {
   static let configuration = CommandConfiguration(
     commandName: "images",

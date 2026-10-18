@@ -115,9 +115,12 @@ Dry-run the selector: given requirements (the guest plus the features you need a
 **Result**
 
 ```
-Plan { profile, features, unverified, preferredDenied, estimatedStartupSeconds, notes }
-or Unsatisfiable { eliminated: { <feature>: [profile] },
-                   suggestions: [ { drop: [feature], profile } ] }
+Plan { satisfiable: true, profile, guest, resources, features, unverified,
+       preferredDenied, allowUnverified, estimatedStartupSeconds, notes }
+or Unsatisfiable { satisfiable: false, code, message, hint, guest,
+                   eliminated: { <feature>: [profile] }, reasons: { <feature>: { <profile>: why } },
+                   suggestions: [ { drop: [feature], profile } ],
+                   unverified: { <feature>: [probe] }, limit?: Error }
 ```
 
 ## `vm_create`
