@@ -177,3 +177,19 @@ extension CloudInitConfig {
     packageUpdate = false
   }
 }
+
+extension VMManager {
+  /// `images template_create` from the VM named or identified by `vm`, under its operation lock
+  /// (CX-22): the record is re-read once the lock is held, so a start by another caller or
+  /// process cannot run while the disk is copied, and a VM no longer stopped is refused.
+  public func createTemplate(
+    _ name: String, from vm: String, images: ImageStore
+  ) async throws(VMLabError) -> PulledImage {
+    let id = try store.find(vm).id
+    await acquire(id)
+    defer { release(id) }
+    let record = try store.load(id: id)
+    return try await images.createTemplate(
+      name, from: record, vmDirectory: store.directory(of: id))
+  }
+}
