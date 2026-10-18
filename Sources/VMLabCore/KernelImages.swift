@@ -65,13 +65,19 @@ extension ImageStore {
     var copied: [String: URL] = ["kernel": kernel]
     if let initrd { copied["initrd"] = initrd }
     var files: [String: String] = [:]
+    // Every new file is staged next to its target first and renamed over it only once all are
+    // ready, so a failure keeps the kernel already registered whole.
+    var staged: [(temp: URL, target: URL)] = []
+    defer { for file in staged { try? FileManager.default.removeItem(at: file.temp) } }
     for (key, source) in copied {
       let target = folder.appending(path: Self.kernelFileNames[key]!)
-      try? FileManager.default.removeItem(at: target)
-      try FileManager.default.copyItem(at: source.resolvingSymlinksInPath(), to: target)
-      if key == "kernel" { try Gzip.decompressInPlace(target) }
+      let temp = Self.stagingFile(for: target)
+      staged.append((temp, target))
+      try FileManager.default.copyItem(at: source.resolvingSymlinksInPath(), to: temp)
+      if key == "kernel" { try Gzip.decompressInPlace(temp) }
       files[key] = "kernel/\(target.lastPathComponent)"
     }
+    for file in staged { try Self.replace(file.target, with: file.temp) }
     var record =
       pulled(name)
       ?? PulledImage(

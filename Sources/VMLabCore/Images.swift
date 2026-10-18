@@ -441,8 +441,7 @@ public actor ImageStore {
           "raw": .string("expected \(expected), got \(actual)"),
         ])
     }
-    try? FileManager.default.removeItem(at: disk)
-    try FileManager.default.moveItem(at: partial, to: disk)
+    try Self.replace(disk, with: partial)
     try Data("\(expected)  \(entry.fileName)\n".utf8).write(to: folder.appending(path: "checksums"))
 
     var files = [entry.format.rawValue: diskName]
@@ -491,8 +490,7 @@ public actor ImageStore {
         hint: "Check free disk space and that qemu-img runs, then pull again",
         data: ["engine": .string("qemu-img"), "raw": .string(result?.output ?? "did not launch")])
     }
-    try? FileManager.default.removeItem(at: output)
-    try FileManager.default.moveItem(at: partial, to: output)
+    try Self.replace(output, with: partial)
   }
 
   /// `tart pull <ref>` into Tart's cache; the record names the ref as the Tart VM to clone.
@@ -533,6 +531,24 @@ public actor ImageStore {
     encoder.dateEncodingStrategy = .iso8601
     try encoder.encode(record).write(
       to: imageDirectory(record.name).appending(path: "image.json"), options: .atomic)
+  }
+
+  /// A fresh path next to `target` (same directory, so same volume) to stage its new content in.
+  static func stagingFile(for target: URL) -> URL {
+    target.deletingLastPathComponent().appending(
+      path: ".\(target.lastPathComponent).vmlab-new-\(UUID().uuidString)")
+  }
+
+  /// Puts `temp` in place of `target` in one `rename(2)`, which replaces an existing `target`
+  /// atomically: there is never a moment without either the old file or the new one.
+  static func replace(_ target: URL, with temp: URL) throws(VMLabError) {
+    guard rename(temp.path, target.path) == 0 else {
+      let reason = String(cString: strerror(errno))
+      throw VMLabError(
+        code: .internal, message: "Cannot replace \(target.path): \(reason)",
+        hint: "Check free disk space and permissions under VMLAB_HOME.",
+        data: ["path": .string(target.path)])
+    }
   }
 
   static func validate(_ name: String) throws {
