@@ -25,53 +25,101 @@ public struct RFBDisplayConnector: DisplayConnector {
 /// drops (the guest rebooted its VNC server, QEMU restarted), the next call reconnects once; the
 /// cache survives, so earlier screenshot ids stay valid.
 public actor RFBDisplaySession: DisplaySession {
+  /// Opens a handshaken client, given the VNC password (a seam for tests).
+  typealias Opener = @Sendable (String?) async throws -> RFBClient
+
   public let endpoint: DisplayEndpoint
   let firstFrameTimeout: Duration
+  let uniformFrameGrace: Duration
+  private let open: Opener
   private var client: RFBClient?
+  /// The reconnect in flight, shared by every caller that finds the connection gone.
+  private var connecting: Task<RFBClient, any Error>?
   /// When the current connection was made.
   private var connectedAt = ContinuousClock.now
   private var cache = ScreenshotCache()
 
   public init(endpoint: DisplayEndpoint, firstFrameTimeout: Duration = .seconds(10)) {
+    self.init(endpoint: endpoint, firstFrameTimeout: firstFrameTimeout, open: nil)
+  }
+
+  init(
+    endpoint: DisplayEndpoint, firstFrameTimeout: Duration,
+    uniformFrameGrace: Duration = RFBDisplaySession.uniformFrameGrace, open: Opener?
+  ) {
     self.endpoint = endpoint
     self.firstFrameTimeout = firstFrameTimeout
+    self.uniformFrameGrace = uniformFrameGrace
+    self.open =
+      open ?? { password in
+        try await RFBClient.connect(Self.rfbEndpoint(endpoint), password: password)
+      }
   }
 
   /// A session over an already connected client (tests drive it with a scripted transport).
   init(client: RFBClient, endpoint: DisplayEndpoint) {
     self.endpoint = endpoint
     self.firstFrameTimeout = .seconds(10)
+    self.uniformFrameGrace = Self.uniformFrameGrace
+    self.open = { _ in throw RFBError.connectionClosed }
     self.client = client
   }
 
   /// The connected client, connecting (and waiting for the first frame) when there is none or the
-  /// last one failed.
+  /// last one failed. Concurrent callers share one reconnect; a connection that fails before it
+  /// is handed out is closed.
   @discardableResult
   func reconnectIfNeeded() async throws(VMLabError) -> RFBClient {
-    if let client, await client.loopError == nil { return client }
-    if let client { await client.close() }
+    while let current = client {
+      if await current.loopError == nil { return current }
+      // Another caller may have replaced it while this one asked; look again if so.
+      if client === current { break }
+    }
+    if let connecting { return try await join(connecting) }
+    let stale = client
     client = nil
-    let fresh: RFBClient
-    do {
-      fresh = try await RFBClient.connect(Self.rfbEndpoint(endpoint), password: try password())
-      await fresh.start(deadPeerWindow: DeadPeer.window)
-      try await fresh.waitForUpdateCount(1, timeout: firstFrameTimeout)
-      // macOS Screen Sharing answers the first request with an all-black frame and sends the
-      // screen a moment later; give a uniform first frame a few more updates to fill in.
-      var updates = await fresh.updateCount
-      let clock = ContinuousClock()
-      let deadline = clock.now.advanced(by: Self.uniformFrameGrace)
-      while Self.isUniform(await fresh.framebuffer.pixels), clock.now < deadline {
-        updates += 1
-        try? await fresh.waitForUpdateCount(updates, timeout: .milliseconds(500))
+    let password = try password()
+    let task = Task { [open, firstFrameTimeout, uniformFrameGrace] in
+      await stale?.close()
+      let fresh = try await open(password)
+      do {
+        await fresh.start(deadPeerWindow: DeadPeer.window)
+        try await fresh.waitForUpdateCount(1, timeout: firstFrameTimeout)
+        // macOS Screen Sharing answers the first request with an all-black frame and sends the
+        // screen a moment later; give a uniform first frame a few more updates to fill in.
+        var updates = await fresh.updateCount
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: uniformFrameGrace)
+        while Self.isUniform(await fresh.framebuffer.pixels), clock.now < deadline {
+          updates += 1
+          try? await fresh.waitForUpdateCount(updates, timeout: .milliseconds(500))
+        }
+      } catch {
+        await fresh.close()
+        throw error
       }
-    } catch {
-      throw Self.map(error, endpoint: endpoint)
+      return fresh
+    }
+    connecting = task
+    defer { if connecting == task { connecting = nil } }
+    let fresh = try await join(task)
+    // `close` ran while this connected: the connection is no longer wanted.
+    guard connecting == task else {
+      await fresh.close()
+      throw Self.map(RFBError.connectionClosed, endpoint: endpoint)
     }
     client = fresh
     connectedAt = .now
     inputReady = nil
     return fresh
+  }
+
+  private func join(_ task: Task<RFBClient, any Error>) async throws(VMLabError) -> RFBClient {
+    do {
+      return try await task.value
+    } catch {
+      throw Self.map(error, endpoint: endpoint)
+    }
   }
 
   /// The pause between key events: macOS Screen Sharing drops a stroke whose press and release
@@ -174,8 +222,11 @@ public actor RFBDisplaySession: DisplaySession {
   }
 
   public func close() async {
-    await client?.close()
+    connecting?.cancel()
+    connecting = nil
+    let current = client
     client = nil
+    await current?.close()
   }
 
   // MARK: Helpers
