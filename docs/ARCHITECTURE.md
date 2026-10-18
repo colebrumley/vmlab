@@ -4,7 +4,8 @@ vmlab is one Swift package. A model talks MCP over stdio to `vmlab serve`; the M
 are thin adapters over `VMLabCore`, which chooses an engine for each guest and drives it through the
 `Backend` protocol. State lives on disk under `VMLAB_HOME` (Appendix F), so guests outlive the server.
 Constraint C3 is enforced by `Tests/UnitTests/BoundariesTests.swift`: Core imports no engine and no
-MCP module, and `VMLabMCP` and `vmlab` import no backend module.
+MCP module, and `VMLabMCP` and `vmlab` import no backend module; `vmlab` reaches the engines only
+through `VMLabEngines`.
 
 ## Targets
 
@@ -140,6 +141,13 @@ it turns its flags into the tool's JSON arguments and calls the same `ToolHandle
 to stderr (the Appendix D object with `--json`) with exit status 1. Built: `facts`, `doctor`, `plan`,
 `list`, `inspect`, `logs`, `serve`, `--version`; `vmlab images pull|list|remove` (R-300) still calls `ImageStore`
 directly until the `images` handler lands. It bootstraps logging and hands off to Core and `VMLabMCP`.
+
+**`VMLabEngines`** (library). The engine wiring, and the only module that imports both Core and the
+backends for that purpose: `Engines.registerAll(store:into:)` registers `QEMUBackend` for `qemu-hvf`
+and `qemu-tcg` and `VZBackend` for `vz-linux` in `Backends.shared` (or a given `BackendRegistry`).
+`vmlab` calls it once in `main`, before any command runs, so `serve` and every tool subcommand can
+create and start guests. `vz-macos` joins `Engines.profiles` when `VZBackend` runs macOS guests.
+`BoundariesTests` checks that it imports only Core, QEMU and VZ and that no library imports it.
 
 **`vmlab-vz`** (executable). The VZ runner: one process per Virtualization.framework guest, so a
 guest outlives the server. `vmlab-vz run <vm-dir> [--hold]` writes `vz.pid`, builds the machine from

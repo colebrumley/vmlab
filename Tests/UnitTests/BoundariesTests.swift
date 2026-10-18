@@ -69,6 +69,22 @@ import Testing
     }
   }
 
+  /// `VMLabEngines` is the only module that names the engines: it imports exactly Core and the
+  /// QEMU and VZ backends, and only the `vmlab` executable imports it.
+  @Test func enginesModuleIsTheOnlyWiring() throws {
+    let files = try Self.importsByFile(target: "VMLabEngines")
+    #expect(!files.isEmpty)
+    for (file, modules) in files {
+      #expect(
+        modules.isSubset(of: ["VMLabCore", "VMLabQEMU", "VMLabVZ"]), "\(file) imports \(modules)")
+    }
+    for target in ["VMLabCore", "VMLabMCP", "VMLabQEMU", "VMLabVZ"] {
+      for (file, modules) in try Self.importsByFile(target: target) {
+        #expect(!modules.contains("VMLabEngines"), "\(file) imports VMLabEngines")
+      }
+    }
+  }
+
   /// The server-side VZ module never loads the framework; only the signed runner does.
   @Test func vzLibraryImportsNoVirtualization() throws {
     let files = try Self.importsByFile(target: "VMLabVZ")

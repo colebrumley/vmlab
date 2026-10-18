@@ -103,6 +103,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   Sources/VMLabRFB/        VNC (RFB) client: framebuffer to PNG, pointer and key events
   Sources/VMLabGDB/        GDB remote serial protocol client
   Sources/VMLabMCP/        MCP server: tool schemas, handlers, stdio transport
+  Sources/VMLabEngines/    engine wiring: `Engines.registerAll` registers QEMU and VZ backends at startup
   Sources/vmlab/           CLI executable (ArgumentParser); `vmlab serve` runs the MCP server
   Sources/vmlab-vz/        VZ runner executable: one process per VZ guest, control socket (needs entitlement)
   Sources/vmlab-switch/    user-space Ethernet switch for private segments
@@ -115,7 +116,8 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   **Verify:** `Tests/UnitTests/BoundariesTests.swift` reads every file under `Sources/VMLabCore`
   and asserts none imports `Virtualization`, `MCP`, `VMLabQEMU`, `VMLabVZ`, `VMLabRFB`, `VMLabGDB`;
   and that `Sources/VMLabMCP` and `Sources/vmlab` import no backend module directly (only Core and
-  the `Backends` registry in Core). Test passes on the tree.
+  the `Backends` registry in Core); `Sources/vmlab` may import `VMLabEngines`, the one wiring module
+  that imports the backends to register them, which only `vmlab` imports. Test passes on the tree.
 
 - [x] **R-002 Process scripts and skills**
   Adapt `scripts/board.mjs`, `scripts/tidy.mjs` and `scripts/review.mjs` from the owner's repository

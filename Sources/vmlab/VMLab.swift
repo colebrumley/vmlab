@@ -1,6 +1,7 @@
 import ArgumentParser
 import Foundation
 import VMLabCore
+import VMLabEngines
 import VMLabMCP
 
 /// The vmlab CLI. Each tool subcommand (`ToolCommand`) calls the `VMLabMCP` handler of the tool
@@ -20,6 +21,8 @@ struct VMLab: AsyncParsableCommand {
 
   static func main() async {
     VMLabLogging.bootstrap()
+    // Every command, `serve` and the tool subcommands alike, reaches engines through `Backends`.
+    Engines.registerAll(store: Store(home: Store.defaultHome()))
     do {
       var command = try parseAsRoot()
       if var command = command as? AsyncParsableCommand {
