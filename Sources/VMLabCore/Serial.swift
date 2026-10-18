@@ -82,11 +82,27 @@ public actor SerialChannel {
   private var partialLineStart: UInt64 = 0
   private var waiters: [UInt64: Waiter] = [:]
   private var nextWaiterID: UInt64 = 0
+  /// Waiters whose match is running on a matcher thread now.
+  private var scanning: Set<UInt64> = []
+  /// Matches still running for waiters that already ended (timed out, cancelled, stopped). Swift
+  /// Regex cannot be interrupted, so each holds a thread until it finishes on its own.
+  private var abandoned: Set<UInt64> = []
+
+  /// The most bytes one match runs over; a longer backlog is scanned window by window.
+  static let scanWindow: UInt64 = 64 * 1024
+  /// The longest pattern `wait` accepts, in UTF-8 bytes.
+  static let maxPatternBytes = 1024
+  /// How many abandoned matches a channel tolerates before refusing new waits.
+  static let maxAbandonedScans = 2
 
   private struct Waiter {
-    var regex: Regex<AnyRegexOutput>
+    /// The pattern, compiled afresh by each matcher thread (`Regex` is not `Sendable`).
+    var pattern: String
     var since: UInt64
+    /// Where the next match starts (the end of the last one, less `rescanOverlap`).
     var scanFrom: UInt64
+    /// The end of the bytes the last match covered.
+    var scannedTo: UInt64
     var continuation: CheckedContinuation<SerialMatch, any Error>
     var timer: Task<Void, Never>?
   }
@@ -196,7 +212,7 @@ public actor SerialChannel {
     closed = true
     socket?.shutdown()
     await readerTask?.value
-    readerFinished()
+    readerFinished(failingAll: true)
   }
 
   /// The offset after the last byte received.
@@ -259,21 +275,35 @@ public actor SerialChannel {
 
   /// Waits until `pattern` (Swift `Regex` syntax) matches output at or after `since` (default: the
   /// current end, so only new output counts), or fails with `timeout` after `timeout`. The pattern
-  /// is matched against the retained output on each new chunk, re-scanning the last 4 KB.
+  /// is matched against the retained output in windows of at most 64 KB, then against each new
+  /// chunk re-scanning the last 4 KB. Matching runs on its own thread, off the channel, so a
+  /// pattern that backtracks for ever still times out and never stalls reads or the reader.
   public func wait(
     for pattern: String, since: UInt64? = nil, timeout: Duration
   ) async throws -> SerialMatch {
-    let regex: Regex<AnyRegexOutput>
+    if let reason = Self.rejection(for: pattern) {
+      throw VMLabError.invalidRequest(
+        field: "pattern", reason: reason,
+        hint: "Match a plainer pattern, for example \"login:\" or \"=+ done\"; a quantifier on a "
+          + "group that already repeats backtracks exponentially.")
+    }
     do {
-      regex = try Regex(pattern)
+      _ = try Regex(pattern)
     } catch {
       throw VMLabError.invalidRequest(
         field: "pattern", reason: "not a valid regular expression: \(error)",
         hint: "Pass a Swift Regex pattern, for example \"login:\" or \"\\\\$ $\".")
     }
+    guard abandoned.count < Self.maxAbandonedScans else {
+      throw VMLabError.invalidRequest(
+        field: "pattern",
+        reason: "\(abandoned.count) earlier patterns on this serial console are still matching "
+          + "after their waits timed out",
+        hint: "Use a simpler pattern; the runaway matches end on their own.")
+    }
     let from = since ?? ring.end
-    if let found = Self.search(regex, in: ring, from: max(from, ring.start)) { return found }
-    guard !closed, socket != nil else { throw Self.unreachable(socketPath) }
+    let connected = !closed && socket != nil
+    guard connected || max(from, ring.start) < ring.end else { throw Self.unreachable(socketPath) }
     let id = nextWaiterID
     nextWaiterID += 1
     return try await withTaskCancellationHandler {
@@ -283,12 +313,88 @@ public actor SerialChannel {
           await self?.expire(id, pattern: pattern, timeout: timeout)
         }
         waiters[id] = Waiter(
-          regex: regex, since: from, scanFrom: max(from, ring.start), continuation: continuation,
-          timer: timer)
+          pattern: pattern, since: from, scanFrom: max(from, ring.start), scannedTo: from,
+          continuation: continuation, timer: timer)
+        pump(id)
       }
     } onCancel: {
       Task { await self.cancelWaiter(id) }
     }
+  }
+
+  /// Why `pattern` is refused before compiling, or nil: longer than `maxPatternBytes`, or a group
+  /// that holds an unbounded quantifier is itself repeated without bound (`(a+)+`, `(a*)*`,
+  /// `(?:a+b)*`, `(a+){2,}`), the classic exponential-backtracking shape. Not every slow pattern
+  /// is caught; the off-channel matcher and the timeout cover the rest.
+  static func rejection(for pattern: String) -> String? {
+    if pattern.utf8.count > maxPatternBytes {
+      return "the pattern is \(pattern.utf8.count) bytes; the limit is \(maxPatternBytes)"
+    }
+    let chars = Array(pattern)
+    // One frame per open group: does it contain an unbounded quantifier?
+    var frames: [Bool] = [false]
+    var i = 0
+    /// Reads a quantifier at `i`, if any; returns whether it is unbounded and advances past it.
+    func quantifier() -> Bool? {
+      guard i < chars.count else { return nil }
+      var unbounded: Bool
+      switch chars[i] {
+      case "*", "+":
+        unbounded = true
+        i += 1
+      case "?":
+        unbounded = false
+        i += 1
+      case "{":
+        guard let close = chars[i...].firstIndex(of: "}") else { return nil }
+        let body = String(chars[(i + 1)..<close])
+        let parts = body.split(separator: ",", omittingEmptySubsequences: false)
+        guard (1...2).contains(parts.count), parts.allSatisfy({ $0.allSatisfy(\.isNumber) }),
+          !parts[0].isEmpty
+        else { return nil }
+        // `{n,}` is unbounded; so, for this purpose, is a large upper bound.
+        unbounded = parts.count == 2 && (parts[1].isEmpty || (Int(parts[1]) ?? .max) > 16)
+        i = close + 1
+      default:
+        return nil
+      }
+      // A lazy or possessive suffix.
+      if i < chars.count, chars[i] == "?" || chars[i] == "+" { i += 1 }
+      return unbounded
+    }
+    while i < chars.count {
+      let c = chars[i]
+      switch c {
+      case "\\":
+        i += 2
+        if quantifier() == true { frames[frames.count - 1] = true }
+      case "[":
+        // Skip the class: a leading `^` and `]` are literal, escapes skip a character.
+        i += 1
+        if i < chars.count, chars[i] == "^" { i += 1 }
+        if i < chars.count, chars[i] == "]" { i += 1 }
+        while i < chars.count, chars[i] != "]" { i += chars[i] == "\\" ? 2 : 1 }
+        i += 1
+        if quantifier() == true { frames[frames.count - 1] = true }
+      case "(":
+        frames.append(false)
+        i += 1
+        // `(?:`, `(?<name>` and friends: the `?` is not a quantifier.
+        if i < chars.count, chars[i] == "?" { i += 1 }
+      case ")":
+        let inner = frames.count > 1 ? frames.removeLast() : false
+        i += 1
+        let outer = quantifier()
+        if inner, outer == true {
+          return "a repeated group repeats a quantifier inside it, which backtracks exponentially"
+        }
+        if inner || outer == true { frames[frames.count - 1] = true }
+      default:
+        i += 1
+        if quantifier() == true { frames[frames.count - 1] = true }
+      }
+    }
+    return nil
   }
 
   // MARK: - Reader side
@@ -327,27 +433,69 @@ public actor SerialChannel {
   }
 
   private func checkWaiters() {
-    for (id, waiter) in waiters {
-      let from = max(waiter.since, ring.start, waiter.scanFrom)
-      if let found = Self.search(waiter.regex, in: ring, from: from) {
-        waiters[id] = nil
-        waiter.timer?.cancel()
-        waiter.continuation.resume(returning: found)
-      } else {
-        let next = ring.end > Self.rescanOverlap ? ring.end - Self.rescanOverlap : 0
-        waiters[id]?.scanFrom = max(waiter.since, next)
-      }
-    }
+    for id in waiters.keys { pump(id) }
   }
 
-  private func readerFinished() {
+  /// Starts the next match for waiter `id` on a matcher thread, unless one is running or there is
+  /// no unscanned output: the bytes from `scanFrom`, at most `scanWindow` of them.
+  private func pump(_ id: UInt64) {
+    guard let waiter = waiters[id], !scanning.contains(id) else { return }
+    guard ring.end > waiter.scannedTo else {
+      if socket == nil { finish(id, throwing: Self.unreachable(socketPath)) }
+      return
+    }
+    let from = max(waiter.scanFrom, ring.start)
+    guard from < ring.end else {
+      waiters[id]?.scannedTo = ring.end
+      if socket == nil { finish(id, throwing: Self.unreachable(socketPath)) }
+      return
+    }
+    let to = min(ring.end, from + Self.scanWindow)
+    let bytes = ring.bytes(from: from, to: to)
+    let pattern = waiter.pattern
+    scanning.insert(id)
+    let thread = Thread { [weak self] in
+      let found = (try? Regex(pattern)).flatMap {
+        SerialChannel.search($0, bytes: bytes, base: from)
+      }
+      Task { await self?.scanFinished(id, found: found, through: to) }
+    }
+    thread.name = "vmlab.serial.match"
+    thread.start()
+  }
+
+  private func scanFinished(_ id: UInt64, found: SerialMatch?, through end: UInt64) {
+    scanning.remove(id)
+    if abandoned.remove(id) != nil { return }
+    guard var waiter = waiters[id] else { return }
+    if let found {
+      waiters[id] = nil
+      waiter.timer?.cancel()
+      waiter.continuation.resume(returning: found)
+      return
+    }
+    waiter.scannedTo = end
+    waiter.scanFrom = max(waiter.since, end > Self.rescanOverlap ? end - Self.rescanOverlap : 0)
+    waiters[id] = waiter
+    pump(id)
+  }
+
+  /// Ends waiter `id` with `error`; a match still running for it is left to finish unobserved.
+  private func finish(_ id: UInt64, throwing error: any Error) {
+    guard let waiter = waiters.removeValue(forKey: id) else { return }
+    if scanning.contains(id) { abandoned.insert(id) }
+    waiter.timer?.cancel()
+    waiter.continuation.resume(throwing: error)
+  }
+
+  /// The reader stopped. A waiter still matching output that arrived before the end keeps going
+  /// (and fails once caught up); the rest fail now. `stop` fails them all.
+  private func readerFinished(failingAll: Bool = false) {
     socket = nil
     log.close()
     partialLine.removeAll()
-    for (id, waiter) in waiters {
-      waiters[id] = nil
-      waiter.timer?.cancel()
-      waiter.continuation.resume(throwing: Self.unreachable(socketPath))
+    for id in waiters.keys where failingAll || !scanning.contains(id) {
+      if failingAll { finish(id, throwing: Self.unreachable(socketPath)) } else { pump(id) }
     }
   }
 
@@ -355,13 +503,14 @@ public actor SerialChannel {
   static let timeoutTextBytes: UInt64 = 4096
 
   private func expire(_ id: UInt64, pattern: String, timeout: Duration) {
-    guard let waiter = waiters.removeValue(forKey: id) else { return }
+    guard let waiter = waiters[id] else { return }
     // Partial data (R-1101): what the guest printed while the wait ran, its last 4 KB at most.
     let end = ring.end
     let from = max(
       waiter.since, ring.start, end >= Self.timeoutTextBytes ? end - Self.timeoutTextBytes : 0)
     let seen = read(since: from)
-    waiter.continuation.resume(
+    finish(
+      id,
       throwing: VMLabError(
         code: .timeout, message: "The serial output did not match the pattern in time.",
         hint: "data.text is what the guest printed meanwhile; wait longer or change the pattern.",
@@ -373,11 +522,7 @@ public actor SerialChannel {
         ]))
   }
 
-  private func cancelWaiter(_ id: UInt64) {
-    guard let waiter = waiters.removeValue(forKey: id) else { return }
-    waiter.timer?.cancel()
-    waiter.continuation.resume(throwing: CancellationError())
-  }
+  private func cancelWaiter(_ id: UInt64) { finish(id, throwing: CancellationError()) }
 
   // MARK: - Helpers
 
@@ -392,18 +537,19 @@ public actor SerialChannel {
     return Double(s) + Double(attos) / 1e18
   }
 
-  /// The first match of `regex` in the ring at or after `from`, with byte offsets.
-  static func search(_ regex: Regex<AnyRegexOutput>, in ring: ByteRing, from: UInt64)
+  /// The first match of `regex` in `bytes`, which start at offset `base`, with byte offsets. Runs
+  /// on a matcher thread, never on the channel.
+  static func search(_ regex: Regex<AnyRegexOutput>, bytes: [UInt8], base: UInt64)
     -> SerialMatch?
   {
-    guard from < ring.end else { return nil }
-    var bytes = ring.bytes(from: from, to: ring.end)
+    guard !bytes.isEmpty else { return nil }
+    var bytes = bytes
     // Start on a UTF-8 boundary and leave out an incomplete final sequence, so the text decodes.
     var lead = 0
     while lead < bytes.count, lead < 3, bytes[lead] & 0xC0 == 0x80 { lead += 1 }
     bytes.removeFirst(lead)
     bytes.removeLast(UTF8Tail.incompleteSuffix(bytes))
-    let base = from + UInt64(lead)
+    let base = base + UInt64(lead)
     let text: String
     let utf8: Bool
     if let valid = String(validating: bytes, as: UTF8.self) {

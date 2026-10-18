@@ -317,6 +317,100 @@ func eventually(_ condition: () async -> Bool) async -> Bool {
     await channel.stop()
   }
 
+  /// CR-3: a backtracking pattern must not block the channel. `(=|=)+x` is exponential in Swift
+  /// Regex (about a second at 18 '=', four times longer per two more) and is not a nested
+  /// quantifier, so it reaches the matcher. 22 '=' keeps the abandoned match to ~15 s of CPU.
+  @Test(.timeLimit(.minutes(1))) func runawayPatternStillTimesOutAndChannelStaysLive()
+    async throws
+  {
+    let (server, channel) = try await connected()
+    defer { server.cleanUp() }
+    server.send(String(repeating: "=", count: 22))
+    #expect(await eventually { await channel.endOffset == 22 })
+    let started = ContinuousClock.now
+    async let waited: SerialMatch = channel.wait(
+      for: "(=|=)+x", since: 0, timeout: .seconds(2))
+    try await Task.sleep(for: .milliseconds(200))
+    // Other calls on the channel answer while the match runs, and the reader keeps ingesting.
+    let readStarted = ContinuousClock.now
+    #expect(await channel.read(since: 0).text.count == 22)
+    #expect(ContinuousClock.now - readStarted < .milliseconds(500))
+    server.send("more\n")
+    #expect(await eventually { await channel.endOffset == 27 })
+    do {
+      _ = try await waited
+      Issue.record("wait should have timed out")
+    } catch let error as VMLabError {
+      #expect(error.code == .timeout)
+    }
+    #expect(ContinuousClock.now - started < .seconds(3))
+    // A second wait on the same channel still works.
+    async let next = channel.wait(for: "ready", timeout: .seconds(2))
+    try await Task.sleep(for: .milliseconds(50))
+    server.send("ready\n")
+    #expect(try await next.match == "ready")
+    await channel.stop()
+  }
+
+  @Test(.timeLimit(.minutes(1))) func abandonedMatchesAreBoundedPerChannel() async throws {
+    let (server, channel) = try await connected()
+    defer { server.cleanUp() }
+    // About 3.5 s of backtracking each, far past the waits' timeouts.
+    server.send(String(repeating: "=", count: 20))
+    #expect(await eventually { await channel.endOffset == 20 })
+    for _ in 0..<SerialChannel.maxAbandonedScans {
+      await #expect(throws: VMLabError.self) {
+        try await channel.wait(for: "(=|=)+x", since: 0, timeout: .milliseconds(100))
+      }
+    }
+    do {
+      _ = try await channel.wait(for: "=", since: 0, timeout: .seconds(1))
+      Issue.record("expected invalid_request while the runaway matches run")
+    } catch let error as VMLabError {
+      #expect(error.code == .invalidRequest)
+    }
+    // Once they finish on their own, waits are accepted again.
+    var accepted = false
+    for _ in 0..<300 where !accepted {
+      accepted = (try? await channel.wait(for: "=", since: 0, timeout: .seconds(1))) != nil
+      if !accepted { try await Task.sleep(for: .milliseconds(100)) }
+    }
+    #expect(accepted)
+    await channel.stop()
+  }
+
+  @Test func nestedQuantifiersAndLongPatternsAreInvalidRequest() async throws {
+    let (server, channel) = try await connected()
+    defer { server.cleanUp() }
+    for pattern in [
+      "(=+)+x", "(a*)*", "(?:a+b?)*c", "((ab)+c)+", "(x+){2,}", String(repeating: "a", count: 2000),
+    ] {
+      do {
+        _ = try await channel.wait(for: pattern, timeout: .seconds(1))
+        Issue.record("expected invalid_request for \(pattern.prefix(20))")
+      } catch let error as VMLabError {
+        #expect(error.code == .invalidRequest)
+        #expect(error.data["field"] == .string("pattern"))
+      }
+    }
+    // Ordinary patterns, including bounded repeats of quantified groups, are accepted.
+    for pattern in ["login:", "(\\d+\\.){3}\\d+", "[(+)]+x", "\\(a+\\)+", "(ab)+c", "a+b*"] {
+      #expect(SerialChannel.rejection(for: pattern) == nil, "\(pattern)")
+    }
+    await channel.stop()
+  }
+
+  @Test func waitScansLargeBacklogInWindows() async throws {
+    let (server, channel) = try await connected()
+    defer { server.cleanUp() }
+    let filler = String(repeating: "x", count: 200_000)
+    server.send(filler + "MARK" + filler)
+    #expect(await eventually { await channel.endOffset == 400_004 })
+    let match = try await channel.wait(for: "MARK", since: 0, timeout: .seconds(5))
+    #expect(match == SerialMatch(match: "MARK", start: 200_000, offset: 200_004))
+    await channel.stop()
+  }
+
   @Test func ringWrapsAcrossManyAppends() {
     var ring = ByteRing(capacity: 5)
     for chunk in ["ab", "cd", "ef", "g"] { ring.append(Array(chunk.utf8)) }
