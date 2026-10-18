@@ -29,9 +29,17 @@ public struct GUIStack: Codable, Sendable, Hashable {
     "xfce4-terminal", "lightdm", "lightdm-gtk-greeter", "dbus-x11",
   ]
 
+  /// The packages of the in-guest VNC display: the server, and X's dummy driver. Debian's cloud
+  /// kernel has no virtio-gpu (DRM) driver and VZ's firmware leaves no EFI framebuffer, so a VZ
+  /// guest has no `/dev/fb0` for fbdev; X draws into memory and x11vnc serves that screen.
+  public static let vncPackages = ["x11vnc", "xserver-xorg-video-dummy"]
+
+  /// The size of the in-guest VNC screen, the same as the VZ graphics device's default scanout.
+  public static let vncScreen = (width: 1280, height: 800)
+
   /// Every package this stack installs.
   public var packages: [String] {
-    Self.desktopPackages + (vncPassword == nil ? [] : ["x11vnc"])
+    Self.desktopPackages + (vncPassword == nil ? [] : Self.vncPackages)
   }
 
   /// A fresh VNC password: eight characters, the most VNC Authentication uses.
@@ -236,6 +244,12 @@ public enum CloudInit {
           ("content", .string(lightdmConf(user: config.user))),
         ]))
       if gui.vncPassword != nil {
+        writeFiles.append(
+          .map([
+            ("path", "/etc/X11/xorg.conf.d/10-vmlab-dummy.conf"),
+            ("permissions", "0644"),
+            ("content", .string(dummyXorgConf())),
+          ]))
         writeFiles.append(
           .map([
             ("path", "/etc/systemd/system/vmlab-vnc.service"),
@@ -469,6 +483,39 @@ public enum CloudInit {
     autologin-session=xfce
 
     """
+  }
+
+  /// X on the dummy driver at `GUIStack.vncScreen`: the in-guest VNC server's screen when the
+  /// guest has no framebuffer device (VZ under Debian's cloud kernel).
+  static func dummyXorgConf() -> String {
+    let (w, h) = GUIStack.vncScreen
+    return """
+      Section "Device"
+        Identifier "vmlab-dummy"
+        Driver "dummy"
+        VideoRam 32768
+      EndSection
+
+      Section "Monitor"
+        Identifier "vmlab-monitor"
+        HorizSync 5.0-1000.0
+        VertRefresh 5.0-200.0
+        Modeline "\(w)x\(h)" 83.50 1280 1352 1480 1680 800 803 809 831 -hsync +vsync
+      EndSection
+
+      Section "Screen"
+        Identifier "vmlab-screen"
+        Device "vmlab-dummy"
+        Monitor "vmlab-monitor"
+        DefaultDepth 24
+        SubSection "Display"
+          Depth 24
+          Modes "\(w)x\(h)"
+          Virtual \(w) \(h)
+        EndSubSection
+      EndSection
+
+      """
   }
 
   static func vncUnit(port: Int) -> String {

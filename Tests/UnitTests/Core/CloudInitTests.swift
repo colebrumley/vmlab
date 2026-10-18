@@ -74,7 +74,7 @@ enum RubyYAML {
     let doc = try #require(try RubyYAML.parse(CloudInit.userData(config)) as? [String: Any])
     #expect(
       doc["packages"] as? [String] == ["qemu-guest-agent"] + GUIStack.desktopPackages + [
-        "x11vnc", "build-essential",
+        "x11vnc", "xserver-xorg-video-dummy", "build-essential",
       ])
     #expect(
       doc["mounts"] as? [[String]] == [
@@ -92,6 +92,11 @@ enum RubyYAML {
     #expect(runcmd.contains(["x11vnc", "-storepasswd", "s3cret\"x", "/etc/x11vnc.pass"]))
     let files = try #require(doc["write_files"] as? [[String: String]])
     #expect(files.map { $0["path"] }.contains("/etc/systemd/system/vmlab-vnc.service"))
+    // VZ has no framebuffer under the cloud kernel: X runs on the dummy driver for x11vnc.
+    let dummy = try #require(
+      files.first { $0["path"] == "/etc/X11/xorg.conf.d/10-vmlab-dummy.conf" })
+    #expect(dummy["content"]?.contains("Driver \"dummy\"") == true)
+    #expect(dummy["content"]?.contains("Modes \"1280x800\"") == true)
     let autologin = try #require(files.first { $0["path"]?.contains("lightdm") == true })
     #expect(autologin["content"]?.contains("autologin-user=debian") == true)
   }
@@ -128,13 +133,14 @@ enum RubyYAML {
     let doc = try #require(try RubyYAML.parse(CloudInit.userData(config)) as? [String: Any])
     let packages = try #require(doc["packages"] as? [String])
     #expect(packages.contains("xfce4") && packages.contains("xserver-xorg-video-fbdev"))
-    #expect(!packages.contains("x11vnc"))
+    #expect(!packages.contains("x11vnc") && !packages.contains("xserver-xorg-video-dummy"))
     let runcmd = try #require(doc["runcmd"] as? [[String]])
     #expect(runcmd.contains(["systemctl", "enable", "--now", "lightdm"]))
     #expect(runcmd.contains(["systemctl", "set-default", "graphical.target"]))
     #expect(!runcmd.contains { $0.first == "x11vnc" })
     let files = try #require(doc["write_files"] as? [[String: String]])
     #expect(!files.contains { $0["path"]?.contains("vmlab-vnc") == true })
+    #expect(!files.contains { $0["path"]?.contains("xorg.conf.d") == true })
     #expect(files.contains { $0["content"]?.contains("autologin-session=xfce") == true })
     #expect(files.contains { $0["content"]?.contains("logind-check-graphical=false") == true })
   }
@@ -150,7 +156,7 @@ enum RubyYAML {
     let mode = try FileManager.default.attributesOfItem(atPath: file.path)[.posixPermissions]
     #expect(mode as? Int == 0o600)
     #expect(try GUIStack.inGuestVNC(vmDirectory: dir) == stack)
-    #expect(stack.packages.last == "x11vnc")
+    #expect(stack.packages.suffix(2) == ["x11vnc", "xserver-xorg-video-dummy"])
   }
 
   @Test(.enabled(if: RubyYAML.available)) func segmentNICGetsStaticNetworkConfig() throws {
