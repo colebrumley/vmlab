@@ -53,6 +53,70 @@ import VMLabCore
     #expect(text == expected)
   }
 
+  /// R-305: one snapshot per boot mode.
+  @Test(arguments: [
+    (
+      "boot-kernel", "hvf",
+      QEMULaunchOptions(
+        boot: BootSpec(
+          mode: .kernel, kernel: "/k/vmlinuz", initrd: "/k/initrd.img",
+          cmdline: "console=ttyAMA0 root=/dev/vda1", dtb: "/k/virt.dtb"),
+        seed: true, gdbPort: 41234, sshHostPort: 52222)
+    ),
+    (
+      "boot-firmware-pflash", "tcg-arm64",
+      QEMULaunchOptions(
+        boot: BootSpec(mode: .firmware, firmware: "/fw/my,uefi.fd"), firmware: firmware)
+    ),
+    (
+      "boot-firmware-bios", "tcg-x86_64",
+      QEMULaunchOptions(
+        boot: BootSpec(mode: .firmware, firmware: "/fw/seabios.bin", firmwareFormat: .bios),
+        gdbPort: 1234, sshHostPort: 2222)
+    ),
+    (
+      "boot-binary", "tcg-arm64",
+      QEMULaunchOptions(
+        boot: BootSpec(mode: .binary, binary: "/bm/kernel.bin", loadAddress: "0x40080000"),
+        disk: false)
+    ),
+  ])
+  func bootSnapshot(name: String, fixture: String, options: QEMULaunchOptions) throws {
+    let record = try Self.record(fixture)
+    let args = try QEMUCommandLine.arguments(
+      record: record, plan: Self.plan(for: record), layout: Self.layout(record), options: options)
+    let text = args.joined(separator: "\n") + "\n"
+    let snapshot = Self.fixtures.appending(path: "\(name).args")
+    if ProcessInfo.processInfo.environment["VMLAB_UPDATE_SNAPSHOTS"] == "1" {
+      try Data(text.utf8).write(to: snapshot)
+    }
+    let expected = try String(contentsOf: snapshot, encoding: .utf8)
+    #expect(text == expected)
+  }
+
+  @Test func bootModesPickTheirFlags() throws {
+    let record = try Self.record("tcg-arm64")
+    func args(_ boot: BootSpec, disk: Bool = true) throws -> [String] {
+      try QEMUCommandLine.arguments(
+        record: record, plan: Self.plan(for: record), layout: Self.layout(record),
+        options: QEMULaunchOptions(boot: boot, firmware: Self.firmware, disk: disk))
+    }
+    let bios = try args(BootSpec(mode: .firmware, firmware: "/fw/rom", firmwareFormat: .bios))
+    #expect(bios.firstIndex(of: "-bios").map { bios[$0 + 1] } == "/fw/rom")
+    #expect(!bios.contains { $0.hasPrefix("if=pflash") })
+    let pflash = try args(BootSpec(mode: .firmware, firmware: "/fw/a,b.fd"))
+    #expect(pflash.contains("if=pflash,format=raw,unit=0,readonly=on,file=/fw/a,,b.fd"))
+    #expect(pflash.contains { $0.hasPrefix("if=pflash,format=raw,unit=1,") })
+    let binary = try args(
+      BootSpec(mode: .binary, binary: "/b.bin", loadAddress: "1074266112"), disk: false)
+    #expect(binary.contains("loader,file=/b.bin,addr=0x40080000,cpu-num=0,force-raw=on"))
+    #expect(!binary.contains { $0.contains("id=disk0") })
+    #expect(!binary.contains { $0.hasPrefix("if=pflash") })
+    let kernel = try args(BootSpec(mode: .kernel, kernel: "/k", dtb: "/d.dtb"))
+    #expect(kernel.firstIndex(of: "-dtb").map { kernel[$0 + 1] } == "/d.dtb")
+    #expect(throws: VMLabError.self) { try args(BootSpec(mode: .kernel)) }
+  }
+
   @Test func alwaysHaltedDaemonizedAndHeadless() throws {
     let record = try Self.record("hvf")
     let args = try QEMUCommandLine.arguments(

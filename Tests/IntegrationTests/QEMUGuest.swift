@@ -17,7 +17,7 @@ struct QEMUGuest {
   let machine: QEMUMachine
 
   static func boot(
-    features: [Feature] = [.serial, .gui, .netNAT], memoryGB: Int = 2
+    features: [Feature] = [.serial, .gui, .netNAT], memoryGB: Int = 2, boot: BootSpec? = nil
   ) async throws -> QEMUGuest {
     let n = counterLock.withLock {
       counter += 1
@@ -43,7 +43,7 @@ struct QEMUGuest {
     let created = try await manager.create(
       VMRecord(
         id: "", name: "it-\(n)", profile: .qemuHVF, guest: guest, features: features,
-        image: "debian-13-arm64"), plan: plan)
+        image: "debian-13-arm64", boot: boot), plan: plan)
     do {
       guard let running = try await manager.perform(.start, on: created.id) else {
         throw VMLabError(code: .internal, message: "start returned no record", hint: "")

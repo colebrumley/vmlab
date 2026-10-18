@@ -367,7 +367,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   and `RESET` events are logged as well.
   **Verify:** unit test feeds a panic transcript and asserts the event; a `vm_logs` call lists it.
 
-- [ ] **R-305 Direct kernel boot and custom firmware**
+- [x] **R-305 Direct kernel boot and custom firmware**
   `BootSpec`: `.disk` (default), `.kernel(kernel, initrd?, cmdline, dtb?)` → `-kernel/-initrd/-append`,
   `.firmware(path, format: pflash|bios)` → `-pflash` or `-bios`, `.binary(path, loadAddress)` →
   `-device loader,file=...,addr=...` with `-nographic`-equivalent flags. Kernel paths are
@@ -1107,9 +1107,9 @@ six 4 GB guests with the default reserve; macOS 26.6 → VZ save/restore APIs pr
 | `macos-base` | macos | arm64 | `ghcr.io/cirruslabs/macos-tahoe-base:latest` via `tart pull`; if it does not boot on this host, `macos-sequoia-base:latest` (record which in `docs/FEATURES.md`) | Tart VM | `admin` / `admin`, SSH and Screen Sharing enabled by the image |
 
 The Debian kernel and initrd for direct boot are extracted from the pulled raw image
-(`images extract-kernel`: mount with `hdiutil attach -imagekey diskimage-class=CRawDiskImage` or
-read the ext4 partition with a small reader in `VMLabCore/Ext4.swift` if `hdiutil` cannot mount
-ext4; decide in R-305 and record it).
+(`images extract-kernel`). Decided in R-305: `hdiutil` attaches the raw disk but macOS has no ext4
+driver to mount the partition, so `VMLabCore/Ext4.swift` reads GPT and ext4 read-only. Debian's
+`/boot/System.map-*` is a stub naming the `-dbg` package; symbol lookups need another source.
 
 ## Appendix I — Selection algorithm and worked examples
 

@@ -534,12 +534,16 @@ The `requirements` object of `vm_plan`, `vm_create` and `fleet` (`Requirements` 
 | `guest.os` | `macos` \| `linux` | yes | Guest operating system. |
 | `guest.arch` | string | yes | Guest CPU architecture: arm64, x86_64, riscv64, or another QEMU architecture name. Anything but arm64 runs under emulation (qemu-tcg). |
 | `boot` | object |  | How the guest boots; omitted means from its disk. |
-| `boot.cmdline` | string |  | Kernel command line (mode kernel), e.g. console=ttyAMA0. |
+| `boot.binary` | string |  | Host path of a raw image to load (mode binary). |
+| `boot.cmdline` | string |  | Kernel command line (mode kernel), e.g. console=ttyAMA0 root=/dev/vda1. |
+| `boot.dtb` | string |  | Host path of a device tree blob (mode kernel); default QEMU's own. |
 | `boot.firmware` | string |  | Host path of the firmware image (mode firmware). |
+| `boot.firmwareFormat` | `pflash` \| `bios`, default `pflash` |  | pflash attaches the firmware as UEFI flash; bios loads it as a ROM (-bios). |
 | `boot.haltAtStart` | boolean, default `false` |  | Start with the CPU halted so vm_debug sees the first instruction. |
 | `boot.initrd` | string |  | Host path of the initrd (mode kernel). |
-| `boot.kernel` | string |  | Host path of the kernel image (mode kernel). |
-| `boot.mode` | `disk` \| `kernel` \| `firmware`, default `disk` |  | disk boots the image; kernel boots kernel/initrd directly; firmware boots a supplied firmware image. |
+| `boot.kernel` | string |  | Host path of the kernel image (mode kernel). Omitted: the image's kernel, extracted from it on first use (images extract_kernel). |
+| `boot.loadAddress` | string |  | Guest physical address for binary, hex such as 0x40080000 (mode binary). |
+| `boot.mode` | `disk` \| `kernel` \| `firmware` \| `binary`, default `disk` |  | disk boots the image; kernel boots kernel/initrd directly; firmware boots a supplied firmware image; binary loads a raw image at loadAddress and starts the CPU there. |
 | `image` | string |  | Image or template name (images list). Omitted: the default image for the guest. |
 | `network` | object |  | Networking; omitted means NAT. |
 | `network.forwards` | array of object |  | Guest ports to make reachable from the host. |

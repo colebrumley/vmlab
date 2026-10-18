@@ -182,12 +182,23 @@ enum Schema {
           [
             "mode": string(
               "disk boots the image; kernel boots kernel/initrd directly; firmware boots a "
-                + "supplied firmware image.",
+                + "supplied firmware image; binary loads a raw image at loadAddress and starts "
+                + "the CPU there.",
               enum: BootSpec.Mode.allCases.map(\.rawValue), default: "disk"),
-            "kernel": string("Host path of the kernel image (mode kernel)."),
+            "kernel": string(
+              "Host path of the kernel image (mode kernel). Omitted: the image's kernel, "
+                + "extracted from it on first use (images extract_kernel)."),
             "initrd": string("Host path of the initrd (mode kernel)."),
-            "cmdline": string("Kernel command line (mode kernel), e.g. console=ttyAMA0."),
+            "cmdline": string(
+              "Kernel command line (mode kernel), e.g. console=ttyAMA0 root=/dev/vda1."),
+            "dtb": string("Host path of a device tree blob (mode kernel); default QEMU's own."),
             "firmware": string("Host path of the firmware image (mode firmware)."),
+            "firmwareFormat": string(
+              "pflash attaches the firmware as UEFI flash; bios loads it as a ROM (-bios).",
+              enum: BootSpec.FirmwareFormat.allCases.map(\.rawValue), default: "pflash"),
+            "binary": string("Host path of a raw image to load (mode binary)."),
+            "loadAddress": string(
+              "Guest physical address for binary, hex such as 0x40080000 (mode binary)."),
             "haltAtStart": boolean(
               "Start with the CPU halted so vm_debug sees the first "
                 + "instruction."),

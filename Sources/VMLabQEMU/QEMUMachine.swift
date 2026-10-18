@@ -7,8 +7,9 @@ public struct QEMULaunchRequest: Sendable {
   public var record: VMRecord
   public var plan: Plan
   public var layout: QEMULayout
-  /// The pulled image's qcow2, the backing file of the guest's `disk.qcow2` overlay.
-  public var baseImage: URL
+  /// The pulled image's qcow2, the backing file of the guest's `disk.qcow2` overlay; nil for a
+  /// guest with no disk (a kernel-only image, R-305).
+  public var baseImage: URL?
   public var boot: BootSpec
   /// The cloud-init seed to build into `seed.iso`; nil attaches none.
   public var seed: CloudInitConfig?
@@ -19,7 +20,7 @@ public struct QEMULaunchRequest: Sendable {
   public var sshHostPort: Int?
 
   public init(
-    record: VMRecord, plan: Plan, layout: QEMULayout, baseImage: URL,
+    record: VMRecord, plan: Plan, layout: QEMULayout, baseImage: URL?,
     boot: BootSpec = BootSpec(), seed: CloudInitConfig? = nil, installation: QEMUInstallation,
     gdbPort: Int? = nil, sshHostPort: Int? = nil
   ) {
@@ -32,6 +33,17 @@ public struct QEMULaunchRequest: Sendable {
     self.installation = installation
     self.gdbPort = gdbPort
     self.sshHostPort = sshHostPort
+  }
+}
+
+extension QEMULaunchRequest {
+  /// Whether the guest has a UEFI variable store: disk boot, or custom firmware as pflash.
+  var usesEFIVars: Bool {
+    switch boot.mode {
+    case .disk: true
+    case .firmware: boot.firmwareFormat == .pflash
+    case .kernel, .binary: false
+    }
   }
 }
 
@@ -82,17 +94,17 @@ public actor QEMUMachine {
     } catch {
       throw ioError("create \(layout.directory.path)", error)
     }
-    if !files.fileExists(atPath: layout.disk.path) {
+    if let baseImage = request.baseImage, !files.fileExists(atPath: layout.disk.path) {
       let diskGB =
         ResourceLimits.resolve(request.plan.resources, for: request.plan.guest.os).diskGB ?? 32
       try run(
         request.installation.qemuImg,
         [
-          "create", "-q", "-f", "qcow2", "-F", "qcow2", "-b", request.baseImage.path,
+          "create", "-q", "-f", "qcow2", "-F", "qcow2", "-b", baseImage.path,
           layout.disk.path, "\(diskGB)G",
         ], step: "qemu-img create")
     }
-    if request.boot.mode != .kernel, !files.fileExists(atPath: layout.efiVars.path) {
+    if request.usesEFIVars, !files.fileExists(atPath: layout.efiVars.path) {
       let firmware = try request.installation.firmware(for: request.plan.guest.arch)
       do {
         try files.copyItem(atPath: firmware.varsTemplate, toPath: layout.efiVars.path)
@@ -126,9 +138,9 @@ public actor QEMUMachine {
     }
     try prepare(request)
     var options = QEMULaunchOptions(
-      boot: request.boot, seed: request.seed != nil, gdbPort: request.gdbPort,
-      sshHostPort: request.sshHostPort)
-    if request.boot.mode != .kernel {
+      boot: request.boot, disk: request.baseImage != nil, seed: request.seed != nil,
+      gdbPort: request.gdbPort, sshHostPort: request.sshHostPort)
+    if request.boot.mode == .disk {
       options.firmware = try request.installation.firmware(for: request.plan.guest.arch)
     }
     if request.plan.grants(.gdb), options.gdbPort == nil {

@@ -3,7 +3,8 @@ import Foundation
 
 /// The on-disk format of an image's disk, or a Tart VM for macOS (Appendix H).
 public enum ImageFormat: String, Codable, Sendable, CaseIterable {
-  case raw, qcow2, tart
+  /// `kernel`: a registered kernel (and initrd) with no disk, for direct kernel boot (R-305).
+  case raw, qcow2, tart, kernel
 }
 
 /// The digest a catalogue's checksum file lists.
@@ -182,10 +183,12 @@ public struct PulledImage: Codable, Sendable, Hashable {
   public var files: [String: String]
   public var login: ImageLogin
   public var pulledAt: Date
+  /// The release of the kernel in `files["kernel"]` when it was extracted (R-305).
+  public var kernelVersion: String?
 
   public init(
     name: String, guest: GuestSpec, source: String, format: ImageFormat, checksum: Checksum?,
-    files: [String: String], login: ImageLogin, pulledAt: Date
+    files: [String: String], login: ImageLogin, pulledAt: Date, kernelVersion: String? = nil
   ) {
     self.schemaVersion = Self.currentSchemaVersion
     self.name = name
@@ -195,6 +198,7 @@ public struct PulledImage: Codable, Sendable, Hashable {
     self.checksum = checksum
     self.files = files
     self.login = login
+    self.kernelVersion = kernelVersion
     // Whole seconds, so the record equals what image.json (ISO 8601) reads back.
     self.pulledAt = Date(timeIntervalSince1970: pulledAt.timeIntervalSince1970.rounded(.down))
   }

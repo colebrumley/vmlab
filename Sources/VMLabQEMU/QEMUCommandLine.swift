@@ -4,8 +4,10 @@ import VMLabCore
 /// What a launch needs beyond the record and the plan.
 public struct QEMULaunchOptions: Sendable, Hashable {
   public var boot: BootSpec
-  /// UEFI code and vars for `.disk` boot; ignored for `.kernel`.
+  /// UEFI code and vars for `.disk` boot (and the vars of a custom pflash firmware).
   public var firmware: QEMUFirmware?
+  /// Whether `disk.qcow2` is attached; false for a kernel-only or bare-metal guest with no image.
+  public var disk: Bool
   /// Whether `seed.iso` is attached as a second virtio disk.
   public var seed: Bool
   /// The loopback TCP port for `-gdb` when the plan grants `gdb`.
@@ -14,11 +16,12 @@ public struct QEMULaunchOptions: Sendable, Hashable {
   public var sshHostPort: Int?
 
   public init(
-    boot: BootSpec = BootSpec(), firmware: QEMUFirmware? = nil, seed: Bool = false,
-    gdbPort: Int? = nil, sshHostPort: Int? = nil
+    boot: BootSpec = BootSpec(), firmware: QEMUFirmware? = nil, disk: Bool = true,
+    seed: Bool = false, gdbPort: Int? = nil, sshHostPort: Int? = nil
   ) {
     self.boot = boot
     self.firmware = firmware
+    self.disk = disk
     self.seed = seed
     self.gdbPort = gdbPort
     self.sshHostPort = sshHostPort
@@ -77,39 +80,19 @@ public enum QEMUCommandLine {
     args += ["-cpu", accel == "hvf" ? "host" : "max"]
     args += ["-smp", "\(cpus)", "-m", "\(memoryGB * 1024)M"]
 
-    switch options.boot.mode {
-    case .disk, .firmware:
-      let code: String
-      if options.boot.mode == .firmware, let custom = options.boot.firmware {
-        code = custom
-      } else if let firmware = options.firmware {
-        code = firmware.code
-      } else {
-        throw VMLabError(
-          code: .internal, message: "No UEFI firmware was given for a disk boot.",
-          hint: "This is a vmlab bug; report it.")
-      }
-      args += ["-drive", "if=pflash,format=raw,unit=0,readonly=on,file=\(code)"]
-      args += ["-drive", "if=pflash,format=raw,unit=1,file=\(layout.efiVars.path)"]
-    case .kernel:
-      guard let kernel = options.boot.kernel else {
-        throw VMLabError.invalidRequest(
-          field: "boot.kernel", reason: "kernel boot needs a kernel path",
-          hint: "Set boot.kernel, or use boot.mode disk.")
-      }
-      args += ["-kernel", kernel]
-      if let initrd = options.boot.initrd { args += ["-initrd", initrd] }
-      if let cmdline = options.boot.cmdline { args += ["-append", cmdline] }
-    }
+    args += try bootArguments(options, layout: layout)
 
-    args += [
-      "-drive",
-      "if=none,id=disk0,format=qcow2,cache=writeback,discard=unmap,file=\(layout.disk.path)",
-      "-device", "virtio-blk-pci,drive=disk0,bootindex=0",
-    ]
+    if options.disk {
+      args += [
+        "-drive",
+        "if=none,id=disk0,format=qcow2,cache=writeback,discard=unmap,file="
+          + escape(layout.disk.path),
+        "-device", "virtio-blk-pci,drive=disk0,bootindex=0",
+      ]
+    }
     if options.seed {
       args += [
-        "-drive", "if=none,id=seed,format=raw,readonly=on,file=\(layout.seed.path)",
+        "-drive", "if=none,id=seed,format=raw,readonly=on,file=" + escape(layout.seed.path),
         "-device", "virtio-blk-pci,drive=seed",
       ]
     }
@@ -149,6 +132,66 @@ public enum QEMUCommandLine {
     }
     args += ["-pidfile", layout.pidFile.path, "-display", "none", "-daemonize", "-S"]
     return args
+  }
+
+  /// The firmware and loader arguments of each boot mode (R-305).
+  static func bootArguments(
+    _ options: QEMULaunchOptions, layout: QEMULayout
+  ) throws(VMLabError) -> [String] {
+    let boot = options.boot
+    func pflash(_ code: String) -> [String] {
+      [
+        "-drive", "if=pflash,format=raw,unit=0,readonly=on,file=" + escape(code),
+        "-drive", "if=pflash,format=raw,unit=1,file=" + escape(layout.efiVars.path),
+      ]
+    }
+    switch boot.mode {
+    case .disk:
+      guard let firmware = options.firmware else {
+        throw VMLabError(
+          code: .internal, message: "No UEFI firmware was given for a disk boot.",
+          hint: "This is a vmlab bug; report it.")
+      }
+      return pflash(firmware.code)
+    case .firmware:
+      guard let custom = boot.firmware else {
+        throw VMLabError.invalidRequest(
+          field: "boot.firmware", reason: "firmware boot needs a firmware image",
+          hint: "Set boot.firmware, or use boot.mode disk.")
+      }
+      switch boot.firmwareFormat {
+      case .pflash: return pflash(custom)
+      case .bios: return ["-bios", custom]
+      }
+    case .kernel:
+      guard let kernel = boot.kernel else {
+        throw VMLabError.invalidRequest(
+          field: "boot.kernel", reason: "kernel boot needs a kernel path",
+          hint: "Set boot.kernel, or run images extract_kernel on the guest's image.")
+      }
+      var args = ["-kernel", kernel]
+      if let initrd = boot.initrd { args += ["-initrd", initrd] }
+      if let cmdline = boot.cmdline { args += ["-append", cmdline] }
+      if let dtb = boot.dtb { args += ["-dtb", dtb] }
+      return args
+    case .binary:
+      guard let binary = boot.binary, let address = boot.parsedLoadAddress else {
+        throw VMLabError.invalidRequest(
+          field: "boot.binary", reason: "binary boot needs a binary and a load address",
+          hint: "Set boot.binary and boot.loadAddress (hex).")
+      }
+      // A raw image at `addr`; `cpu-num=0` points the first CPU's PC at it. No firmware runs.
+      return [
+        "-device",
+        "loader,file=\(escape(binary)),addr=0x\(String(address, radix: 16)),cpu-num=0,"
+          + "force-raw=on",
+      ]
+    }
+  }
+
+  /// A value inside a QEMU `key=value,...` option: commas are doubled.
+  static func escape(_ value: String) -> String {
+    value.replacingOccurrences(of: ",", with: ",,")
   }
 
   /// A stable locally administered MAC (QEMU's `52:54:00` prefix) derived from the VM id, so a

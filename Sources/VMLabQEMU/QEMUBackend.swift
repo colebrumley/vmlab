@@ -35,11 +35,11 @@ public final class QEMUBackend: Backend {
   // MARK: Backend
 
   public func create(_ record: VMRecord, plan: Plan) async throws(VMLabError) {
-    try QEMUMachine.prepare(try request(record, plan: plan, seed: false))
+    try QEMUMachine.prepare(try await request(record, plan: plan, seed: false))
   }
 
   public func start(_ record: VMRecord) async throws(VMLabError) -> VMRuntime {
-    var request = try request(record, plan: Self.plan(of: record), seed: true)
+    var request = try await request(record, plan: Self.plan(of: record), seed: true)
     if record.network.mode != .disabled { request.sshHostPort = try QEMUMachine.freeLoopbackPort() }
     let machine = try await Self.lift { try await QEMUMachine.launch(request) }
     machines.withLock { $0[record.id] = machine }
@@ -127,26 +127,68 @@ public final class QEMUBackend: Backend {
 
   private func request(
     _ record: VMRecord, plan: Plan, seed: Bool
-  ) throws(VMLabError) -> QEMULaunchRequest {
-    guard let image = record.image else {
+  ) async throws(VMLabError) -> QEMULaunchRequest {
+    let boot = try await resolveBoot(record)
+    let base: URL?
+    if let image = record.image, boot.mode == .disk || images.pulled(image)?.format != .kernel {
+      base = try QEMUMachine.baseImage(named: image, in: images)
+    } else if boot.mode == .disk {
       throw VMLabError.invalidRequest(
         field: "image", reason: "a QEMU guest boots from a pulled image",
         hint: "Create the VM with image: \"debian-13-arm64\".")
+    } else {
+      base = nil
     }
-    let base = try QEMUMachine.baseImage(named: image, in: images)
     let layout = layout(of: record.id)
     var config: CloudInitConfig?
     // The key is R-400's; until it exists the guest boots without a seed.
     let publicKey = layout.directory.appending(path: "id_ed25519.pub")
-    if seed, let key = try? String(contentsOf: publicKey, encoding: .utf8) {
+    if seed, base != nil, let image = record.image,
+      let key = try? String(contentsOf: publicKey, encoding: .utf8)
+    {
       config = CloudInitConfig(
         instanceID: record.id, hostname: record.name,
         user: images.pulled(image)?.login.user ?? "debian",
         sshPublicKey: key.trimmingCharacters(in: .whitespacesAndNewlines))
     }
     return QEMULaunchRequest(
-      record: record, plan: plan, layout: layout, baseImage: base, seed: config,
+      record: record, plan: plan, layout: layout, baseImage: base, boot: boot, seed: config,
       installation: try locate())
+  }
+
+  /// The record's boot spec with host paths checked; a kernel boot without a kernel path takes
+  /// the image's kernel files, extracting them from the pulled image the first time.
+  func resolveBoot(_ record: VMRecord) async throws(VMLabError) -> BootSpec {
+    var boot = record.boot ?? BootSpec()
+    if boot.mode == .kernel, boot.kernel == nil {
+      guard let image = record.image else {
+        throw VMLabError.invalidRequest(
+          field: "boot.kernel", reason: "kernel boot needs a kernel path or an image",
+          hint: "Set boot.kernel, or name an image whose kernel vmlab can extract.")
+      }
+      var files = images.kernel(of: image)
+      if files == nil {
+        let store = images
+        files = try await Self.lift { try await store.extractKernel(image) }
+      }
+      guard let files else { throw VMLabError(code: .internal, message: "no kernel", hint: "") }
+      boot.kernel = files.kernel.path
+      if boot.initrd == nil { boot.initrd = files.initrd?.path }
+    }
+    let paths: [(String, String?)] = [
+      ("boot.kernel", boot.mode == .kernel ? boot.kernel : nil),
+      ("boot.initrd", boot.mode == .kernel ? boot.initrd : nil),
+      ("boot.dtb", boot.mode == .kernel ? boot.dtb : nil),
+      ("boot.firmware", boot.mode == .firmware ? boot.firmware : nil),
+      ("boot.binary", boot.mode == .binary ? boot.binary : nil),
+    ]
+    for case (let field, let path?) in paths
+    where !FileManager.default.isReadableFile(atPath: path) {
+      throw VMLabError.invalidRequest(
+        field: field, reason: "\(path) is not a readable file",
+        hint: "Give the absolute host path of an existing file.")
+    }
+    return boot
   }
 
   static func lift<T>(_ body: () async throws -> T) async throws(VMLabError) -> T {
