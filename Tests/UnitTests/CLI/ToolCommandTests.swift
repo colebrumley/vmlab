@@ -76,9 +76,18 @@ import VMLabMCP
       try LogsCommand.parse(["web", "--source", "events", "--tail", "5"]).arguments()
         == .object(["vm": .string("web"), "source": .string("events"), "tail": .number(5)]))
     #expect(try FactsCommand.parse([]).arguments() == .object([:]))
+    #expect(
+      try IntrospectCommand.parse(["web", "raw", "--hmp", "info mtree"]).arguments()
+        == .object(["vm": .string("web"), "query": .string("raw"), "hmp": .string("info mtree")]))
+    #expect(
+      try MemoryDumpCommand.parse(["web", "--address", "0x40000000", "--size", "4096"])
+        .arguments()
+        == .object([
+          "vm": .string("web"), "address": .string("0x40000000"), "size": .number(4096),
+        ]))
     for command in [
       FactsCommand.self, DoctorCommand.self, PlanCommand.self, ListCommand.self,
-      InspectCommand.self, LogsCommand.self,
+      InspectCommand.self, LogsCommand.self, IntrospectCommand.self, MemoryDumpCommand.self,
     ] as [any ToolCommand.Type] {
       #expect(ToolHandlers.handler(named: command.toolName) != nil)
     }

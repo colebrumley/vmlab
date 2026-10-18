@@ -15,4 +15,9 @@ public enum Engines {
     registry.register(QEMUBackend(profile: .qemuTCG, store: store))
     registry.register(VZBackend(store: store))
   }
+
+  /// Registers the slow probes the engine modules own (`vmlab doctor --probe` runs them).
+  public static func registerProbes(into registry: SlowProbeRegistry = SlowProbeRunners.shared) {
+    for runner in VMLabQEMU.probeRunners { registry.register(runner) }
+  }
 }

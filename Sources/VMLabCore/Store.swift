@@ -19,10 +19,14 @@ public struct VMRuntime: Codable, Sendable, Hashable {
   public var gdbEndpoint: String?
   public var sshPort: Int?
   public var ip: String?
+  /// The request's port forwards with the host ports actually bound on 127.0.0.1 (R-308; an
+  /// ephemeral `host: nil` is resolved here). Nil when the engine forwards nothing.
+  public var forwards: [PortForward]?
 
   public init(
     pid: Int32, controlSocket: String, qmpSocket: String? = nil, serialSocket: String? = nil,
-    vncSocket: String? = nil, gdbEndpoint: String? = nil, sshPort: Int? = nil, ip: String? = nil
+    vncSocket: String? = nil, gdbEndpoint: String? = nil, sshPort: Int? = nil, ip: String? = nil,
+    forwards: [PortForward]? = nil
   ) {
     self.pid = pid
     self.controlSocket = controlSocket
@@ -32,6 +36,7 @@ public struct VMRuntime: Codable, Sendable, Hashable {
     self.gdbEndpoint = gdbEndpoint
     self.sshPort = sshPort
     self.ip = ip
+    self.forwards = forwards
   }
 }
 
@@ -69,12 +74,17 @@ public struct VMRecord: Codable, Sendable, Hashable {
   /// The plan the selector made when the VM was created, so `vm_inspect` can show it after a
   /// context reset. Absent from records written before it existed (additive: schema 1 still).
   public var plan: Plan?
+  /// How the guest boots (the request's `boot`); nil is from its disk. Additive: schema 1 still.
+  public var boot: BootSpec?
+  /// The request's `extra` (R-306: `qemuArgs`); nil when it had none. Additive: schema 1 still.
+  public var extra: ExtraSpec?
 
   public init(
     id: String, name: String? = nil, profile: Profile, guest: GuestSpec, features: [Feature],
     resources: ResourceSpec = ResourceSpec(), image: String? = nil,
     network: NetworkSpec = NetworkSpec(), createdAt: Date = Date(), state: VMState = .created,
-    runtime: VMRuntime? = nil, checkpoints: [CheckpointRef] = [], plan: Plan? = nil
+    runtime: VMRuntime? = nil, checkpoints: [CheckpointRef] = [], plan: Plan? = nil,
+    boot: BootSpec? = nil, extra: ExtraSpec? = nil
   ) {
     self.schemaVersion = Self.currentSchemaVersion
     self.id = id
@@ -90,11 +100,13 @@ public struct VMRecord: Codable, Sendable, Hashable {
     self.runtime = runtime
     self.checkpoints = checkpoints
     self.plan = plan
+    self.boot = boot
+    self.extra = extra
   }
 
   enum CodingKeys: String, CodingKey {
     case schemaVersion, id, name, profile, guest, features, resources, image, network, createdAt
-    case state, runtime, checkpoints, plan
+    case state, runtime, checkpoints, plan, boot, extra
   }
 
   public init(from decoder: any Decoder) throws {
@@ -113,6 +125,8 @@ public struct VMRecord: Codable, Sendable, Hashable {
     runtime = try c.decodeIfPresent(VMRuntime.self, forKey: .runtime)
     checkpoints = try c.decodeIfPresent([CheckpointRef].self, forKey: .checkpoints) ?? []
     plan = try c.decodeIfPresent(Plan.self, forKey: .plan)
+    boot = try c.decodeIfPresent(BootSpec.self, forKey: .boot)
+    extra = try c.decodeIfPresent(ExtraSpec.self, forKey: .extra)
   }
 
   /// `vm-` plus six lowercase RFC 4648 base32 characters.

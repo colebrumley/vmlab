@@ -24,6 +24,10 @@ final class FakeBackend: Backend {
       holdUntil: (@Sendable () -> Bool)?
     )
   >(([], [:], nil, nil))
+  /// The forwarded SSH port the fake runtime reports; nil (the default) means no SSH endpoint.
+  private let ssh = Mutex<Int?>(nil)
+
+  func reportSSHPort(_ port: Int?) { ssh.withLock { $0 = port } }
 
   init(profile: Profile = .qemuHVF, store: Store) {
     self.profile = profile
@@ -107,7 +111,8 @@ final class FakeBackend: Backend {
     let dir = store.directory(of: record.id)
     return VMRuntime(
       pid: 4242, controlSocket: dir.appending(path: "control.sock").path,
-      serialSocket: dir.appending(path: "serial.sock").path, gdbEndpoint: "tcp:127.0.0.1:1234")
+      serialSocket: dir.appending(path: "serial.sock").path, gdbEndpoint: "tcp:127.0.0.1:1234",
+      sshPort: ssh.withLock { $0 })
   }
 }
 
@@ -121,6 +126,7 @@ struct FakeRunningVM: RunningVM {
   var introspection: (any Introspection)?
   var exec: any ExecChannel
   var checkpoints: any CheckpointProvider
+  var memoryDump: (any MemoryDumper)? = FakeMemoryDumper()
 }
 
 struct FakeExec: ExecChannel {
@@ -130,10 +136,21 @@ struct FakeExec: ExecChannel {
 }
 
 struct FakeIntrospection: Introspection {
-  func query(
-    _ query: String, arguments: [String: JSONValue]
-  ) async throws(VMLabError) -> JSONValue {
-    .object(["query": .string(query)])
+  func query(_ query: IntrospectionQuery) async throws(VMLabError) -> IntrospectionAnswer {
+    switch query {
+    case .memoryTree, .registers, .devices, .hmp: .text("fake \(query.name)")
+    default: .json(.object(["query": .string(query.name)]))
+    }
+  }
+}
+
+/// Writes `size` zero bytes for a range, 1 KB for a full dump.
+struct FakeMemoryDumper: MemoryDumper {
+  func dump(_ request: MemoryDumpRequest) async throws(VMLabError) -> MemoryDumpResult {
+    let bytes = request.size ?? 1024
+    FileManager.default.createFile(
+      atPath: request.path.path, contents: Data(count: Int(bytes)))
+    return MemoryDumpResult(path: request.path, bytes: bytes, format: request.format)
   }
 }
 

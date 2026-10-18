@@ -35,12 +35,17 @@ public final class QEMUBackend: Backend {
   // MARK: Backend
 
   public func create(_ record: VMRecord, plan: Plan) async throws(VMLabError) {
-    try QEMUMachine.prepare(try request(record, plan: plan, seed: false))
+    try QEMUMachine.prepare(try await request(record, plan: plan, seed: false))
   }
 
   public func start(_ record: VMRecord) async throws(VMLabError) -> VMRuntime {
-    var request = try request(record, plan: Self.plan(of: record), seed: true)
-    if record.network.mode != .disabled { request.sshHostPort = try QEMUMachine.freeLoopbackPort() }
+    var request = try await request(record, plan: Self.plan(of: record), seed: true)
+    if Self.usesVmnet(record) {
+      request.vmnet = true
+    } else if record.network.mode != .disabled {
+      request.sshHostPort = try QEMUMachine.freeLoopbackPort()
+      request.forwards = try Self.resolveForwards(record.network.forwards)
+    }
     let machine = try await Self.lift { try await QEMUMachine.launch(request) }
     machines.withLock { $0[record.id] = machine }
     return machine.runtime
@@ -96,8 +101,38 @@ public final class QEMUBackend: Backend {
   }
 
   public func attach(_ record: VMRecord) async throws(VMLabError) -> any RunningVM {
-    QEMURunningVM(record: record, machine: try await machine(for: record))
+    let machine = try await machine(for: record)
+    let target = SSHEndpoint(runtime: machine.runtime).map {
+      SSHTarget(record: record, endpoint: $0, store: store)
+    }
+    return QEMURunningVM(
+      record: record, machine: machine, checkpoints: try checkpointProvider(record), ssh: target)
   }
+
+  public func sshEndpoint(_ record: VMRecord, timeout: Duration) async -> SSHEndpoint? {
+    SSHEndpoint(runtime: record.runtime)
+      ?? machines.withLock({ $0[record.id] }).flatMap { SSHEndpoint(runtime: $0.runtime) }
+  }
+
+  /// Checkpoints work on a stopped guest too (`qemu-img`), so they need no attach.
+  public func checkpoints(_ record: VMRecord) async throws(VMLabError) -> any CheckpointProvider {
+    try checkpointProvider(record)
+  }
+
+  func checkpointProvider(_ record: VMRecord) throws(VMLabError) -> QEMUCheckpoints {
+    QEMUCheckpoints(backend: self, record: record, liveAllowed: liveSnapshotsAllowed(record))
+  }
+
+  /// Live checkpoints: always under TCG; under HVF when the plan granted `checkpoint_live` or the
+  /// host fact `qemu_hvf_live_snapshot` (in this home's `host-facts.json`) is `yes`.
+  public func liveSnapshotsAllowed(_ record: VMRecord) -> Bool {
+    if profile == .qemuTCG || record.features.contains(.checkpointLive) { return true }
+    let facts = try? SlowProbes.load(from: SlowProbes.url(home: store.home))
+    return facts?.result(.qemuHVFLiveSnapshot) == .yes
+  }
+
+  /// The host's QEMU, located on first use.
+  public func installation() throws(VMLabError) -> QEMUInstallation { try locate() }
 
   // MARK: Helpers
 
@@ -112,10 +147,34 @@ public final class QEMUBackend: Backend {
     let gdbPort = record.runtime?.gdbEndpoint.flatMap(GDBEndpoint.init(runtime:))?.port
     let machine = try await Self.lift {
       try await QEMUMachine.attach(
-        layout: layout, gdbPort: gdbPort, sshPort: record.runtime?.sshPort)
+        layout: layout, gdbPort: gdbPort, sshPort: record.runtime?.sshPort,
+        forwards: record.runtime?.forwards)
     }
     machines.withLock { $0[record.id] = machine }
     return machine
+  }
+
+  /// Whether the guest's NIC is `vmnet-shared` (R-309): the request asked for `net_fast` and the
+  /// plan granted it, which the matrix allows only as root or when `qemu_vmnet` probed `yes`.
+  /// `net_fast` the profile merely has (it is `yes` there) does not switch a guest off
+  /// user-mode networking, whose SSH and port forwards it relies on.
+  static func usesVmnet(_ record: VMRecord) -> Bool {
+    record.network.mode != .disabled && record.plan?.requests(.netFast) == true
+  }
+
+  /// `forwards` with every `host: nil` given a free loopback port (R-308). Ports are chosen by
+  /// binding port 0, so two in one call differ; an explicit host port is kept as asked.
+  static func resolveForwards(
+    _ forwards: [PortForward], freePort: () throws(VMLabError) -> Int = QEMUMachine.freeLoopbackPort
+  ) throws(VMLabError) -> [PortForward] {
+    var taken = Set(forwards.compactMap(\.host))
+    return try forwards.map { forward throws(VMLabError) in
+      if forward.host != nil { return forward }
+      var port = try freePort()
+      for _ in 0..<8 where taken.contains(port) { port = try freePort() }
+      taken.insert(port)
+      return PortForward(guest: forward.guest, host: port)
+    }
   }
 
   /// The plan a stored record was created from, as far as the launch needs it.
@@ -127,26 +186,68 @@ public final class QEMUBackend: Backend {
 
   private func request(
     _ record: VMRecord, plan: Plan, seed: Bool
-  ) throws(VMLabError) -> QEMULaunchRequest {
-    guard let image = record.image else {
+  ) async throws(VMLabError) -> QEMULaunchRequest {
+    let boot = try await resolveBoot(record)
+    let base: URL?
+    if let image = record.image, boot.mode == .disk || images.pulled(image)?.format != .kernel {
+      base = try QEMUMachine.baseImage(named: image, in: images)
+    } else if boot.mode == .disk {
       throw VMLabError.invalidRequest(
         field: "image", reason: "a QEMU guest boots from a pulled image",
         hint: "Create the VM with image: \"debian-13-arm64\".")
+    } else {
+      base = nil
     }
-    let base = try QEMUMachine.baseImage(named: image, in: images)
     let layout = layout(of: record.id)
     var config: CloudInitConfig?
     // The key is R-400's; until it exists the guest boots without a seed.
     let publicKey = layout.directory.appending(path: "id_ed25519.pub")
-    if seed, let key = try? String(contentsOf: publicKey, encoding: .utf8) {
+    if seed, base != nil, let image = record.image,
+      let key = try? String(contentsOf: publicKey, encoding: .utf8)
+    {
       config = CloudInitConfig(
         instanceID: record.id, hostname: record.name,
         user: images.pulled(image)?.login.user ?? "debian",
         sshPublicKey: key.trimmingCharacters(in: .whitespacesAndNewlines))
     }
     return QEMULaunchRequest(
-      record: record, plan: plan, layout: layout, baseImage: base, seed: config,
+      record: record, plan: plan, layout: layout, baseImage: base, boot: boot, seed: config,
       installation: try locate())
+  }
+
+  /// The record's boot spec with host paths checked; a kernel boot without a kernel path takes
+  /// the image's kernel files, extracting them from the pulled image the first time.
+  func resolveBoot(_ record: VMRecord) async throws(VMLabError) -> BootSpec {
+    var boot = record.boot ?? BootSpec()
+    if boot.mode == .kernel, boot.kernel == nil {
+      guard let image = record.image else {
+        throw VMLabError.invalidRequest(
+          field: "boot.kernel", reason: "kernel boot needs a kernel path or an image",
+          hint: "Set boot.kernel, or name an image whose kernel vmlab can extract.")
+      }
+      var files = images.kernel(of: image)
+      if files == nil {
+        let store = images
+        files = try await Self.lift { try await store.extractKernel(image) }
+      }
+      guard let files else { throw VMLabError(code: .internal, message: "no kernel", hint: "") }
+      boot.kernel = files.kernel.path
+      if boot.initrd == nil { boot.initrd = files.initrd?.path }
+    }
+    let paths: [(String, String?)] = [
+      ("boot.kernel", boot.mode == .kernel ? boot.kernel : nil),
+      ("boot.initrd", boot.mode == .kernel ? boot.initrd : nil),
+      ("boot.dtb", boot.mode == .kernel ? boot.dtb : nil),
+      ("boot.firmware", boot.mode == .firmware ? boot.firmware : nil),
+      ("boot.binary", boot.mode == .binary ? boot.binary : nil),
+    ]
+    for case (let field, let path?) in paths
+    where !FileManager.default.isReadableFile(atPath: path) {
+      throw VMLabError.invalidRequest(
+        field: field, reason: "\(path) is not a readable file",
+        hint: "Give the absolute host path of an existing file.")
+    }
+    return boot
   }
 
   static func lift<T>(_ body: () async throws -> T) async throws(VMLabError) -> T {
@@ -169,12 +270,20 @@ public struct QEMURunningVM: RunningVM {
   public let profile: Profile
   public let features: [Feature]
   public let machine: QEMUMachine
+  public let checkpoints: any CheckpointProvider
+  /// Where SSH reaches the guest: its forwarded loopback port; nil with networking off.
+  public let ssh: SSHTarget?
 
-  public init(record: VMRecord, machine: QEMUMachine) {
+  public init(
+    record: VMRecord, machine: QEMUMachine, checkpoints: any CheckpointProvider,
+    ssh: SSHTarget? = nil
+  ) {
     id = record.id
     profile = record.profile
     features = record.features
     self.machine = machine
+    self.checkpoints = checkpoints
+    self.ssh = ssh
   }
 
   public var serial: SerialChannel? { machine.serial }
@@ -183,26 +292,16 @@ public struct QEMURunningVM: RunningVM {
   }
   public var gdb: GDBEndpoint? { machine.runtime.gdbEndpoint.flatMap(GDBEndpoint.init(runtime:)) }
   public var introspection: (any Introspection)? { QMPIntrospection(qmp: machine.qmp) }
-  public var exec: any ExecChannel { NotYetBuilt(vm: id, channel: "exec", item: "R-400") }
-  public var checkpoints: any CheckpointProvider {
-    NotYetBuilt(vm: id, channel: "checkpoints", item: "R-307")
-  }
-}
-
-/// `query` runs QMP `query-<query>` (R-311 widens this).
-struct QMPIntrospection: Introspection {
-  let qmp: QMPClient
-
-  func query(_ query: String, arguments: [String: JSONValue]) async throws(VMLabError) -> JSONValue
-  {
-    try await QEMUBackend.lift {
-      try await qmp.execute("query-\(query)", arguments: arguments.isEmpty ? nil : arguments)
-    }
+  public var memoryDump: (any MemoryDumper)? { QMPMemoryDumper(qmp: machine.qmp) }
+  /// SSH through the forwarded port (R-400); R-403 adds the guest agent.
+  public var exec: any ExecChannel {
+    if let ssh { return SSHExecChannel(target: ssh) }
+    return NotYetBuilt(vm: id, channel: "exec", item: "R-403: the guest has no network for SSH")
   }
 }
 
 /// A channel the QEMU backend does not provide yet; every call is `guest_unreachable`.
-struct NotYetBuilt: ExecChannel, CheckpointProvider {
+struct NotYetBuilt: ExecChannel {
   let vm: String
   let channel: String
   let item: String
@@ -215,7 +314,4 @@ struct NotYetBuilt: ExecChannel, CheckpointProvider {
   }
 
   func run(_ request: ExecRequest) async throws(VMLabError) -> ExecResult { throw error }
-  func create(id: String, mode: CheckpointMode) async throws(VMLabError) { throw error }
-  func restore(id: String, mode: CheckpointMode) async throws(VMLabError) { throw error }
-  func delete(id: String) async throws(VMLabError) { throw error }
 }

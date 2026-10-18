@@ -34,6 +34,16 @@ import VMLabCore
     #expect(f.vmDirectories().isEmpty)
   }
 
+  /// R-400: a start whose guest gives no SSH endpoint still runs, with `ssh_unreachable`.
+  @Test func startCarriesTheSSHWarning() async throws {
+    let f = try Fixture()
+    defer { f.cleanUp() }
+    _ = try await f.create(["autostart": .bool(false)])
+    let started = try await Self.act("start", in: f)
+    #expect(started.value["state"] == .string("running"))
+    #expect(started.warnings.contains { $0.hasPrefix("ssh_unreachable:") })
+  }
+
   @Test func illegalTransitionIsWrongState() async throws {
     let f = try Fixture()
     defer { f.cleanUp() }

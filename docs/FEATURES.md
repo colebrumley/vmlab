@@ -23,10 +23,10 @@ column is what `host-facts.json` on the development host recorded; `unknown` cou
 | `custom_devices` | N | N | Y | Y |  |
 | `halt_at_start` | N | N | Y | Y |  |
 | `checkpoint_disk` | Y | Y | Y | Y |  |
-| `checkpoint_live` | ? `vz_macos_live_snapshot` (R-608) | ? `vz_linux_live_snapshot` (R-608) | ? `qemu_hvf_live_snapshot` (R-307) | Y | `vz_macos_live_snapshot`: unknown; `vz_linux_live_snapshot`: unknown; `qemu_hvf_live_snapshot`: unknown |
+| `checkpoint_live` | ? `vz_macos_live_snapshot` (R-608) | ? `vz_linux_live_snapshot` (R-608) | ? `qemu_hvf_live_snapshot` (R-307) | Y | `vz_macos_live_snapshot`: unknown; `vz_linux_live_snapshot`: unknown; `qemu_hvf_live_snapshot`: yes, 2026-10-18 |
 | `pause` | Y | Y | Y | Y |  |
 | `net_nat` | Y | Y | Y | Y |  |
-| `net_fast` | Y | Y | C `root` or `qemu_vmnet` | C `root` or `qemu_vmnet` | `qemu_vmnet`: unknown |
+| `net_fast` | Y | Y | C `root` or `qemu_vmnet` | C `root` or `qemu_vmnet` | `qemu_vmnet`: no, 2026-10-18 |
 | `net_segment` | Y (static, R-901) | Y | Y | Y |  |
 | `net_port_forward` | Y (host-reachable address) | Y (host-reachable address) | Y (hostfwd) | Y (hostfwd) |  |
 | `net_none` | Y | Y | Y | Y |  |

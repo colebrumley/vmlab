@@ -62,8 +62,7 @@ public struct VZBackend: Backend {
           hint: "Check free disk space and permissions under VMLAB_HOME.")
       }
     }
-    let key = try SSHKey.ensure(
-      at: dir.appending(path: "id_ed25519"), comment: "vmlab-\(record.id)", commands: commands)
+    let key = try SSHKeys.generate(in: dir, comment: "vmlab-\(record.id)", runner: commands)
     let seed = CloudInitConfig(
       instanceID: record.id, hostname: Self.hostname(for: record), user: pulled.login.user,
       sshPublicKey: key, console: .hvc0,
@@ -162,8 +161,12 @@ public struct VZBackend: Backend {
       serial = try? await serialChannels.channel(
         for: record.id, socket: socket, vmDirectory: store.directory(of: record.id))
     }
+    let ssh = SSHEndpoint(runtime: record.runtime).map {
+      SSHTarget(record: record, endpoint: $0, store: store)
+    }
     return VZRunningVM(
-      id: record.id, profile: profile, features: record.features, handle: handle, serial: serial)
+      id: record.id, profile: profile, features: record.features, handle: handle, serial: serial,
+      ssh: ssh)
   }
 
   /// The runner's client and pid, from the record's runtime or the VM directory.
@@ -240,22 +243,28 @@ public struct VZRunningVM: RunningVM {
   public let features: [Feature]
   public let handle: VZRunnerHandle
   public let serial: SerialChannel?
+  /// The guest's leased address on port 22 (R-400); nil when no lease was recorded.
+  public let ssh: SSHTarget?
 
   public init(
     id: String, profile: Profile, features: [Feature], handle: VZRunnerHandle,
-    serial: SerialChannel? = nil
+    serial: SerialChannel? = nil, ssh: SSHTarget? = nil
   ) {
     self.id = id
     self.profile = profile
     self.features = features
     self.handle = handle
     self.serial = serial
+    self.ssh = ssh
   }
 
   public var display: DisplayEndpoint? { nil }
   public var gdb: GDBEndpoint? { nil }
   public var introspection: (any Introspection)? { nil }
-  public var exec: any ExecChannel { NotYet(vm: id, channel: "exec", item: "R-400") }
+  public var exec: any ExecChannel {
+    if let ssh { return SSHExecChannel(target: ssh) }
+    return NotYet(vm: id, channel: "exec", item: "R-400: no DHCP lease was recorded for SSH")
+  }
   public var checkpoints: any CheckpointProvider {
     NotYet(vm: id, channel: "checkpoints", item: "R-605")
   }

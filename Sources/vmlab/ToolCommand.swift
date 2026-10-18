@@ -365,6 +365,63 @@ struct LogsCommand: ToolCommand {
   }
 }
 
+// MARK: introspect
+
+struct IntrospectCommand: ToolCommand {
+  static let configuration = CommandConfiguration(
+    commandName: "introspect",
+    abstract: "Ask QEMU about a VM's machine state (the vm_introspect tool).")
+  static let toolName = "vm_introspect"
+
+  @Argument(help: "The VM's id or name.") var vm: String
+  @Argument(help: "status, block, pci, cpus, memory_tree, registers, devices or raw.")
+  var query: String
+  @Option(help: "raw: a read-only QMP query-* command.") var qmp: String?
+  @Option(help: "raw: an HMP info command, quoted (\"info mtree\").") var hmp: String?
+  @Flag(help: "Print the result object as JSON.") var json = false
+
+  func arguments() throws -> JSONValue {
+    var object: [String: JSONValue] = ["vm": .string(vm), "query": .string(query)]
+    if let qmp { object["qmp"] = .string(qmp) }
+    if let hmp { object["hmp"] = .string(hmp) }
+    return .object(object)
+  }
+
+  func render(_ result: ToolResult) -> String {
+    if let text = result.value["text"]?.stringValue { return text }
+    return ToolRendering.json(result.value["json"] ?? .null, pretty: true)
+  }
+}
+
+// MARK: memory-dump
+
+struct MemoryDumpCommand: ToolCommand {
+  static let configuration = CommandConfiguration(
+    commandName: "memory-dump",
+    abstract: "Write guest physical memory to the VM's dumps/ directory (the vm_memory_dump tool).")
+  static let toolName = "vm_memory_dump"
+
+  @Argument(help: "The VM's id or name.") var vm: String
+  @Option(help: "Guest physical start address in 0x hex (with --size).") var address: String?
+  @Option(help: "Bytes to dump from --address.") var size: Int?
+  @Flag(help: "Allow a range over 256 MB.") var confirm = false
+  @Flag(help: "Print the result object as JSON.") var json = false
+
+  func arguments() throws -> JSONValue {
+    var object: [String: JSONValue] = ["vm": .string(vm)]
+    if let address { object["address"] = .string(address) }
+    if let size { object["size"] = .number(Double(size)) }
+    if confirm { object["confirm"] = .bool(true) }
+    return .object(object)
+  }
+
+  func render(_ result: ToolResult) -> String {
+    let v = result.value
+    return "\(v["path"]?.stringValue ?? "?") (\(Human.int(v["bytes"])) bytes, "
+      + "\(v["format"]?.stringValue ?? "?"))"
+  }
+}
+
 // MARK: serial
 
 struct SerialCommand: ToolCommand {
