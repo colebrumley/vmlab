@@ -252,7 +252,8 @@ struct FleetHandler: ToolHandler {
 
   // MARK: status, destroy
 
-  /// `{ name, segment, subnet, members: [ { vm, id, state, ip, natIP?, error? } ] }`.
+  /// `{ name, segment, subnet, members: [ { vm, id, state, ip, natIP?, forwards?, error? } ] }`;
+  /// `forwards` is `vm_inspect`'s (R-905: where the host reaches each requested guest port).
   static func status(_ fleet: FleetRecord, context: ToolContext) -> [String: JSONValue] {
     let rows: [JSONValue] = fleet.members.map { member in
       var row: [String: JSONValue] = ["vm": .string(member.name)]
@@ -261,6 +262,7 @@ struct FleetHandler: ToolHandler {
         row["state"] = .string(record.state.rawValue)
         row["ip"] = record.segment.map { .string($0.address) } ?? .null
         if let ip = record.runtime?.ip { row["natIP"] = .string(ip) }
+        if let forwards = VMInspectHandler.forwards(record) { row["forwards"] = .array(forwards) }
       } else {
         row["state"] = .string(member.vm == nil ? "failed" : "destroyed")
         row["ip"] = .null

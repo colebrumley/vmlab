@@ -59,6 +59,31 @@ struct VMInspectHandler: ToolHandler {
       ], warnings: warnings)
   }
 
+  /// How the host reaches the requested guest ports (R-905). QEMU maps each to a loopback port
+  /// (`host`, R-308); VZ guests have no port mapping but their NAT address answers from the host,
+  /// so `host` is null and `hostReachable` is `<ip>:<guest port>`. Every row has `hostReachable`,
+  /// the address to connect to. Nil when the VM forwards nothing or has no address yet.
+  static func forwards(_ record: VMRecord) -> [JSONValue]? {
+    guard let runtime = record.runtime else { return nil }
+    if record.profile.isVZ {
+      guard let ip = runtime.ip, !record.network.forwards.isEmpty else { return nil }
+      return record.network.forwards.map { forward in
+        .object([
+          "guest": .number(Double(forward.guest)), "host": .null,
+          "hostReachable": .string("\(ip):\(forward.guest)"),
+        ])
+      }
+    }
+    guard let forwards = runtime.forwards, !forwards.isEmpty else { return nil }
+    return forwards.map { forward in
+      .object([
+        "guest": .number(Double(forward.guest)),
+        "host": forward.host.map { .string("127.0.0.1:\($0)") } ?? .null,
+        "hostReachable": forward.host.map { .string("127.0.0.1:\($0)") } ?? .null,
+      ])
+    }
+  }
+
   /// The VM's place on its segment: name, subnet, address, MAC and the names it answers to.
   static func segments(_ record: VMRecord, context: ToolContext) -> [JSONValue] {
     guard let segment = record.segment else { return [] }
@@ -79,14 +104,8 @@ struct VMInspectHandler: ToolHandler {
     var endpoints: [String: JSONValue] = [:]
     if let port = runtime.sshPort { endpoints["ssh"] = .string("127.0.0.1:\(port)") }
     if let ip = runtime.ip { endpoints["ip"] = .string(ip) }
-    if let forwards = runtime.forwards, !forwards.isEmpty {
-      endpoints["forwards"] = .array(
-        forwards.map { forward in
-          .object([
-            "guest": .number(Double(forward.guest)),
-            "host": forward.host.map { .string("127.0.0.1:\($0)") } ?? .null,
-          ])
-        })
+    if let forwards = Self.forwards(record), !forwards.isEmpty {
+      endpoints["forwards"] = .array(forwards)
     }
     if let serial = runtime.serialSocket { endpoints["serial"] = .string(serial) }
     if let display = DisplayEndpoint.forVM(record, vmDirectory: store.directory(of: record.id)) {

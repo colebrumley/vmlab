@@ -129,7 +129,7 @@ or Unsatisfiable { satisfiable: false, code, message, hint, guest,
 
 ## `vm_create`
 
-Create a VM from requirements: plans it (as vm_plan), pulls the image if needed, provisions it (SSH key, cloud-init) and by default starts it and waits for SSH. Ask in require for every channel you will use (serial, gdb, gui, checkpoint_live, ...): tools for channels the plan did not grant fail later with capability_missing. Returns the resolved plan, so read it to know what you got, plus the VM, its state and endpoints. Slow (tens of seconds to minutes); sends progress.
+Create a VM from requirements: plans it (as vm_plan), pulls the image if needed, provisions it (SSH key, cloud-init) and by default starts it and waits for SSH. Ask in require for every channel you will use (serial, gdb, gui, checkpoint_live, ...): tools for channels the plan did not grant fail later with capability_missing. Returns the resolved plan, so read it to know what you got, plus the VM, its state and endpoints. Requested port forwards are QEMU loopback ports or, on VZ, the guest's own NAT address; forwarding says which, and endpoints.forwards[].hostReachable is where to connect. Slow (tens of seconds to minutes); sends progress.
 
 **Errors:** `invalid_request`, `unsatisfiable`, `unverified_capability`, `limit_macos_guests`, `limit_memory`, `host_missing_tool`, `image_not_found`, `confirm_required`, `provision_failed`, `timeout`, `engine_error`
 
@@ -148,7 +148,8 @@ Create a VM from requirements: plans it (as vm_plan), pulls the image if needed,
 ```
 { plan: Plan, vm: { id, name }, state,
   endpoints: { ssh?: "host:port", ip?, serial?, display?, gdb?,
-    forwards?: [ { guest, host: "127.0.0.1:port" } ] } }
+    forwards?: [ { guest, host: "127.0.0.1:port" | null, hostReachable: "addr:port" } ] },
+  forwarding: { mode: hostfwd | host_reachable, note } | null }
 ```
 
 ## `vm_list`
@@ -188,8 +189,8 @@ Everything about one VM: its record, the plan and resolved features (what channe
 { vm: { id, name }, record: VMRecord, plan: Plan, features: [feature],
   endpoints: { ssh?, ip?, serial?, gdb?,
     display?: { kind, address, auth, passwordFile?, hostSide },
-    forwards?: [ { guest, host: "127.0.0.1:port" } ] },
-  segments: [ { name, ip } ], events: [ Event ], panic?: { line, offset, at },
+    forwards?: [ { guest, host: "127.0.0.1:port" | null, hostReachable: "addr:port" } ] },
+  segments: [ { segment, subnet, ip, prefixLength, mac, names } ], events: [ Event ], panic?: { line, offset, at },
   provision?: { vm, finishedAt, steps: [ { name, command, status, exitCode?, durationMs?,
     error? } ] }, warnings }
 ```
@@ -535,7 +536,8 @@ Run several identical VMs as a group. create makes count members named <name>-1 
 **Result**
 
 ```
-create, status: { name, members: [ { vm, state, ip?, error? } ] }
+create, status: { name, segment, subnet, members: [ { vm, id, state, ip?, natIP?,
+  forwards?: [ { guest, host, hostReachable } ], error? } ] }
 list: { fleets: [ { name, members } ] }
 exec: { results: { <member>: ExecResult }, allSucceeded }; destroy: { destroyed: [vm] }
 ```

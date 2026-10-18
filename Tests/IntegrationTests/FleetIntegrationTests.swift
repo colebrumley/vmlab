@@ -75,3 +75,99 @@ import VMLabMCP
     await lab.shutdown()
   }
 }
+
+extension FleetIntegrationTests {
+  /// The fleet requirements per engine: introspection keeps QEMU, serial alone lands on VZ.
+  static func reachRequirements(_ profile: Profile) -> JSONValue {
+    .object([
+      "guest": .object(["os": .string("linux"), "arch": .string("arm64")]),
+      "require": .array(
+        (profile == .qemuHVF ? ["serial", "exec_ssh", "introspection"] : ["serial", "exec_ssh"])
+          .map(JSONValue.string)),
+      "resources": .object(["cpus": .number(2), "memoryGB": .number(2), "diskGB": .number(8)]),
+      "network": .object(["forwards": .array([.object(["guest": .number(8000)])])]),
+      "image": .string("debian-13-arm64"),
+    ])
+  }
+
+  /// A GET from the host; the body, or nil.
+  static func fetch(_ address: String) async -> String? {
+    guard let url = URL(string: "http://\(address)/") else { return nil }
+    for _ in 0..<10 {
+      if let (data, response) = try? await URLSession.shared.data(from: url),
+        (response as? HTTPURLResponse)?.statusCode == 200
+      {
+        return String(decoding: data, as: UTF8.self)
+      }
+      try? await Task.sleep(for: .seconds(1))
+    }
+    return nil
+  }
+
+  /// R-905 Verify (integration), on both engines: a fleet of three, `python3 -m http.server` on
+  /// node-1, fetched from node-2 by name over the segment and from the host at the address the
+  /// fleet reports (a loopback port on QEMU, the guest's NAT address on VZ).
+  @Test(
+    .enabled(if: integrationEnabled), .timeLimit(.minutes(10)),
+    arguments: [Profile.qemuHVF, Profile.vzLinux])
+  func httpServerReachableByNameAndFromTheHost(profile: Profile) async throws {
+    guard profile == .qemuHVF || VZRunnerIntegrationTests.ready else { return }
+    let lab = try LabHome(tag: profile == .qemuHVF ? "r" : "z")
+    let context = Self.context(lab)
+    do {
+      let created = try await Self.fleet(
+        context,
+        [
+          "action": .string("create"), "name": .string("web"), "count": .number(3),
+          "requirements": Self.reachRequirements(profile),
+        ])
+      #expect(created["plan"]?["profile"] == .string(profile.rawValue))
+      let members = try #require(created["members"]?.arrayValue)
+      #expect(members.allSatisfy { $0["state"] == .string("running") }, "\(members)")
+
+      let serve = try await Self.fleet(
+        context,
+        [
+          "action": .string("exec"), "name": .string("web"), "members": .array([.string("web-1")]),
+          "command": .string(
+            "mkdir -p /tmp/www && echo hello-from-web-1 > /tmp/www/index.html && cd /tmp/www && "
+              + "(setsid nohup python3 -m http.server 8000 </dev/null >/dev/null 2>&1 &) && sleep 1"
+          ),
+        ])
+      #expect(serve["allSucceeded"] == .bool(true), "\(serve)")
+
+      let byName = try await Self.fleet(
+        context,
+        [
+          "action": .string("exec"), "name": .string("web"), "members": .array([.string("web-2")]),
+          "command": .string(
+            "for i in 1 2 3 4 5; do curl -sf http://web-1.web:8000/ && exit 0 || "
+              + "python3 -c \"import urllib.request as u; "
+              + "print(u.urlopen('http://web-1.web:8000/').read().decode(), end='')\" && exit 0; "
+              + "sleep 1; done; exit 1"),
+        ])
+      #expect(
+        byName["results"]?["web-2"]?["stdout"] == .string("hello-from-web-1\n"), "\(byName)")
+
+      let status = try await Self.fleet(
+        context, ["action": .string("status"), "name": .string("web")])
+      let first = try #require(
+        status["members"]?.arrayValue?.first { $0["vm"] == .string("web-1") })
+      let address = try #require(
+        first["forwards"]?.arrayValue?.first?["hostReachable"]?.stringValue, "\(first)")
+      if profile == .vzLinux {
+        #expect(first["forwards"]?.arrayValue?.first?["host"] == .null)
+        #expect(address.hasSuffix(":8000") && !address.hasPrefix("127."), "\(address)")
+      } else {
+        #expect(address.hasPrefix("127.0.0.1:"), "\(address)")
+      }
+      #expect(await Self.fetch(address) == "hello-from-web-1\n", "from the host at \(address)")
+
+      _ = try await Self.fleet(context, ["action": .string("destroy"), "name": .string("web")])
+    } catch {
+      await lab.shutdown()
+      throw error
+    }
+    await lab.shutdown()
+  }
+}

@@ -34,7 +34,8 @@ extension ToolSpec {
           "create: per-member wait for SSH; exec: per-member command timeout."),
       ], required: ["action"]),
     outputShape: """
-      create, status: { name, members: [ { vm, state, ip?, error? } ] }
+      create, status: { name, segment, subnet, members: [ { vm, id, state, ip?, natIP?,
+        forwards?: [ { guest, host, hostReachable } ], error? } ] }
       list: { fleets: [ { name, members } ] }
       exec: { results: { <member>: ExecResult }, allSucceeded }; destroy: { destroyed: [vm] }
       """,

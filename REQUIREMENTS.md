@@ -774,7 +774,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   `vm_exec`, returning a map of member → result and an `allSucceeded` flag.
   **Verify:** integration: `fleet exec "hostname"` returns each member's name.
 
-- [ ] **R-905 Port forwarding and segment reachability from the host**
+- [x] **R-905 Port forwarding and segment reachability from the host**
   For QEMU guests `net_port_forward` already works (R-308). For VZ guests the NAT address is
   directly reachable from the host, so `vm_inspect` reports `hostReachable: <ip>:<port>` for
   requested forwards instead of a mapped port, and the result of `vm_create` explains which it
@@ -967,7 +967,7 @@ result also carries `vm` (id and name) where a VM is involved and `warnings: [St
 | `host_doctor` | `probe: bool` | `[ { check, status: ok|missing|unknown, fix } ]`, probe results |
 | `images` | **`action`**: list, pull, remove, register, template_create, prune, extract_kernel; `name`, `confirm`, `path`, `guest`, `arch`, `format` | list: `[Image]`; pull: `{ name, path, bytes, cached }` |
 | `vm_plan` | **`requirements`** (below) | `Plan { profile, features, unverified, preferredDenied, estimatedStartupSeconds, notes }` or `Unsatisfiable { eliminated: { feature: [profile] }, suggestions: [ { drop: [feature], profile } ] }` |
-| `vm_create` | **`requirements`**, `name`, `autostart` (default true), `confirm` | `{ plan, vm, state, endpoints }` |
+| `vm_create` | **`requirements`**, `name`, `autostart` (default true), `confirm` | `{ plan, vm, state, endpoints, forwarding }` (R-905: `hostfwd` or `host_reachable`; `endpoints.forwards[].hostReachable` is where to connect) |
 | `vm_list` | `state?`, `fleet?` | `[ { id, name, profile, state, guest, fleet?, ip?, sshPort? } ]` |
 | `vm_inspect` | **`vm`** | record, plan, endpoints, segment addresses, last 20 events, warnings, latest panic |
 | `vm_lifecycle` | **`vm`**, **`action`**: start, stop, kill, pause, resume, reset, destroy, clone; `name`, `from`, `force`, `timeoutSeconds` | `{ state, durationMs }`; clone: the new VM |

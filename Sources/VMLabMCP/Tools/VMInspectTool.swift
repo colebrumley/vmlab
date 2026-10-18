@@ -13,8 +13,8 @@ extension ToolSpec {
       { vm: { id, name }, record: VMRecord, plan: Plan, features: [feature],
         endpoints: { ssh?, ip?, serial?, gdb?,
           display?: { kind, address, auth, passwordFile?, hostSide },
-          forwards?: [ { guest, host: "127.0.0.1:port" } ] },
-        segments: [ { name, ip } ], events: [ Event ], panic?: { line, offset, at },
+          forwards?: [ { guest, host: "127.0.0.1:port" | null, hostReachable: "addr:port" } ] },
+        segments: [ { segment, subnet, ip, prefixLength, mac, names } ], events: [ Event ], panic?: { line, offset, at },
         provision?: { vm, finishedAt, steps: [ { name, command, status, exitCode?, durationMs?,
           error? } ] }, warnings }
       """,
