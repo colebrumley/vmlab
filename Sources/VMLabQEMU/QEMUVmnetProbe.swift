@@ -39,7 +39,7 @@ public struct QEMUVmnetProbe: SlowProbeRunner {
       throw QEMUMachine.ioError("create \(layout.directory.path)", error)
     }
     let base = layout.directory.appending(path: "base.qcow2")
-    try QEMUMachine.run(
+    try await QEMUMachine.run(
       installation.qemuImg, ["create", "-q", "-f", "qcow2", base.path, "64M"],
       step: "qemu-img create")
     let request = Self.request(layout: layout, base: base, installation: installation)

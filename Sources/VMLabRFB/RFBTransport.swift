@@ -1,5 +1,6 @@
 import Darwin
 import Dispatch
+import VMLabCore
 
 /// A byte stream to an RFB server.
 public protocol RFBTransport: Sendable {
@@ -34,11 +35,10 @@ public final class SocketTransport: RFBTransport, @unchecked Sendable {
   public static func connect(
     _ endpoint: RFBEndpoint, timeout: Duration = defaultConnectTimeout
   ) async throws -> SocketTransport {
-    try await withCheckedThrowingContinuation { cont in
-      DispatchQueue.global().async {
-        cont.resume(
-          with: Result { try SocketTransport(fd: openSocket(endpoint, timeout: timeout)) })
-      }
+    // A thread of its own, not `DispatchQueue.global()`: that queue has as few threads as the
+    // cooperative pool, so a busy process would queue the connect behind unrelated work.
+    try await OffPool.run("vmlab.rfb.connect") { () throws(RFBError) -> SocketTransport in
+      SocketTransport(fd: try openSocket(endpoint, timeout: timeout))
     }
   }
 
@@ -47,7 +47,9 @@ public final class SocketTransport: RFBTransport, @unchecked Sendable {
     setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, socklen_t(MemoryLayout<Int32>.size))
   }
 
-  private static func openSocket(_ endpoint: RFBEndpoint, timeout: Duration) throws -> Int32 {
+  private static func openSocket(_ endpoint: RFBEndpoint, timeout: Duration) throws(RFBError)
+    -> Int32
+  {
     switch endpoint {
     case .unix(let path):
       var addr = sockaddr_un()

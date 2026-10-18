@@ -14,7 +14,7 @@ import Testing
           .tcp(host: "192.0.2.1", port: 5900), timeout: .milliseconds(300))
       }
     }
-    #expect(elapsed < .seconds(5))
+    #expect(elapsed < .seconds(2))
   }
 
   /// A listening loopback port still connects through the non-blocking path.
@@ -38,5 +38,17 @@ import Testing
     let port = UInt16(bigEndian: address.sin_port)
     let transport = try await SocketTransport.connect(.tcp(host: "127.0.0.1", port: port))
     await transport.close()
+  }
+}
+
+@Suite struct RFBTransportPoolTests {
+  /// Connects that wait for an address that never answers hold no thread of the cooperative
+  /// pool (nor of `DispatchQueue.global()`, which is as narrow): other tasks still run.
+  @Test func pendingConnectsLeaveThePoolFree() async {
+    let latency = await PoolSaturation.latency { _ in
+      _ = try? await SocketTransport.connect(
+        .tcp(host: "192.0.2.1", port: 5900), timeout: PoolSaturation.hold)
+    }
+    #expect(latency < PoolSaturation.budget)
   }
 }

@@ -138,6 +138,25 @@ public struct Tart: Sendable {
     try run(["delete", name], what: "tart delete \(name)")
   }
 
+  /// `clone` from an `async` context: `tart` is waited for off the cooperative pool.
+  public func clone(_ source: String, to name: String) async throws(VMLabError) -> TartVMFiles {
+    try await OffPool.run("vmlab.tart") { () throws(VMLabError) -> TartVMFiles in
+      try self.clone(source, to: name)
+    }
+  }
+
+  /// `setDiskSize` from an `async` context, off the cooperative pool.
+  public func setDiskSize(_ name: String, gigabytes: Int) async throws(VMLabError) {
+    try await OffPool.run("vmlab.tart") { () throws(VMLabError) in
+      try self.setDiskSize(name, gigabytes: gigabytes)
+    }
+  }
+
+  /// `delete` from an `async` context, off the cooperative pool.
+  public func delete(_ name: String) async throws(VMLabError) {
+    try await OffPool.run("vmlab.tart") { () throws(VMLabError) in try self.delete(name) }
+  }
+
   func run(_ arguments: [String], what: String) throws(VMLabError) {
     let output = commands.run(executable, arguments)
     guard let output, output.status == 0 else {

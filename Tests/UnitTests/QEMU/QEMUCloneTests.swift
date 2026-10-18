@@ -106,9 +106,8 @@ import VMLabCore
     // Writes to a clone stay in the clone.
     #expect(try Fixture.io(cloneDisk, "write", 0xee))
     #expect(try Fixture.io(disk, "read", 0xcd))
-    #expect(
-      try QEMUImageSnapshots.tags(try #require(QEMUCloneTests.installation).qemuImg, disk: disk)
-        == ["cp-aaaaaa"])
+    let qemuImg = try #require(QEMUCloneTests.installation).qemuImg
+    #expect(try await QEMUImageSnapshots.tags(qemuImg, disk: disk) == ["cp-aaaaaa"])
 
     // A second clone of the checkpoint shares the frozen layer.
     let again = try await f.backend.clone(f.source, checkpoint: node, into: try f.target("c"))

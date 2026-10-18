@@ -258,6 +258,14 @@ public struct SegmentStore: Sendable {
   /// Stops the switch and removes the segment; `wrong_state` while it has members. The check
   /// and the removal hold `segment-<name>`'s lock (CX-18), so a join is either seen or comes
   /// after, onto a segment it recreates.
+  public func destroy(_ name: String) async throws(VMLabError) {
+    // Stopping the switch waits up to two seconds for it to exit: off the cooperative pool.
+    try await OffPool.run("vmlab.segment.destroy") { () throws(VMLabError) in
+      try self.destroy(name)
+    }
+  }
+
+  /// `destroy` for synchronous callers; it blocks while the switch stops.
   public func destroy(_ name: String) throws(VMLabError) {
     try Self.check(name)
     try Store(home: home).withLock("segment-\(name)") { () throws(VMLabError) in

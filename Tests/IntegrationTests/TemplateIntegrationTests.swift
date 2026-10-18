@@ -32,7 +32,7 @@ import VMLabQEMU
       let parentTarget = SSHTarget(
         vm: child.id, endpoint: endpoint, user: "debian",
         vmDirectory: lab.store.directory(of: parent.id))
-      let refused = ProcessRunner().run(SSHKeys.ssh, parentTarget.arguments(remote: "true"))
+      let refused = await ProcessRunner().run(SSHKeys.ssh, parentTarget.arguments(remote: "true"))
       #expect(refused?.status == 255, "\(refused?.output ?? "did not run")")
       #expect(refused?.output.contains("Permission denied") == true, "\(refused?.output ?? "")")
     } catch {

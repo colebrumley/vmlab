@@ -42,8 +42,10 @@ public struct QEMUCheckpoints: CheckpointProvider {
     } else {
       guard mode == .disk else { throw liveNeedsRunning("take a live checkpoint") }
       let img = try backend.installation().qemuImg
-      if try QEMUImageSnapshots.tags(img, disk: layout.disk).contains(id) { throw Self.exists(id) }
-      try QEMUMachine.run(
+      if try await QEMUImageSnapshots.tags(img, disk: layout.disk).contains(id) {
+        throw Self.exists(id)
+      }
+      try await QEMUMachine.run(
         img, ["snapshot", "-c", id, layout.disk.path], step: "qemu-img snapshot -c")
     }
   }
@@ -59,10 +61,10 @@ public struct QEMUCheckpoints: CheckpointProvider {
     } else {
       guard mode == .disk else { throw liveNeedsRunning("restore a live checkpoint") }
       let img = try backend.installation().qemuImg
-      guard try QEMUImageSnapshots.tags(img, disk: layout.disk).contains(id) else {
+      guard try await QEMUImageSnapshots.tags(img, disk: layout.disk).contains(id) else {
         throw Self.missing(id)
       }
-      try QEMUMachine.run(
+      try await QEMUMachine.run(
         img, ["snapshot", "-a", id, layout.disk.path], step: "qemu-img snapshot -a")
     }
   }
@@ -75,10 +77,10 @@ public struct QEMUCheckpoints: CheckpointProvider {
       try await QMPSnapshots.delete(tag: id, qmp: qmp, timeout: jobTimeout)
     } else {
       let img = try backend.installation().qemuImg
-      guard try QEMUImageSnapshots.tags(img, disk: layout.disk).contains(id) else {
+      guard try await QEMUImageSnapshots.tags(img, disk: layout.disk).contains(id) else {
         throw Self.missing(id)
       }
-      try QEMUMachine.run(
+      try await QEMUMachine.run(
         img, ["snapshot", "-d", id, layout.disk.path], step: "qemu-img snapshot -d")
     }
   }
@@ -86,7 +88,7 @@ public struct QEMUCheckpoints: CheckpointProvider {
   /// The snapshot tags on the guest's disk, from QMP when it runs, else from `qemu-img info`.
   public func tags() async throws(VMLabError) -> [String] {
     if isLive { return try await QMPSnapshots.tags(try await backend.machine(for: record).qmp) }
-    return try QEMUImageSnapshots.tags(try backend.installation().qemuImg, disk: layout.disk)
+    return try await QEMUImageSnapshots.tags(try backend.installation().qemuImg, disk: layout.disk)
   }
 
   // MARK: Refusals
@@ -262,6 +264,12 @@ enum QMPSnapshots {
 enum QEMUImageSnapshots {
   /// The tags of the internal snapshots of `disk` (`qemu-img info --output=json`); none when the
   /// disk does not exist yet.
+  static func tags(_ qemuImg: URL, disk: URL) async throws(VMLabError) -> [String] {
+    try await OffPool.run("vmlab.qemu-img") { () throws(VMLabError) -> [String] in
+      try Self.tags(qemuImg, disk: disk)
+    }
+  }
+
   static func tags(_ qemuImg: URL, disk: URL) throws(VMLabError) -> [String] {
     guard FileManager.default.fileExists(atPath: disk.path) else { return [] }
     guard FileManager.default.isExecutableFile(atPath: qemuImg.path),

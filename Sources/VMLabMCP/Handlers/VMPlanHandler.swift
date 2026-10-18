@@ -12,7 +12,7 @@ struct VMPlanHandler: ToolHandler {
     let requirements = try Requirements.decode(json: arguments["requirements"]?.data ?? Data())
     let allowUnverified = try arguments.bool("allowUnverified")
     let outcome = ProfileSelector.select(
-      requirements, host: context.hostFacts(), running: context.store.inventory(),
+      requirements, host: await context.hostFacts(), running: context.store.inventory(),
       allowUnverified: allowUnverified, limits: context.limits)
     switch outcome {
     case .success(let plan):

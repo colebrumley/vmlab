@@ -1,4 +1,5 @@
 import Foundation
+import VMLabCore
 
 /// A byte pipe to a GDB stub. The client owns exactly one.
 public protocol GDBTransport: Sendable {
@@ -17,6 +18,8 @@ public protocol GDBTransport: Sendable {
 public final class GDBTCPTransport: GDBTransport, Sendable {
   public let incoming: AsyncThrowingStream<[UInt8], any Error>
   private let socket: Socket
+  /// A private serial queue: its own thread, unlike `DispatchQueue.global()`.
+  private let writeQueue = DispatchQueue(label: "vmlab.gdb.writer")
 
   /// Connects to `host:port` (numeric or a name `getaddrinfo` resolves).
   public init(host: String, port: UInt16) throws {
@@ -44,9 +47,25 @@ public final class GDBTCPTransport: GDBTransport, Sendable {
     thread.start()
   }
 
+  /// `init` on a thread of its own: the `connect` (and a name lookup) block, and must not hold a
+  /// thread of the cooperative pool while they do.
+  public static func open(host: String, port: UInt16) async throws -> GDBTCPTransport {
+    try await OffPool.run("vmlab.gdb.connect") { () throws(any Error) -> GDBTCPTransport in
+      try GDBTCPTransport(host: host, port: port)
+    }
+  }
+
   deinit { socket.shutdown() }
 
-  public func send(_ bytes: [UInt8]) async throws { try socket.write(bytes) }
+  /// Writes on the transport's own serial queue, never on the cooperative pool (a stub that
+  /// stops reading blocks the write). The queue keeps sends in call order: each is enqueued
+  /// before the caller suspends.
+  public func send(_ bytes: [UInt8]) async throws {
+    let socket = self.socket
+    try await withCheckedThrowingContinuation { (done: CheckedContinuation<Void, any Error>) in
+      writeQueue.async { done.resume(with: Result { try socket.write(bytes) }) }
+    }
+  }
 
   public func close() async { socket.shutdown() }
 

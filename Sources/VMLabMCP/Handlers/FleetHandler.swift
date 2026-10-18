@@ -112,14 +112,14 @@ struct FleetHandler: ToolHandler {
 
     let plan: Plan
     switch ProfileSelector.select(
-      requirements, host: context.hostFacts(), running: context.store.inventory(),
+      requirements, host: await context.hostFacts(), running: context.store.inventory(),
       allowUnverified: allowUnverified, limits: context.limits)
     {
     case .success(let selected): plan = selected
     case .failure(let unsatisfiable): throw unsatisfiable.error
     }
     try FleetPlanning.checkBudget(
-      plan: plan, count: count, running: context.store.inventory(), host: context.hostFacts(),
+      plan: plan, count: count, running: context.store.inventory(), host: await context.hostFacts(),
       limits: context.limits, hostMemory: context.startGate.hostMemory)
     await context.progress.step("planned \(count) × \(plan.profile.rawValue)")
 
@@ -369,7 +369,7 @@ struct FleetHandler: ToolHandler {
     teardown.failed = refusals.map { (name: $0.value.name, id: $0.key, error: $0.value.error) }
       .sorted { $0.name < $1.name }
     if survivors.isEmpty {
-      if fleet.autoSegment { try? context.manager.segments.destroy(fleet.segment) }
+      if fleet.autoSegment { try? await context.manager.segments.destroy(fleet.segment) }
       fleets.remove(fleet.name)
     } else {
       var kept = fleet

@@ -69,7 +69,7 @@ enum LongOperation {
     let store = context.store
     let manager = context.manager
     let gate = context.startGate
-    let host = context.hostFacts()
+    let host = await context.hostFacts()
     let started = try await context.progress.during(
       "starting \(record.id)", every: context.heartbeat
     ) { () throws(VMLabError) -> VMManager.Outcome in

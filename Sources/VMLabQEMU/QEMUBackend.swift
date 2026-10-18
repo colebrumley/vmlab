@@ -43,7 +43,7 @@ public final class QEMUBackend: Backend {
   // MARK: Backend
 
   public func create(_ record: VMRecord, plan: Plan) async throws(VMLabError) {
-    try QEMUMachine.prepare(try await request(record, plan: plan, seed: false))
+    try await QEMUMachine.prepare(try await request(record, plan: plan, seed: false))
   }
 
   public func start(_ record: VMRecord) async throws(VMLabError) -> VMRuntime {
@@ -380,8 +380,11 @@ public final class QEMUBackend: Backend {
     let policy = PathPolicy.load(home: store.home)
     try record.extra?.checkHostPaths(policy: policy, vmlabHome: store.home)
     if let extra = record.extra {
-      try Self.checkImageChains(
-        extra, policy: policy, vmlabHome: store.home, qemuImg: try locate().qemuImg)
+      // qemu-img per named image: off the cooperative pool.
+      let (home, qemuImg) = (store.home, try locate().qemuImg)
+      try await OffPool.run("vmlab.qemu-img") { () throws(VMLabError) in
+        try Self.checkImageChains(extra, policy: policy, vmlabHome: home, qemuImg: qemuImg)
+      }
     }
     if seed, base != nil, let image = record.image,
       let key = try? String(contentsOf: publicKey, encoding: .utf8)

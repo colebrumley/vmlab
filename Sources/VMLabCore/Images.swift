@@ -264,8 +264,14 @@ public struct URLSessionDownloader: ImageDownloading {
 }
 
 /// `VMLAB_HOME/images/`: pulls, lists and removes images. An actor so two pulls of one image in a
-/// process never write the same files.
+/// process never write the same files. It runs on a serial queue of its own, not on the
+/// cooperative pool: its work blocks for minutes (`qemu-img convert`, `tart`, hashing a disk), and
+/// the queue's thread blocks instead of one every other task needs.
 public actor ImageStore {
+  private nonisolated let queue = DispatchSerialQueue(label: "vmlab.images")
+  public nonisolated var unownedExecutor: UnownedSerialExecutor {
+    queue.asUnownedSerialExecutor()
+  }
   public nonisolated let directory: URL
   public nonisolated let catalogue: ImageCatalogue
   let downloader: any ImageDownloading

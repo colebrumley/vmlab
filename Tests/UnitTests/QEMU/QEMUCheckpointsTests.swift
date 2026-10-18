@@ -163,7 +163,7 @@ import VMLabCore
     let record = Self.record()
     let layout = backend.layout(of: record.id)
     try FileManager.default.createDirectory(at: layout.directory, withIntermediateDirectories: true)
-    try QEMUMachine.run(
+    try await QEMUMachine.run(
       Self.installation!.qemuImg, ["create", "-q", "-f", "qcow2", layout.disk.path, "16M"],
       step: "create")
     let provider = try await backend.checkpoints(record)

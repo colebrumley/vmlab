@@ -125,7 +125,7 @@ public struct VZMacBackend: Backend {
       try share.checkHostDirectory(vmDirectory: store.directory(of: record.id))
     }
     let tart = try tart()
-    let clone = try tart.clone(pulled.tartVM ?? pulled.source, to: record.id)
+    let clone = try await tart.clone(pulled.tartVM ?? pulled.source, to: record.id)
     do throws(VMLabError) {
       let tartConfig = try TartVMConfig.read(from: clone.directory)
       for file in [clone.disk, clone.nvram]
@@ -138,7 +138,7 @@ public struct VZMacBackend: Backend {
           diskGB, unit: 1_000_000_000, field: "resources.diskGB")
         let current = VZDisk.size(of: clone.disk)
         try VZDisk.refuseShrink(current: current, toBytes: target, diskGB: diskGB, image: name)
-        if current < target { try tart.setDiskSize(record.id, gigabytes: diskGB) }
+        if current < target { try await tart.setDiskSize(record.id, gigabytes: diskGB) }
       }
       // CX-29: the runner never goes below the image's minimums; vm.json says what the guest
       // gets, so start admission and the inventory count it.
@@ -149,10 +149,10 @@ public struct VZMacBackend: Backend {
       }
       let dir = store.directory(of: record.id)
       // VMManager makes the key first (R-400); this keeps a direct create complete.
-      try SSHKeys.generate(in: dir, comment: "vmlab-\(record.id)", runner: commands)
+      try await SSHKeys.generate(in: dir, comment: "vmlab-\(record.id)", runner: commands)
       if Self.wantsScreenSharing(record) { _ = try MacProvisioner.ensureVNCPassword(in: dir) }
     } catch {
-      try? tart.delete(record.id)
+      try? await tart.delete(record.id)
       throw error
     }
   }
@@ -275,7 +275,7 @@ public struct VZMacBackend: Backend {
     try await runner.destroy(record)
     let tart = try tart()
     let name = Self.cloneName(record)
-    try tart.delete(name)
+    try await tart.delete(name)
     // A clone recorded under another TART_HOME than this process sees.
     // Only a directory named after this VM's own id is its clone.
     if let path = record.tartClone, URL(filePath: path).lastPathComponent == name,

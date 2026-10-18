@@ -33,7 +33,7 @@ import VMLabVZ
       _ = try? await manager.perform(.kill, on: record.id)
       _ = try? await manager.perform(.destroy, on: record.id)
       if let clone = record.tartClone, FileManager.default.fileExists(atPath: clone) {
-        _ = try? Tart.locate().delete(URL(filePath: clone).lastPathComponent)
+        _ = try? await Tart.locate().delete(URL(filePath: clone).lastPathComponent)
       }
       try? FileManager.default.removeItem(at: home)
     }

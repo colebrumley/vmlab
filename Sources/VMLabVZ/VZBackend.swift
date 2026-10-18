@@ -46,7 +46,15 @@ public struct VZBackend: Backend {
   /// `<vm>/id_ed25519` and writes `<vm>/seed.iso` for the image's login user with the console on
   /// `hvc0`. A registered kernel-only image (R-305) booted with `boot.mode: kernel` has no disk
   /// to clone and gets none, nor a seed, as on QEMU (CX-30).
+  /// The disk clone, `ssh-keygen` and `hdiutil` block: they run on a thread of their own, off the
+  /// cooperative pool.
   public func create(_ record: VMRecord, plan: Plan) async throws(VMLabError) {
+    try await OffPool.run("vmlab.vz.create") { () throws(VMLabError) in
+      try self.createFiles(record, plan: plan)
+    }
+  }
+
+  private func createFiles(_ record: VMRecord, plan: Plan) throws(VMLabError) {
     guard let name = record.image else { return }
     let images = ImageStore(home: store.home)
     if images.pulled(name)?.format == .kernel, record.boot?.mode == .kernel { return }

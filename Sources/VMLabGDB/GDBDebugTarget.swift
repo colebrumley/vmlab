@@ -31,7 +31,7 @@ public struct GDBDebugConnector: DebugConnector {
     }
     let transport: GDBTCPTransport
     do {
-      transport = try GDBTCPTransport(host: endpoint.host, port: port)
+      transport = try await GDBTCPTransport.open(host: endpoint.host, port: port)
     } catch {
       throw VMLabError(
         code: .guestUnreachable,

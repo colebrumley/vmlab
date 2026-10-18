@@ -31,17 +31,18 @@ public enum SSHKeys {
   public static func generateDetached(
     in vmDirectory: URL, comment: String, runner: any CommandRunning = ProcessRunner()
   ) async throws(VMLabError) -> String {
-    let result: Result<String, VMLabError> = await withCheckedContinuation { continuation in
-      Thread.detachNewThread {
-        do throws(VMLabError) {
-          continuation.resume(
-            returning: .success(try generate(in: vmDirectory, comment: comment, runner: runner)))
-        } catch {
-          continuation.resume(returning: .failure(error))
-        }
-      }
+    try await generate(in: vmDirectory, comment: comment, runner: runner)
+  }
+
+  /// `generate` from an `async` context: `ssh-keygen` is waited for off the cooperative pool.
+  @discardableResult
+  public static func generate(
+    in vmDirectory: URL, comment: String, runner: any CommandRunning = ProcessRunner(),
+    sshKeygen: String = SSHKeys.sshKeygen
+  ) async throws(VMLabError) -> String {
+    try await OffPool.run("vmlab.ssh-keygen") { () throws(VMLabError) -> String in
+      try Self.generate(in: vmDirectory, comment: comment, runner: runner, sshKeygen: sshKeygen)
     }
-    return try result.get()
   }
 
   /// Makes the key pair unless it exists, and returns the public key line.
@@ -201,8 +202,11 @@ public struct SSHReadiness: GuestReadiness {
     var lastError = "no answer"
     while ContinuousClock.now < deadline, !Task.isCancelled {
       let errors = Pipe()
-      let attempt = Task.detached {
-        errors.fileHandleForReading.readDataToEndOfFile()
+      // The read blocks until ssh exits: a thread of its own, not one of the cooperative pool.
+      let attempt = Task {
+        await OffPool.run("vmlab.ssh.readiness") {
+          errors.fileHandleForReading.readDataToEndOfFile()
+        }
       }
       let left = deadline - ContinuousClock.now
       let outcome = try? await HostProcess.run(

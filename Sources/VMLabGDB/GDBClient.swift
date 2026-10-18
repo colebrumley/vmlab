@@ -72,7 +72,8 @@ public actor GDBClient {
   public static func connect(host: String = "127.0.0.1", port: UInt16, options: Options = Options())
     async throws -> GDBClient
   {
-    let client = GDBClient(transport: try GDBTCPTransport(host: host, port: port), options: options)
+    let transport = try await GDBTCPTransport.open(host: host, port: port)
+    let client = GDBClient(transport: transport, options: options)
     _ = try await client.handshake()
     return client
   }

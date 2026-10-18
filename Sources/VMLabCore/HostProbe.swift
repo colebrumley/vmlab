@@ -17,6 +17,14 @@ public protocol CommandRunning: Sendable {
   func run(_ executable: String, _ arguments: [String]) -> CommandOutput?
 }
 
+extension CommandRunning {
+  /// `run` from an `async` context: the command is waited for on a thread of its own, never on
+  /// the cooperative pool. Async callers pick this overload, so they cannot block by accident.
+  public func run(_ executable: String, _ arguments: [String]) async -> CommandOutput? {
+    await OffPool.run("vmlab.host-command") { self.run(executable, arguments) }
+  }
+}
+
 /// Runs host commands with `Process` and an argument array (never a shell).
 public struct ProcessRunner: CommandRunning {
   public init() {}

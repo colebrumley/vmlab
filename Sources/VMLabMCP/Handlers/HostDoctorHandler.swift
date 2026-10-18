@@ -18,12 +18,12 @@ struct HostDoctorHandler: ToolHandler {
     -> ToolResult
   {
     let probe = try arguments.bool("probe")
-    var facts = context.hostFacts()
+    var facts = await context.hostFacts()
     var outcomes: [SlowProbeOutcome] = []
     if probe {
       outcomes = await registry.runAll(
         SlowProbeContext(home: context.home, facts: facts), now: now)
-      if outcomes.contains(where: { $0.status == .ran }) { facts = context.hostFacts() }
+      if outcomes.contains(where: { $0.status == .ran }) { facts = await context.hostFacts() }
     }
     let runner = Runner(
       path: context.probe.runnerPath,

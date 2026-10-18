@@ -63,6 +63,13 @@ public struct VZRunnerLauncher: Sendable {
     return runnerPath
   }
 
+  /// `checkedRunner` from an `async` context: `codesign` is waited for off the cooperative pool.
+  public func checkedRunner() async throws(VMLabError) -> String {
+    try await OffPool.run("vmlab.codesign") { () throws(VMLabError) -> String in
+      try self.checkedRunner()
+    }
+  }
+
   static func missingEntitlement(_ path: String) -> VMLabError {
     VMLabError(
       code: .hostMissingTool,
@@ -83,7 +90,7 @@ public struct VZRunnerLauncher: Sendable {
     vmDirectory: URL, config: VZRunnerConfig, hold: Bool = false,
     readyTimeout: Duration = .seconds(60)
   ) async throws(VMLabError) -> VZRunnerHandle {
-    let runner = try checkedRunner()
+    let runner = try await checkedRunner()
     let paths = VZRunnerPaths(vmDirectory: vmDirectory)
     let socket = paths.controlSocket.path
     guard socket.utf8.count <= UnixStream.maxPathBytes else {

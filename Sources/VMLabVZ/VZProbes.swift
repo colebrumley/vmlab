@@ -17,7 +17,7 @@ public struct VZLiveSnapshotProbe: SlowProbeRunner {
   }
 
   public func run(_ context: SlowProbeContext) async throws(VMLabError) -> ProbeResult {
-    _ = try launcher.checkedRunner()
+    _ = try await launcher.checkedRunner()
     let dir = Self.directory(home: context.home)
     let files = FileManager.default
     try? files.removeItem(at: dir)
@@ -140,7 +140,7 @@ public struct VZMacLiveSnapshotProbe: SlowProbeRunner {
   }
 
   public func run(_ context: SlowProbeContext) async throws(VMLabError) -> ProbeResult {
-    _ = try launcher.checkedRunner()
+    _ = try await launcher.checkedRunner()
     guard context.facts.runningMacOSGuests < ResourceLimits.defaults.maxMacOSGuests,
       let pulled = ImageStore(home: context.home).pulled(image), pulled.format == .tart,
       let tart = try? Tart.locate()
@@ -149,7 +149,7 @@ public struct VZMacLiveSnapshotProbe: SlowProbeRunner {
     let dir = VZLiveSnapshotProbe.directory(home: context.home, name: name)
     let files = FileManager.default
     try? files.removeItem(at: dir)
-    try? tart.delete(name)
+    try? await tart.delete(name)
     defer {
       try? tart.delete(name)
       try? files.removeItem(at: dir)
@@ -160,7 +160,7 @@ public struct VZMacLiveSnapshotProbe: SlowProbeRunner {
     } catch {
       throw VZCheckpoints.ioError("prepare \(dir.path)", error)
     }
-    let clone = try tart.clone(pulled.tartVM ?? pulled.source, to: name)
+    let clone = try await tart.clone(pulled.tartVM ?? pulled.source, to: name)
     let tartConfig = try TartVMConfig.read(from: clone.directory)
     let record = VMRecord(
       id: name, profile: .vzMacOS, guest: GuestSpec(os: .macos, arch: .arm64), features: [],

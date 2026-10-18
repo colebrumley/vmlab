@@ -371,7 +371,7 @@ enum AgentGuide {
     for record in (try? store.list().records) ?? [] {
       if let pid = record.runtime?.pid, pid > 0 { Darwin.kill(pid, SIGKILL) }
       if let clone = record.tartClone {
-        _ = try? Tart.locate().delete(URL(filePath: clone).lastPathComponent)
+        _ = try? await Tart.locate().delete(URL(filePath: clone).lastPathComponent)
       }
     }
     for pid in TwoServersIntegrationTests.qemuPIDs(in: home) { Darwin.kill(pid, SIGKILL) }

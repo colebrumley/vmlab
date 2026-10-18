@@ -48,20 +48,24 @@ extension QEMUBackend {
         guard tags.contains(checkpoint.id) else { throw QEMUCheckpoints.missing(checkpoint.id) }
         let temp = directory.appending(path: ".\(checkpoint.id).\(UUID().uuidString).tmp")
         defer { try? FileManager.default.removeItem(at: temp) }
-        if live {
-          let base = try Self.backingFile(of: from.disk, qemuImg: img)
-          var arguments = [
-            "convert", "-U", "-q", "-O", "qcow2", "-l", "snapshot.name=\(checkpoint.id)",
-          ]
-          if let base { arguments += ["-F", "qcow2", "-B", base.path] }
-          try QEMUMachine.run(
-            img, arguments + [from.disk.path, temp.path], step: "qemu-img convert")
-        } else {
-          try Self.cloneFile(from.disk, to: temp)
-          try QEMUMachine.run(
-            img, ["snapshot", "-a", checkpoint.id, temp.path], step: "qemu-img snapshot -a")
+        // qemu-img runs for as long as the disk is large: off the cooperative pool.
+        let (id, destination) = (checkpoint.id, frozen)
+        try await OffPool.run("vmlab.qemu-clone") { () throws(VMLabError) in
+          if live {
+            let base = try Self.backingFile(of: from.disk, qemuImg: img)
+            var arguments = [
+              "convert", "-U", "-q", "-O", "qcow2", "-l", "snapshot.name=\(id)",
+            ]
+            if let base { arguments += ["-F", "qcow2", "-B", base.path] }
+            try QEMUMachine.run(
+              img, arguments + [from.disk.path, temp.path], step: "qemu-img convert")
+          } else {
+            try Self.cloneFile(from.disk, to: temp)
+            try QEMUMachine.run(
+              img, ["snapshot", "-a", id, temp.path], step: "qemu-img snapshot -a")
+          }
+          try Self.publish(temp, as: destination)
         }
-        try Self.publish(temp, as: frozen)
       }
     } else {
       guard !live else {
@@ -82,7 +86,7 @@ extension QEMUBackend {
     } catch {
       throw QEMUMachine.ioError("create \(to.directory.path)", error)
     }
-    try QEMUMachine.run(
+    try await QEMUMachine.run(
       img, ["create", "-q", "-f", "qcow2", "-F", "qcow2", "-b", frozen.path, to.disk.path],
       step: "qemu-img create")
     if FileManager.default.fileExists(atPath: from.efiVars.path) {
@@ -118,6 +122,15 @@ extension QEMUBackend {
     else { return nil }
     let name = value["full-backing-filename"]?.stringValue ?? value["backing-filename"]?.stringValue
     return name.map { URL(filePath: $0) }
+  }
+
+  /// `info` from an `async` context, waited for off the cooperative pool.
+  static func info(_ disk: URL, qemuImg: URL, _ extra: [String]) async throws(VMLabError)
+    -> String
+  {
+    try await OffPool.run("vmlab.qemu-img") { () throws(VMLabError) -> String in
+      try Self.info(disk, qemuImg: qemuImg, extra)
+    }
   }
 
   /// `qemu-img info -U --output=json` (shared: the disk may be open in a running QEMU).

@@ -66,3 +66,19 @@ import VMLabGDB
     #expect(throws: GDBError.self) { try GDBTCPTransport(host: "127.0.0.1", port: 1) }
   }
 }
+
+@Suite struct GDBTransportPoolTests {
+  /// Sends to a stub that never reads block once the socket buffers fill; they wait off the
+  /// cooperative pool, so other tasks still run.
+  @Test func stalledSendsLeaveThePoolFree() async throws {
+    let stub = try PoolSaturation.SilentTCPListener()
+    let payload = [UInt8](repeating: 0x2B, count: 16 << 20)
+    let latency = await PoolSaturation.latency { _ in
+      guard let transport = try? await GDBTCPTransport.open(host: "127.0.0.1", port: stub.port)
+      else { return }
+      try? await transport.send(payload)
+      await transport.close()
+    }
+    #expect(latency < PoolSaturation.budget)
+  }
+}

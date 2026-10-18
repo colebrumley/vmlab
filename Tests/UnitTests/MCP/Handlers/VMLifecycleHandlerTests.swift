@@ -96,7 +96,7 @@ import VMLabCore
     let gate = StartGate(limits: limits)
     let held = try await gate.admit(
       Inventory.Guest(id: "other", profile: .qemuHVF, os: .linux, memoryGB: 0),
-      running: { .empty }, host: f.context.hostFacts())
+      running: { .empty }, host: await f.context.hostFacts())
     var context = f.context
     context.startGate = gate
     let call = Task {

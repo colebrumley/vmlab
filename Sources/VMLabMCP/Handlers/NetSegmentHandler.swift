@@ -18,7 +18,7 @@ struct NetSegmentHandler: ToolHandler {
       do throws(VMLabError) {
         try await segments.startSwitch(name)
       } catch {
-        try? segments.destroy(name)
+        try? await segments.destroy(name)
         throw error
       }
       return ToolResult(Self.object(segment, segments))
@@ -29,7 +29,7 @@ struct NetSegmentHandler: ToolHandler {
     case "destroy":
       let name = try Self.name(arguments)
       let segment = try segments.load(name)
-      try segments.destroy(name)
+      try await segments.destroy(name)
       var object = Self.object(segment, segments)
       object["running"] = .bool(false)
       object["destroyed"] = .bool(true)

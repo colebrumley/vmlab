@@ -42,12 +42,9 @@ public struct VZControlClient: Sendable, Hashable {
     let watchdog = limit > deadPeerWindow && request.command != .status
     let probe = watchdog ? Task { await watch(connection) } : nil
     defer { probe?.cancel() }
-    let result: Result<ControlResponse, VMLabError> = await withCheckedContinuation { done in
-      DispatchQueue.global().async {
-        done.resume(
-          returning: Result { () throws(VMLabError) in
-            try Self.exchange(request, path: path, timeout: limit, connection: connection)
-          })
+    let result: Result<ControlResponse, VMLabError> = await OffPool.run("vmlab.vz.control") {
+      Result { () throws(VMLabError) in
+        try Self.exchange(request, path: path, timeout: limit, connection: connection)
       }
     }
     if let reason = connection.deadPeerReason {

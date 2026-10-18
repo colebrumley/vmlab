@@ -178,3 +178,15 @@ final class ThreadedFakeRunner: Sendable {
     #expect(ContinuousClock.now - started < .seconds(60))
   }
 }
+
+@Suite struct ControlClientPoolTests {
+  /// Requests waiting on a runner that never answers hold no thread of the cooperative pool.
+  @Test func silentRunnersLeaveThePoolFree() async throws {
+    let runner = try PoolSaturation.SilentUnixListener()
+    let client = VZControlClient(socketPath: runner.path)
+    let latency = await PoolSaturation.latency { _ in
+      _ = try? await client.send(ControlRequest(.status), timeout: PoolSaturation.hold)
+    }
+    #expect(latency < PoolSaturation.budget)
+  }
+}

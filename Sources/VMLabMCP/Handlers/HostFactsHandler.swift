@@ -7,7 +7,7 @@ struct HostFactsHandler: ToolHandler {
   func call(_ arguments: ToolArguments, context: ToolContext) async throws(VMLabError)
     -> ToolResult
   {
-    let facts = try JSONValue(encoding: context.hostFacts())
+    let facts = try JSONValue(encoding: await context.hostFacts())
     return ToolResult(facts.objectValue ?? [:])
   }
 }

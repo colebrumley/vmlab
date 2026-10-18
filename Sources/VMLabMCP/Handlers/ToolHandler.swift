@@ -163,8 +163,13 @@ public struct ToolContext: Sendable {
       home: home, startGate: FileStartGate(home: home, hostMemory: .live(home: home)))
   }
 
-  /// The fast host facts gathered now, merged with the persisted slow probes.
-  public func hostFacts() -> HostFacts { probe.gather() }
+  /// The fast host facts gathered now, merged with the persisted slow probes. Gathering runs
+  /// host commands (`sw_vers`, `sysctl`, `qemu --version`, `codesign`), so it waits for them on a
+  /// thread of its own, not on the cooperative pool every tool call shares.
+  public func hostFacts() async -> HostFacts {
+    let probe = self.probe
+    return await OffPool.run("vmlab.host-facts") { probe.gather() }
+  }
 }
 
 /// One tool's behaviour, shared by the MCP server (`tools/call`) and the CLI subcommand of the

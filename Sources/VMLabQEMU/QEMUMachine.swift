@@ -111,6 +111,14 @@ public actor QEMUMachine {
   /// Creates `disk.qcow2` over `baseImage` (sized to the plan's disk), copies the EFI variable
   /// template and builds `seed.iso`. Existing disk and variables are kept, so a restart boots the
   /// same guest; the seed is rebuilt every time.
+  /// `prepare` from an `async` context: qemu-img and hdiutil are waited for off the
+  /// cooperative pool.
+  public static func prepare(_ request: QEMULaunchRequest) async throws(VMLabError) {
+    try await OffPool.run("vmlab.qemu-prepare") { () throws(VMLabError) in
+      try Self.prepare(request)
+    }
+  }
+
   public static func prepare(_ request: QEMULaunchRequest) throws(VMLabError) {
     let layout = request.layout
     let files = FileManager.default
@@ -161,7 +169,7 @@ public actor QEMUMachine {
         hint: "Stop the VM first, or reconnect to it.",
         data: ["state": .string(VMState.running.rawValue), "pid": .number(Double(pid))])
     }
-    try prepare(request)
+    try await prepare(request)
     var options = QEMULaunchOptions(
       boot: request.boot, disk: request.baseImage != nil, seed: request.seed != nil,
       gdbPort: request.gdbPort, sshHostPort: request.sshHostPort, forwards: request.forwards,
@@ -474,6 +482,13 @@ public actor QEMUMachine {
     var environment = base
     environment["OBJC_DISABLE_INITIALIZE_FORK_SAFETY"] = "YES"
     return environment
+  }
+
+  /// `run` from an `async` context, waited for off the cooperative pool.
+  static func run(_ tool: URL, _ arguments: [String], step: String) async throws(VMLabError) {
+    try await OffPool.run("vmlab.qemu-tool") { () throws(VMLabError) in
+      try Self.run(tool, arguments, step: step)
+    }
   }
 
   static func run(_ tool: URL, _ arguments: [String], step: String) throws(VMLabError) {

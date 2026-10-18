@@ -18,7 +18,7 @@ struct VMCreateHandler: ToolHandler {
 
     let plan: Plan
     switch ProfileSelector.select(
-      requirements, host: context.hostFacts(), running: context.store.inventory(),
+      requirements, host: await context.hostFacts(), running: context.store.inventory(),
       allowUnverified: allowUnverified, limits: context.limits)
     {
     case .success(let selected): plan = selected

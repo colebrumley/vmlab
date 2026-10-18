@@ -44,11 +44,9 @@ public final class FileLock: Sendable {
       guard let probe = open(path) else { return nil }
       close(probe)
       do { try await Task.sleep(for: interval) } catch {
-        // Cancelled: sleep without the cooperative pool's help.
-        let micros =
-          interval.components.seconds * 1_000_000
-          + interval.components.attoseconds / 1_000_000_000_000
-        usleep(useconds_t(clamping: max(1000, micros)))
+        // Cancelled, so `Task.sleep` returns at once: sleep on a thread of its own, never on
+        // the cooperative pool's.
+        await OffPool.sleep(interval)
       }
     }
   }
