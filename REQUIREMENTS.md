@@ -139,7 +139,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   **Verify:** after `scripts/build.sh`, `codesign -d --entitlements - .build/debug/vmlab-vz` lists
   `com.apple.security.virtualization`; a unit test parses that output format from a fixture.
 
-- [ ] **R-004 Logging and the event log**
+- [x] **R-004 Logging and the event log**
   `swift-log` throughout. Every VM directory has `events.jsonl`: one JSON object per line with
   `ts`, `level`, `kind` (lifecycle, serial, checkpoint, net, error, panic) and `message`. Core writes
   it; backends append through Core. Log level from `VMLAB_LOG` (default `info`); server logs to
