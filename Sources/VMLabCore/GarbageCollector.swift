@@ -86,7 +86,7 @@ public struct ProcessInspector: Sendable {
 }
 
 /// `vmlab gc` (R-805): removes orphaned engine processes (pid files in a VM directory whose
-/// `vm.json` is gone) with that directory, dumps and exec logs older than `maxAge`, temporary
+/// `vm.json` is gone, naming an engine whose arguments lie in that directory) with that directory, dumps and exec logs older than `maxAge`, temporary
 /// checkpoints (the saves of `checkpoint_stop` that were resumed), and frozen layers in
 /// `<vm>/backing/` that no VM's `backingChain` reads. Files younger than `grace` are left alone,
 /// so a create or clone in flight in another process is never collected. A template (R-804) is
@@ -144,9 +144,12 @@ public struct GarbageCollector: Sendable {
         isOld(directory, than: grace)
       else { continue }
       for file in Self.pidFiles {
+        // A stale pid file's pid may since name another VM's engine: only one whose arguments
+        // lie in this directory is its engine.
         guard let text = try? String(contentsOf: directory.appending(path: file), encoding: .utf8),
           let pid = Int32(text.trimmingCharacters(in: .whitespacesAndNewlines)), pid > 0,
-          processes.isAlive(pid), let path = processes.executablePath(pid), Self.isEngine(path)
+          processes.isAlive(pid), let path = processes.executablePath(pid), Self.isEngine(path),
+          processes.runsVM(pid, directory)
         else { continue }
         if !dryRun { await processes.terminate(pid) }
         report.items.append(

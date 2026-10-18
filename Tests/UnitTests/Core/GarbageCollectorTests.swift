@@ -31,6 +31,43 @@ import VMLabCore
     }
   }
 
+  /// A stale pid file in an orphaned directory whose pid was reused by another VM's engine names
+  /// that engine: gc removes the directory but kills only the engine whose arguments lie in it.
+  @Test func killsAnOrphansEngineOnlyWhenItRunsThatDirectory() async throws {
+    let f = try Fixture()
+    let stale = f.store.vmsDirectory.appending(path: "vm-stale0")
+    let orphan = f.store.vmsDirectory.appending(path: "vm-orphan")
+    try FileManager.default.createDirectory(at: stale, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: orphan, withIntermediateDirectories: true)
+    // 4242 is another VM's QEMU; 4444 is the orphan's own runner.
+    try "4242\n".write(to: stale.appending(path: "qemu.pid"), atomically: true, encoding: .utf8)
+    try "4444\n".write(to: orphan.appending(path: "vz.pid"), atomically: true, encoding: .utf8)
+    for directory in [stale, orphan] {
+      try FileManager.default.setAttributes(
+        [.modificationDate: Self.old], ofItemAtPath: directory.path)
+    }
+    let other = f.store.vmsDirectory.appending(path: "vm-other0")
+    let terminated = Mutex<[Int32]>([])
+    var collector = GarbageCollector(manager: f.manager)
+    collector.processes = ProcessInspector(
+      isAlive: { $0 == 4242 || $0 == 4444 },
+      executablePath: {
+        $0 == 4242
+          ? "/opt/homebrew/bin/qemu-system-aarch64" : $0 == 4444 ? "/usr/local/bin/vmlab-vz" : nil
+      },
+      terminate: { pid in terminated.withLock { $0.append(pid) } },
+      runsVM: { pid, directory in
+        directory.lastPathComponent == (pid == 4242 ? other : orphan).lastPathComponent
+      })
+
+    let report = await collector.run()
+    #expect(terminated.withLock { $0 } == [4444])
+    let processes = report.items.filter { $0.kind == .orphanProcess }
+    #expect(processes.map(\.vm) == ["vm-orphan"])
+    #expect(!FileManager.default.fileExists(atPath: stale.path))
+    #expect(!FileManager.default.fileExists(atPath: orphan.path))
+  }
+
   /// CX-14: an engine still running for a record with no runtime is collected (unless the VM's
   /// lock is held); one for a record that has a runtime is that VM's and stays.
   @Test func collectsAnEngineARecordWithoutRuntimeLeft() async throws {
@@ -101,6 +138,7 @@ import VMLabCore
     let processes = Processes()
     var collector = GarbageCollector(manager: f.manager)
     collector.processes = processes.inspector
+    collector.processes.runsVM = { pid, directory in pid == 4242 && directory == orphan }
 
     collector.dryRun = true
     let preview = await collector.run()
