@@ -70,6 +70,7 @@ public protocol ToolHandler: Sendable {
 public enum ToolHandlers {
   public static let all: [any ToolHandler] = [
     HostFactsHandler(), HostDoctorHandler(), VMPlanHandler(), VMListHandler(), VMInspectHandler(),
+    VMLogsHandler(),
   ]
 
   private static let byName: [String: any ToolHandler] = Dictionary(

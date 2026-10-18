@@ -16,7 +16,11 @@ D codes. `Features.swift` holds the Appendix A catalogue (`Feature`, with `kind`
 self-contradictory request at decode time with `invalid_request`; `Errors.swift` holds `ErrorCode`,
 `VMLabError` and `JSONValue` for error `data`. It owns the per-VM event log (`EventLog`, one `VMEvent` JSON object per line of
 `events.jsonl`, appended with `O_APPEND` so the server and runner processes never interleave) and
-process-wide logging (`VMLabLogging`: swift-log to stderr at the `VMLAB_LOG` level, default `info`).
+a `VMEvent` may carry structured `data`. `PanicDetector` (R-304) hangs on a `SerialChannel`'s line observer,
+matches each line against `PanicSignature.table` and appends a `panic` event (the line, its `pattern`,
+`offset` and `end`), capped with one suppression notice; `EventLog.recordQMPEvent(_:data:)` is the hook the
+QEMU backend calls for QMP events (`GUEST_PANICKED` becomes `panic`, `RESET` `lifecycle`, others ignored),
+and `EventLog.latestPanic()` reads the newest. Also process-wide logging (`VMLabLogging`: swift-log to stderr at the `VMLAB_LOG` level, default `info`).
 `CodeSignature` reads `codesign` output so `vmlab doctor` can say whether the runner is entitled. `Profile` names the four profiles with their Appendix B tiers. `HostProbe` gathers `HostFacts` (Appendix E fast facts) through an injectable `CommandRunning` and merges the slow probes persisted in `VMLAB_HOME/host-facts.json` (`SlowProbes`), resetting to `unknown` any probe recorded under another macOS or QEMU version; `ProbeResult.countsAsYes` is how selection reads a probe (unknown counts as no).
 `Images.swift` holds the Appendix H catalogue (`ImageCatalogue.builtin`, decoded from JSON into `CatalogImage`) and `ImageStore`, an actor over `VMLAB_HOME/images/<name>/` that pulls (URLSession through an injectable `ImageDownloading`, checksum from the published `SHA512SUMS`/`SHA256SUMS`, qcow2 to raw with `qemu-img` through `CommandRunning`), lists and removes images and records `image.json` (`PulledImage`); a re-pull whose file still matches the published checksum is a no-op. `ImageStore.defaultHome()` resolves `VMLAB_HOME`.
 `CloudInit` builds the NoCloud seed both engines attach: from a plain `CloudInitConfig` (hostname, user, SSH key, packages, optional `GUIStack`, `SegmentNIC`, `GuestMount`s, `ConsoleDevice`, extra user-data merged last as a MIME part) it emits `user-data`, `meta-data` and `network-config` with a small hand-written YAML emitter (every string double-quoted; no YAML library, C5) and runs `hdiutil makehybrid` to make the `cidata` ISO. `FeatureDocs` renders `docs/FEATURES.md` from the matrix. It depends on swift-log only.
@@ -78,7 +82,8 @@ the `ResourceLimits` of one `VMLAB_HOME`. A `ToolResult` is the Appendix C resul
 `warnings`) plus image blocks; `ToolRendering` turns results and `VMLabError`s into JSON (the MCP text)
 or a terminal line. Built so far: `host_facts`, `host_doctor` (minimal; R-203 completes it),
 `vm_plan` (an unsatisfiable request is a result with `satisfiable: false`, never an error),
-`vm_list` and `vm_inspect`. `VMLabMCP.version` is the package version.
+`vm_list`, `vm_inspect` (with the latest `panic` event, or null) and `vm_logs` (events rendered one per
+line, tails of `serial.log` and `provision.log`; `all` is each source in turn, prefixed). `VMLabMCP.version` is the package version.
 
 **`vmlab`** (executable). The CLI on swift-argument-parser: every MCP tool as a subcommand with
 `--json` output, `vmlab serve` for the MCP server, `vmlab doctor`, and the hidden `vmlab gen-docs`
@@ -86,7 +91,7 @@ that `scripts/gen-docs.sh` uses. A tool subcommand conforms to `ToolCommand` (`S
 it turns its flags into the tool's JSON arguments and calls the same `ToolHandlers.call` as
 `tools/call`, printing the result object with `--json` or a short human rendering; a `VMLabError` goes
 to stderr (the Appendix D object with `--json`) with exit status 1. Built: `facts`, `doctor`, `plan`,
-`list`, `inspect`, `--version`; `vmlab images pull|list|remove` (R-300) still calls `ImageStore`
+`list`, `inspect`, `logs`, `--version`; `vmlab images pull|list|remove` (R-300) still calls `ImageStore`
 directly until the `images` handler lands. It bootstraps logging and hands off to Core and `VMLabMCP`.
 
 **`vmlab-vz`** (executable). The VZ runner: one process per Virtualization.framework guest, so a

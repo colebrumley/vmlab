@@ -14,6 +14,7 @@ struct VMLab: AsyncParsableCommand {
     subcommands: [
       FactsCommand.self, DoctorCommand.self, Images.self, PlanCommand.self, ListCommand.self,
       InspectCommand.self, GenDocs.self,
+      LogsCommand.self,
     ]
   )
 
