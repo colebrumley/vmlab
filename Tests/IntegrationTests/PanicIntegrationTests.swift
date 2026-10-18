@@ -69,4 +69,45 @@ struct PanicIntegrationTests {
 
     _ = try await server.call("vm_lifecycle", ["vm": "crashy", "action": "destroy"])
   }
+
+  /// A guest that powers itself off is `stopped` at once (QMP SHUTDOWN), not at the next reconcile.
+  @Test func guestPowerOffStopsTheRecord() async throws {
+    let home = URL(filePath: "/tmp/vmlab-test-\(getpid())-po")
+    try? FileManager.default.removeItem(at: home)
+    try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+    try FileManager.default.createSymbolicLink(
+      at: home.appending(path: "images"),
+      withDestinationURL: FileManager.default.homeDirectoryForCurrentUser.appending(
+        path: ".vmlab/images"))
+    let server = try StdioMCPClient(
+      binary: try TwoServersIntegrationTests.vmlabURL(), home: home, tag: "o")
+    defer {
+      server.terminate()
+      for pid in TwoServersIntegrationTests.qemuPIDs(in: home) { kill(pid, SIGKILL) }
+      try? FileManager.default.removeItem(at: home)
+    }
+    try await server.initialize()
+    let requirements: JSONValue = [
+      "guest": ["os": "linux", "arch": "arm64"],
+      "require": ["serial", "exec_ssh", "introspection"],
+      "resources": ["cpus": 1, "memoryGB": 1, "diskGB": 8], "image": "debian-13-arm64",
+    ]
+    let made = try await server.call(
+      "vm_create", ["requirements": requirements, "name": "off", "autostart": true])
+    try #require(made.isError == false, "\(made.text)")
+    _ = try await server.call(
+      "vm_exec", ["vm": "off", "command": "sudo systemctl poweroff", "timeoutSeconds": 15])
+    var state = ""
+    let deadline = ContinuousClock.now + .seconds(90)
+    while state != "stopped", ContinuousClock.now < deadline {
+      try await Task.sleep(for: .seconds(1))
+      // The record itself, as the server wrote it.
+      state = (try? Store(home: home).find("off").state.rawValue) ?? ""
+    }
+    #expect(state == "stopped")
+    let logs = try await server.call("vm_logs", ["vm": "off", "source": "events"])
+    let lines = logs.value["lines"]?.arrayValue?.compactMap(\.stringValue) ?? []
+    #expect(lines.contains { $0.contains("running -> stopped: the guest powered off") }, "\(lines)")
+    _ = try await server.call("vm_lifecycle", ["vm": "off", "action": "destroy"])
+  }
 }

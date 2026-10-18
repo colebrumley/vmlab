@@ -132,6 +132,35 @@ public struct LivenessProbe: Sendable {
   }
 }
 
+extension Store {
+  /// Records that the engine process `pid` of a live VM exited by itself (the guest powered off,
+  /// R-1101/R-304: QEMU exits after a guest `SHUTDOWN`): the VM becomes `stopped` with no runtime
+  /// and a `lifecycle` event says why. Taken under the VM's operation lock, so an action in
+  /// flight (a `vm_lifecycle stop` that caused it) finishes first and is not contradicted.
+  /// Returns whether the record changed; a VM in another state or on another pid is left alone.
+  @discardableResult
+  public func recordEngineExit(id: String, pid: Int32, reason: String) async -> Bool {
+    guard let lock = await FileLock.lock(operationLockPath(of: id)) else { return false }
+    defer { lock.unlock() }
+    var from: VMState?
+    do {
+      try update(id: id) { (record: inout VMRecord) throws(VMLabError) in
+        guard record.state.isLive, record.runtime?.pid == pid else { return }
+        from = record.state
+        record.state = .stopped
+        record.runtime = nil
+        record.brokenReason = nil
+      }
+    } catch {
+      return false
+    }
+    guard let from else { return false }
+    try? await EventLog(vmDirectory: directory(of: id)).append(
+      .lifecycle, "\(from.rawValue) -> stopped: \(reason)")
+    return true
+  }
+}
+
 /// One record `Store.reconcile` changed.
 public struct ReconcileChange: Sendable, Equatable {
   public var id: String

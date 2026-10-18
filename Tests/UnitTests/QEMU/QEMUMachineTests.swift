@@ -103,3 +103,34 @@ final class HeldMonitor: Sendable {
     await second.value
   }
 }
+
+@Suite struct QMPShutdownHandlingTests {
+  @Test func theLockHolderHandsEventsOnAndNamesTheShutdown() async throws {
+    let dir = FileManager.default.temporaryDirectory.appending(path: "vmlab-qmpsd-\(UUID())")
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let seen = Reported()
+    let (events, input) = AsyncStream<QMPEvent>.makeStream()
+    let forward = Task {
+      await QEMUBackend.forward(
+        events, to: EventLog(vmDirectory: dir), lockPath: dir.appending(path: "l.lock").path
+      ) { event in await seen.set(event.name) }
+    }
+    let shutdown = QMPEvent(
+      name: "SHUTDOWN", data: ["guest": .bool(true), "reason": .string("guest-shutdown")])
+    input.yield(shutdown)
+    input.finish()
+    await forward.value
+    let deadline = ContinuousClock.now + .seconds(5)
+    while await seen.value == nil, ContinuousClock.now < deadline {
+      try await Task.sleep(for: .milliseconds(20))
+    }
+    #expect(await seen.value == "SHUTDOWN")
+    #expect(
+      QEMUBackend.shutdownReason(shutdown)
+        == "the guest powered off (QMP SHUTDOWN, reason guest-shutdown)")
+    #expect(
+      QEMUBackend.shutdownReason(QMPEvent(name: "SHUTDOWN", data: ["guest": .bool(false)]))
+        == "QEMU shut down (QMP SHUTDOWN)")
+  }
+}

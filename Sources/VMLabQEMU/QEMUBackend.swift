@@ -199,7 +199,23 @@ public final class QEMUBackend: Backend {
     let events = await machine.qmp.events()
     let log = EventLog(vmDirectory: store.directory(of: id))
     let lockPath = store.locksDirectory.appending(path: "\(id).qmp-events.lock").path
-    Task { await Self.forward(events, to: log, lockPath: lockPath) }
+    let pid = machine.pid
+    Task {
+      await Self.forward(events, to: log, lockPath: lockPath) { [weak self] event in
+        guard event.name == "SHUTDOWN" else { return }
+        // QEMU exits after the guest powers off (no -no-shutdown): record it now, not at the
+        // next reconcile.
+        let deadline = ContinuousClock.now + .seconds(10)
+        while QEMUMachine.isAlive(pid), ContinuousClock.now < deadline {
+          try? await Task.sleep(for: .milliseconds(100))
+        }
+        guard !QEMUMachine.isAlive(pid) else { return }
+        self?.machines.withLock { cached in
+          if cached[id] === machine { cached[id] = nil }
+        }
+        await store.recordEngineExit(id: id, pid: pid, reason: Self.shutdownReason(event))
+      }
+    }
     await machine.qmp.watchPeer { [weak self] reason in
       self?.machines.withLock { cached in
         if cached[id] === machine { cached[id] = nil }
@@ -210,14 +226,26 @@ public final class QEMUBackend: Backend {
 
   /// Appends every QMP event `QMPEventLogging` logs to `log` while this connection holds the
   /// lock at `lockPath` (taken at the first event it is free for, released when `events` ends).
-  static func forward(_ events: AsyncStream<QMPEvent>, to log: EventLog, lockPath: String) async {
+  /// The lock holder also hands every event to `handle` (the backend's `SHUTDOWN` handling).
+  static func forward(
+    _ events: AsyncStream<QMPEvent>, to log: EventLog, lockPath: String,
+    handle: @escaping @Sendable (QMPEvent) async -> Void = { _ in }
+  ) async {
     var holder: FileLock?
     for await event in events {
       if holder == nil { holder = FileLock.tryLock(lockPath) }
       guard holder != nil else { continue }
       _ = try? await log.recordQMPEvent(event.name, data: .object(event.data))
+      Task { await handle(event) }
     }
     holder?.unlock()
+  }
+
+  /// "the guest powered off (QMP SHUTDOWN, reason guest-shutdown)".
+  static func shutdownReason(_ event: QMPEvent) -> String {
+    let reason = event.data["reason"]?.stringValue
+    let who = event.data["guest"] == .bool(false) ? "QEMU shut down" : "the guest powered off"
+    return "\(who) (QMP SHUTDOWN" + (reason.map { ", reason \($0)" } ?? "") + ")"
   }
 
   /// Whether the guest's NIC is `vmnet-shared` (R-309): the request asked for `net_fast` and the
