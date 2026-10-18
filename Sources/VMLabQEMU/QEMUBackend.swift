@@ -177,11 +177,13 @@ public final class QEMUBackend: Backend {
     }
   }
 
-  /// The plan a stored record was created from, as far as the launch needs it.
+  /// The plan a stored record was created from; for a record older than `VMRecord.plan`, one
+  /// rebuilt as far as the launch needs it.
   static func plan(of record: VMRecord) -> Plan {
-    Plan(
-      profile: record.profile, guest: record.guest, resources: record.resources,
-      features: record.features, estimatedStartupSeconds: 0)
+    record.plan
+      ?? Plan(
+        profile: record.profile, guest: record.guest, resources: record.resources,
+        features: record.features, estimatedStartupSeconds: 0)
   }
 
   private func request(
@@ -208,7 +210,9 @@ public final class QEMUBackend: Backend {
       config = CloudInitConfig(
         instanceID: record.id, hostname: record.name,
         user: images.pulled(image)?.login.user ?? "debian",
-        sshPublicKey: key.trimmingCharacters(in: .whitespacesAndNewlines)
+        sshPublicKey: key.trimmingCharacters(in: .whitespacesAndNewlines),
+        // R-504: the desktop only; QEMU's VNC socket is the display, so no VNC server.
+        gui: plan.provisionsDesktop ? GUIStack(vncPassword: nil) : nil
       ).provisioned(record.provision)
     }
     return QEMULaunchRequest(

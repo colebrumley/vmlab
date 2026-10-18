@@ -61,7 +61,7 @@ public struct VZBackend: Backend {
     let key = try SSHKeys.generate(in: dir, comment: "vmlab-\(record.id)", runner: commands)
     let seed = CloudInitConfig(
       instanceID: record.id, hostname: Self.hostname(for: record), user: pulled.login.user,
-      sshPublicKey: key, console: .hvc0,
+      sshPublicKey: key, gui: try Self.guiStack(plan: plan, vmDirectory: dir), console: .hvc0,
       dhcpIdentifierMAC: record.network.mode == .disabled
         ? nil : VZRunnerConfig.stableMAC(for: record.id)
     ).provisioned(record.provision)
@@ -74,6 +74,21 @@ public struct VZBackend: Backend {
     } catch {
       throw VMLabError(
         code: .internal, message: "Cannot write the cloud-init seed: \(error)",
+        hint: "Check that the VM directory is writable.")
+    }
+  }
+
+  /// R-504: the desktop and its in-guest VNC server, with the password in `<vm>/vnc.pass`, when
+  /// the plan provisions one.
+  static func guiStack(plan: Plan, vmDirectory: URL) throws(VMLabError) -> GUIStack? {
+    guard plan.provisionsDesktop else { return nil }
+    do {
+      return try GUIStack.inGuestVNC(vmDirectory: vmDirectory)
+    } catch let error as VMLabError {
+      throw error
+    } catch {
+      throw VMLabError(
+        code: .internal, message: "Cannot write the VNC password file: \(error)",
         hint: "Check that the VM directory is writable.")
     }
   }

@@ -114,6 +114,8 @@ public struct ToolContext: Sendable {
   public var images: ImageStore
   /// Admission to guest starts (`vm_lifecycle start`, `vm_create` autostart).
   public var startGate: any StartGating
+  /// The display sessions `vm_computer` keeps per VM, shared by every call on this context.
+  public var displays: DisplaySessions
   /// This call's progress reporter; the MCP server sets it per `tools/call`.
   public var progress: ToolProgress = .none
   /// How often a long call reports while it waits (R-205: at least every 5 s).
@@ -123,7 +125,7 @@ public struct ToolContext: Sendable {
   public init(
     home: URL, probe: HostProbe? = nil, limits: ResourceLimits = .defaults,
     backends: BackendRegistry = Backends.shared, images: ImageStore? = nil,
-    startGate: any StartGating = StartGate.shared
+    startGate: any StartGating = StartGate.shared, displays: DisplaySessions? = nil
   ) {
     let store = Store(home: home)
     self.home = home
@@ -134,6 +136,7 @@ public struct ToolContext: Sendable {
     self.manager = VMManager(store: store, backends: backends)
     self.images = images ?? ImageStore(home: home)
     self.startGate = startGate
+    self.displays = displays ?? DisplaySessions()
   }
 
   /// The context of this process: `VMLAB_HOME`, or `~/.vmlab`.
@@ -156,7 +159,7 @@ public enum ToolHandlers {
   public static let all: [any ToolHandler] = [
     HostFactsHandler(), HostDoctorHandler(), VMPlanHandler(), VMCreateHandler(), VMListHandler(),
     VMInspectHandler(), VMLifecycleHandler(), VMExecHandler(), VMJobHandler(), VMLogsHandler(),
-    ImagesHandler(), VMIntrospectHandler(), VMMemoryDumpHandler(),
+    ImagesHandler(), VMComputerHandler(), VMIntrospectHandler(), VMMemoryDumpHandler(),
   ]
 
   private static let byName: [String: any ToolHandler] = Dictionary(
