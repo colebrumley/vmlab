@@ -417,7 +417,9 @@ exits. It is the only binary that needs `com.apple.security.virtualization`; `sc
 ad-hoc signs it with `Sources/vmlab-vz/vmlab-vz.entitlements` after every build.
 
 **`VMLabSwitch`** (library). The segment switch with no engine and no Core dependency.
-`SwitchCore` is the forwarding logic on integer ports: a learning MAC table with aging, flooding of
+`SwitchCore` is the forwarding logic on integer ports: a learning MAC table with aging, capped at
+`maxMACs` (4096; a full table is swept of aged entries, then new sources go unlearned and their
+traffic floods, counted as `unlearned`), flooding of
 broadcast, multicast and unknown destinations, and counters (`SwitchStats`) for frames over 1600
 bytes, malformed frames and congested ports. `SwitchServer` puts it on sockets in
 `$VMLAB_HOME/segments/<name>/` (`SegmentPaths`): every sender to the unix datagram `switch.sock`
