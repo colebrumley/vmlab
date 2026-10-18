@@ -855,7 +855,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   calls with the expected result shapes, verified against the server.
   **Verify:** every tool call in the five sessions is also a test in `Tests/IntegrationTests/AgentGuideTests.swift` that runs it and checks the result shape.
 
-- [ ] **R-1105 Claude Code and Claude Desktop installation**
+- [x] **R-1105 Claude Code and Claude Desktop installation**
   `vmlab install-mcp --client claude-code|claude-desktop` writes or prints the MCP configuration
   (command, args, env `VMLAB_HOME`) for the client; README documents it and the Homebrew-less
   install (`swift build -c release`, `scripts/sign.sh`, copy to `~/.local/bin`).

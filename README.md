@@ -24,3 +24,35 @@ scripts/build.sh              # swift build + sign the VZ runner
 .build/debug/vmlab doctor     # what works on this host
 .build/debug/vmlab install-mcp --client claude-code
 ```
+
+### Connect a client
+
+`vmlab install-mcp` prints the MCP configuration that runs `vmlab serve` (the executable you ran
+it from, unless `--command` names another) with `VMLAB_HOME` (from the environment, else
+`~/.vmlab`, or `--vmlab-home`). It changes nothing unless you pass `--write`.
+
+```bash
+vmlab install-mcp --client claude-code             # JSON for ~/.claude.json and the `claude mcp add` line
+vmlab install-mcp --client claude-code --write     # merge it into ~/.claude.json (user scope)
+vmlab install-mcp --client claude-desktop --write  # ~/Library/Application Support/Claude/claude_desktop_config.json
+claude mcp list                                    # vmlab: ... serve - Connected
+```
+
+`--write` keeps every other key and server in the file and replaces only `mcpServers.vmlab`
+(`--name` picks another key). Restart Claude Desktop after writing its file.
+
+### Without Homebrew
+
+QEMU (and Tart, for macOS guests) still come from Homebrew; vmlab itself needs only the Xcode
+toolchain:
+
+```bash
+swift build -c release
+scripts/sign.sh release                     # the VZ runner's virtualization entitlement
+mkdir -p ~/.local/bin
+cp .build/release/vmlab .build/release/vmlab-vz .build/release/vmlab-switch ~/.local/bin/
+~/.local/bin/vmlab doctor
+~/.local/bin/vmlab install-mcp --client claude-code --write
+```
+
+Keep the three binaries in one directory: `vmlab` looks for `vmlab-vz` next to itself.
