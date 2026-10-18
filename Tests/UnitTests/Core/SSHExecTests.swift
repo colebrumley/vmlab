@@ -122,6 +122,40 @@ import VMLabCore
     #expect(!FileManager.default.fileExists(atPath: marker.path))
   }
 
+  /// The race of a slow guest: ssh times out before the remote shell has written its process
+  /// group id. The kill leaves a cancel mark, so the command never runs when the shell gets there.
+  @Test func aTimeoutBeforeTheGroupStartsStillKillsIt() async throws {
+    let f = try Fixture()
+    // A "remote" that starts 2 s late, in its own process group (ending the local ssh does not
+    // end it, as on a real guest); the kill connection runs at once.
+    let slow = f.dir.appending(path: "ssh-slow")
+    try """
+    #!/bin/sh
+    for a; do last=$a; done
+    case "$last" in
+      *'rc=$?'*)
+        perl -e 'setpgrp(0, 0); exec @ARGV' /bin/sh -c 'sleep 2; exec /bin/sh -c "$1"' x "$last" &
+        wait ;;
+      *) exec /bin/sh -c "$last" ;;
+    esac
+    """.write(to: slow, atomically: true, encoding: .utf8)
+    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: slow.path)
+    let channel = SSHExecChannel(target: f.channel.target, ssh: slow.path)
+    let marker = f.dir.appending(path: "late-child")
+    let error = await #expect(throws: VMLabError.self) {
+      try await channel.run(
+        ExecRequest(
+          command: "while :; do touch '\(marker.path)'; sleep 1; done",
+          timeout: .milliseconds(500)))
+    }
+    #expect(error?.code == .timeout)
+    // Well past the late start: the command never ran (or was killed at once).
+    try await Task.sleep(for: .seconds(4))
+    try? FileManager.default.removeItem(at: marker)
+    try await Task.sleep(for: .seconds(2))
+    #expect(!FileManager.default.fileExists(atPath: marker.path))
+  }
+
   @Test func sshFailureIsGuestUnreachable() async throws {
     let f = try Fixture()
     let error = await #expect(throws: VMLabError.self) {
