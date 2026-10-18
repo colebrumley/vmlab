@@ -74,6 +74,18 @@ struct FleetHandler: ToolHandler {
         field: "count", reason: "create needs count", hint: "Add count: how many members.")
     }
     try FleetPlanning.checkCount(count)
+    // CX-19: every input is checked before the segment or the fleet record is made.
+    let sshTimeout = try arguments.int("timeoutSeconds").map {
+      (seconds) throws(VMLabError) -> Duration in
+      guard seconds >= 1 else {
+        throw VMLabError.invalidRequest(
+          field: "timeoutSeconds", reason: "timeoutSeconds must be at least 1",
+          hint: "Give the per-member SSH wait in whole seconds, or leave it out.")
+      }
+      return .seconds(seconds)
+    }
+    let confirm = try arguments.bool("confirm")
+    let allowUnverified = try arguments.bool("allowUnverified")
     guard let raw = arguments["requirements"] else {
       throw VMLabError.invalidRequest(
         field: "requirements", reason: "create needs requirements",
@@ -101,7 +113,7 @@ struct FleetHandler: ToolHandler {
     let plan: Plan
     switch ProfileSelector.select(
       requirements, host: context.hostFacts(), running: context.store.inventory(),
-      allowUnverified: try arguments.bool("allowUnverified"), limits: context.limits)
+      allowUnverified: allowUnverified, limits: context.limits)
     {
     case .success(let selected): plan = selected
     case .failure(let unsatisfiable): throw unsatisfiable.error
@@ -116,7 +128,7 @@ struct FleetHandler: ToolHandler {
       for: requirements, catalogue: images.catalogue, guestOf: { images.guest(of: $0) })
     var warnings: [String] = []
     if try await LongOperation.pullIfMissing(
-      image, confirm: try arguments.bool("confirm"), context: context) != nil
+      image, confirm: confirm, context: context) != nil
     {
       warnings.append("pulled image \(image) first")
     }
@@ -139,7 +151,6 @@ struct FleetHandler: ToolHandler {
       autoSegment: autoSegment, members: names.map { FleetMember(name: $0) })
     try fleets.save(fleet)
 
-    let sshTimeout = try arguments.int("timeoutSeconds").map { Duration.seconds($0) }
     let draft = VMRecord(
       id: "", profile: plan.profile, guest: plan.guest, features: plan.features,
       resources: plan.resources, image: image, network: requirements.network,
@@ -303,8 +314,9 @@ struct FleetHandler: ToolHandler {
 
   /// Destroys every member VM (and any VM that names the fleet), never with `force` (CX-6): a
   /// member whose disk backs another VM's is refused and kept, as is one whose destroy fails.
-  /// Members are destroyed in rounds, so one whose dependents are fleet members goes once they
-  /// have. When every VM is gone the auto segment and the record go too; otherwise the record is
+  /// Members are destroyed in rounds: one refused only for its dependents is retried after a
+  /// round that destroyed something, so one whose dependents are fleet members goes once they
+  /// have; any other failure is final. When every VM is gone the auto segment and the record go too; otherwise the record is
   /// kept, listing the survivors (CX-19), so a later destroy can finish the job.
   static func destroy(
     _ fleet: FleetRecord, context: ToolContext, fleets: FleetStore
@@ -312,6 +324,7 @@ struct FleetHandler: ToolHandler {
     let records = (try? context.store.list().records) ?? []
     var remaining = Set(
       fleet.members.compactMap(\.vm) + records.filter { $0.fleet == fleet.name }.map(\.id))
+    var survivors: Set<String> = []
     let manager = context.manager
     var teardown = Teardown()
     var refusals: [String: (name: String, error: VMLabError)] = [:]
@@ -336,6 +349,10 @@ struct FleetHandler: ToolHandler {
       for (id, name, error) in round {
         if let error, let name {
           refusals[id] = (name, error)
+          if error.data["field"] != .string("force") {
+            remaining.remove(id)
+            survivors.insert(id)
+          }
           continue
         }
         remaining.remove(id)
@@ -345,15 +362,16 @@ struct FleetHandler: ToolHandler {
       }
       if !progressed { break }
     }
+    survivors.formUnion(remaining)
     teardown.destroyed.sort()
     teardown.failed = refusals.map { (name: $0.value.name, id: $0.key, error: $0.value.error) }
       .sorted { $0.name < $1.name }
-    if remaining.isEmpty {
+    if survivors.isEmpty {
       if fleet.autoSegment { try? context.manager.segments.destroy(fleet.segment) }
       fleets.remove(fleet.name)
     } else {
       var kept = fleet
-      kept.members = fleet.members.filter { $0.vm.map(remaining.contains) ?? false }
+      kept.members = fleet.members.filter { $0.vm.map(survivors.contains) ?? false }
       let listed = Set(kept.members.compactMap(\.vm))
       for (id, refusal) in refusals where !listed.contains(id) {
         kept.members.append(FleetMember(name: refusal.name, vm: id))

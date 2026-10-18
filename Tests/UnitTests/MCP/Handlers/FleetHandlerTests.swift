@@ -196,6 +196,41 @@ import VMLabCore
     #expect(try f.context.store.list().records.isEmpty)
   }
 
+  /// CX-19: a member whose destroy fails stays in the fleet record; a bad timeoutSeconds is
+  /// refused before any segment or fleet record is made.
+  @Test func aFailedDestroyKeepsTheRecordAndBadInputsLeaveNothing() async throws {
+    let f = try Fixture()
+    defer { f.cleanUp() }
+    for bad: JSONValue in [.number(0), .number(-5), .string("soon")] {
+      await #expect(throws: VMLabError.self) {
+        try await f.call([
+          "action": .string("create"), "name": .string("lab"), "count": .number(1),
+          "requirements": VMCreateHandlerTests.Fixture.requirements,
+          "allowUnverified": .bool(true), "timeoutSeconds": bad,
+        ])
+      }
+      #expect(FleetStore(home: f.context.home).list().isEmpty)
+      #expect(f.context.manager.segments.list().isEmpty)
+    }
+
+    _ = try await f.call([
+      "action": .string("create"), "name": .string("lab"), "count": .number(2),
+      "requirements": VMCreateHandlerTests.Fixture.requirements, "allowUnverified": .bool(true),
+    ])
+    f.backend.fail(.destroy)
+    let partial = try await f.call(["action": .string("destroy"), "name": .string("lab")])
+    #expect(partial["destroyed"]?.arrayValue?.count == 1)
+    #expect(partial["failed"]?.arrayValue?.count == 1)
+    let kept = try FleetStore(home: f.context.home).load("lab")
+    #expect(kept.members.count == 1)
+    #expect(try kept.members.allSatisfy { try f.context.store.load(id: $0.vm ?? "").fleet == "lab" })
+    #expect(!f.context.manager.segments.list().isEmpty)
+    let rest = try await f.call(["action": .string("destroy"), "name": .string("lab")])
+    #expect(rest["destroyed"]?.arrayValue?.count == 1)
+    #expect(FleetStore(home: f.context.home).list().isEmpty)
+    #expect(f.context.manager.segments.list().isEmpty)
+  }
+
   @Test func netSegmentCreateListDestroy() async throws {
     let f = try Fixture()
     defer { f.cleanUp() }
