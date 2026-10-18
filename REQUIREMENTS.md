@@ -409,7 +409,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   feature is `.no("needs root or an entitlement")`.
   **Verify:** command-line snapshot for both cases; the matrix row flips with the fact.
 
-- [ ] **R-310 TCG profile for x86_64 and other architectures**
+- [x] **R-310 TCG profile for x86_64 and other architectures**
   `qemu-tcg` selects `qemu-system-x86_64` (`-machine q35`, `-cpu max`, edk2 x86 firmware) or
   `qemu-system-<arch>` for `riscv64` (`-machine virt`) and `other(String)` with no defaults beyond
   `-machine virt` and a warning in the plan. TCG profile applies `-smp` up to 8 and warns in the

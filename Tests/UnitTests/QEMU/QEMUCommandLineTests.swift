@@ -39,6 +39,19 @@ import VMLabCore
           varsTemplate: "/opt/homebrew/share/qemu/edk2-i386-vars.fd"),
         gdbPort: 1234, sshHostPort: 2222)
     ),
+    (
+      "tcg-riscv64",
+      QEMULaunchOptions(
+        firmware: QEMUFirmware(
+          code: "/opt/homebrew/share/qemu/edk2-riscv-code.fd",
+          varsTemplate: "/opt/homebrew/share/qemu/edk2-riscv-vars.fd"),
+        sshHostPort: 2222)
+    ),
+    (
+      "tcg-other",
+      QEMULaunchOptions(
+        boot: BootSpec(mode: .kernel, kernel: "/k/vmlinux", cmdline: "console=hvc0"), disk: false)
+    ),
   ])
   func snapshot(name: String, options: QEMULaunchOptions) throws {
     let record = try Self.record(name)
@@ -231,6 +244,39 @@ import VMLabCore
         boot: BootSpec(mode: .kernel, kernel: "/k/vmlinuz", initrd: "/k/initrd", cmdline: "quiet")))
     #expect(!args.contains { $0.hasPrefix("if=pflash") })
     #expect(args.contains("/k/vmlinuz") && args.contains("/k/initrd") && args.contains("quiet"))
+  }
+
+  /// R-310: per-architecture binaries, machines and defaults; TCG caps -smp at 8.
+  @Test func architectureDefaults() throws {
+    #expect(QEMUCommandLine.target(for: .riscv64) == "riscv64")
+    #expect(QEMUCommandLine.target(for: .other("ppc64")) == "ppc64")
+    #expect(QEMUCommandLine.target(for: .other("../sh")) == nil)
+    #expect(QEMUCommandLine.machine(for: .x86_64) == "q35")
+    #expect(QEMUCommandLine.machine(for: .other("ppc64")) == "virt")
+    let installation = QEMUInstallation(
+      binDirectory: URL(filePath: "/opt/homebrew/bin"),
+      shareDirectory: URL(filePath: "/opt/homebrew/share/qemu"))
+    #expect(installation.systemBinary(for: .riscv64).lastPathComponent == "qemu-system-riscv64")
+    #expect(
+      installation.systemBinary(for: .other("ppc64")).lastPathComponent == "qemu-system-ppc64")
+
+    let riscv = try Self.record("tcg-riscv64")
+    let args = try QEMUCommandLine.arguments(
+      record: riscv, plan: Self.plan(for: riscv), layout: Self.layout(riscv),
+      options: QEMULaunchOptions(firmware: Self.firmware, sshHostPort: 1))
+    #expect(args.firstIndex(of: "-smp").map { args[$0 + 1] } == "8")
+
+    let other = try Self.record("tcg-other")
+    let bare = try QEMUCommandLine.arguments(
+      record: other, plan: Self.plan(for: other), layout: Self.layout(other),
+      options: QEMULaunchOptions(boot: BootSpec(mode: .kernel, kernel: "/k"), disk: false))
+    #expect(!bare.contains("-cpu") && !bare.contains("ramfb") && !bare.contains("usb-kbd"))
+    #expect(bare.firstIndex(of: "-machine").map { bare[$0 + 1] } == "virt")
+    #expect {
+      try QEMUCommandLine.arguments(
+        record: other, plan: Self.plan(for: other), layout: Self.layout(other),
+        options: QEMULaunchOptions(disk: false))
+    } throws: { ($0 as? VMLabError)?.data["field"] == .string("boot.mode") }
   }
 
   @Test func hvfRefusesX86() throws {

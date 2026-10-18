@@ -41,19 +41,40 @@ public struct QEMULaunchOptions: Sendable, Hashable {
 /// process always starts halted (`-S`) and daemonized: the caller connects QMP and the serial
 /// socket, then sends `cont`, so the serial log starts at the first byte.
 public enum QEMUCommandLine {
-  /// The QEMU target name for a guest architecture, or nil when vmlab does not build one.
+  /// The QEMU target name for a guest architecture (`qemu-system-<target>`, R-310): arm64 is
+  /// aarch64, any other name is QEMU's own (`riscv64`, `ppc64`, `loongarch64`), or nil when it is
+  /// not a plausible target name.
   public static func target(for arch: GuestSpec.Arch) -> String? {
     switch arch {
-    case .arm64: "aarch64"
-    case .x86_64: "x86_64"
-    default: nil
+    case .arm64: return "aarch64"
+    case .x86_64: return "x86_64"
+    case .riscv64: return "riscv64"
+    case .other(let name):
+      let allowed = name.unicodeScalars.allSatisfy {
+        ("a"..."z").contains($0) || ("0"..."9").contains($0) || $0 == "_"
+      }
+      return allowed && !name.isEmpty && name.count <= 32 ? name : nil
+    }
+  }
+
+  /// The machine type: `q35` for x86_64, `virt` for everything else.
+  public static func machine(for arch: GuestSpec.Arch) -> String {
+    arch == .x86_64 ? "q35" : "virt"
+  }
+
+  /// Whether vmlab knows this architecture's defaults (CPU model, UEFI firmware, display and
+  /// input devices). An `other` architecture gets `-machine virt` and nothing else.
+  static func hasDefaults(_ arch: GuestSpec.Arch) -> Bool {
+    switch arch {
+    case .arm64, .x86_64, .riscv64: true
+    case .other: false
     }
   }
 
   static func unsupportedArch(_ arch: GuestSpec.Arch) -> VMLabError {
     VMLabError.invalidRequest(
-      field: "guest.arch", reason: "QEMU guests are arm64 or x86_64, not \(arch.rawValue)",
-      hint: "Ask for an arm64 or x86_64 guest.")
+      field: "guest.arch", reason: "\(arch.rawValue) is not a QEMU target name",
+      hint: "Use arm64, x86_64, riscv64 or a qemu-system-<arch> name such as ppc64.")
   }
 
   /// The arguments (without the executable) for `record` under `plan`.
@@ -79,14 +100,16 @@ public enum QEMUCommandLine {
         hint: "This is a vmlab bug; report it.", data: ["profile": .string(plan.profile.rawValue)])
     }
     let resources = ResourceLimits.resolve(plan.resources, for: plan.guest.os)
-    let cpus = resources.cpus ?? 2
+    var cpus = resources.cpus ?? 2
+    if accel == "tcg" { cpus = min(cpus, ProfileSelector.maxTCGCPUs) }
     let memoryGB = resources.memoryGB ?? 4
+    let defaults = hasDefaults(arch)
 
     var args: [String] = []
     args += ["-name", "vmlab-\(record.id)"]
     args += ["-nodefaults", "-no-user-config"]
-    args += ["-machine", arch == .arm64 ? "virt" : "q35", "-accel", accel]
-    args += ["-cpu", accel == "hvf" ? "host" : "max"]
+    args += ["-machine", machine(for: arch), "-accel", accel]
+    if defaults { args += ["-cpu", accel == "hvf" ? "host" : "max"] }
     args += ["-smp", "\(cpus)", "-m", "\(memoryGB * 1024)M"]
 
     args += try bootArguments(options, layout: layout)
@@ -139,11 +162,14 @@ public enum QEMUCommandLine {
     // The screen VNC shows. `ramfb` rather than `virtio-gpu-pci`: edk2 exposes it as a linear GOP
     // framebuffer, which Linux's efifb/simpledrm keep driving; Debian's cloud kernel has no DRM at
     // all, so with virtio-gpu its screen went dark once the kernel took over.
-    args += ["-device", "ramfb"]
-    // Absolute pointers, so VNC clicks land where the screenshot says. USB for firmware and full
-    // kernels; virtio-input for cloud kernels, which have no USB stack.
-    args += ["-device", "qemu-xhci", "-device", "usb-kbd", "-device", "usb-tablet"]
-    args += ["-device", "virtio-keyboard-pci", "-device", "virtio-tablet-pci"]
+    // An `other` architecture gets none of these: vmlab does not know its devices (R-310).
+    if defaults {
+      args += ["-device", "ramfb"]
+      // Absolute pointers, so VNC clicks land where the screenshot says. USB for firmware and
+      // full kernels; virtio-input for cloud kernels, which have no USB stack.
+      args += ["-device", "qemu-xhci", "-device", "usb-kbd", "-device", "usb-tablet"]
+      args += ["-device", "virtio-keyboard-pci", "-device", "virtio-tablet-pci"]
+    }
     args += ["-qmp", "unix:\(layout.qmpSocket.path),server,wait=off"]
     args += ["-serial", "unix:\(layout.serialSocket.path),server,wait=off"]
     args += ["-vnc", "unix:\(layout.vncSocket.path)"]
@@ -183,9 +209,9 @@ public enum QEMUCommandLine {
     switch boot.mode {
     case .disk:
       guard let firmware = options.firmware else {
-        throw VMLabError(
-          code: .internal, message: "No UEFI firmware was given for a disk boot.",
-          hint: "This is a vmlab bug; report it.")
+        throw VMLabError.invalidRequest(
+          field: "boot.mode", reason: "vmlab has no UEFI firmware for this architecture",
+          hint: "Boot with boot.mode kernel, firmware or binary.")
       }
       return pflash(firmware.code)
     case .firmware:
