@@ -131,7 +131,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   then `release R-002` round-trips; the hook script exits non-zero for `git commit` in the main
   checkout and zero inside `.claude/worktrees/x`.
 
-- [ ] **R-003 Code signing for the VZ runner**
+- [x] **R-003 Code signing for the VZ runner**
   `Sources/vmlab-vz/vmlab-vz.entitlements` with `com.apple.security.virtualization` only.
   `scripts/sign.sh` ad-hoc signs `.build/<config>/vmlab-vz` with that entitlements file after every
   build (called by `check.sh` and by `swift build` wrappers in `scripts/build.sh`). `vmlab doctor`

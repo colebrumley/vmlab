@@ -6,4 +6,4 @@ cd "$(dirname "$0")/.."
 swift format lint --strict --recursive Sources Tests Package.swift
 swift build
 swift test --skip IntegrationTests
-if [ -x scripts/sign.sh ]; then scripts/sign.sh debug; fi
+scripts/sign.sh debug
