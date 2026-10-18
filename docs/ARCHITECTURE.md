@@ -132,7 +132,7 @@ image or `-bios` ROM, `kernel` `-kernel/-initrd/-append/-dtb` with no firmware, 
 missing kernel from the image (extracting it on first use) and attaches no disk to a kernel-only
 image. `VMRecord.extra.qemuArgs` (R-306, `ExtraSpec` in Core: an allowlist of option
 names, value keys and chardev/netdev types, with host paths checked by `checkHostPaths` against
-the `PathPolicy` and `VMLAB_HOME` at create and again at start) go last and verbatim when the plan grants `custom_devices`. Networking (R-308): one
+the `PathPolicy` and `VMLAB_HOME` at create and again at start, where `QEMUBackend.checkImageChains` also holds every backing or data file of a `file=` image, per `qemu-img info --backing-chain`, to the same rule) go last and verbatim when the plan grants `custom_devices`. Networking (R-308): one
 `-netdev user` NIC (none for `net_none`) forwards a fresh loopback port to guest 22
 (`runtime.sshPort`) and every request forward; `QEMUBackend.resolveForwards` binds a port for each
 `host: nil`, and `VMRuntime.forwards` records the ports chosen (shown as `endpoints.forwards`). A request that
