@@ -77,6 +77,19 @@ import Testing
       json: #"{"guest":{"os":"linux","arch":"arm64"},"#
         + #""network":{"mode":"none","forwards":[{"guest":22}]}}"#,
       field: "network.forwards"),
+    // CR-2: sizes past the caps of Appendix G.
+    .init(
+      json: #"{"guest":{"os":"linux","arch":"arm64"},"resources":{"diskGB":9223372036854775807}}"#,
+      field: "resources.diskGB"),
+    .init(
+      json: #"{"guest":{"os":"linux","arch":"arm64"},"resources":{"diskGB":65537}}"#,
+      field: "resources.diskGB"),
+    .init(
+      json: #"{"guest":{"os":"linux","arch":"arm64"},"resources":{"memoryGB":4097}}"#,
+      field: "resources.memoryGB"),
+    .init(
+      json: #"{"guest":{"os":"linux","arch":"arm64"},"resources":{"cpus":257}}"#,
+      field: "resources.cpus"),
   ]
 
   @Test(arguments: contradictions)

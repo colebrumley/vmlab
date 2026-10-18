@@ -103,7 +103,20 @@ final class FakeBackend: Backend {
     return runtime(of: record)
   }
 
-  func destroy(_ record: VMRecord) async throws(VMLabError) { try self.record(.destroy, record) }
+  func destroy(_ record: VMRecord) async throws(VMLabError) {
+    destroyed.withLock { $0.append(record) }
+    try self.record(.destroy, record)
+  }
+  /// The records `destroy` was called with, in order.
+  var destroyedRecords: [VMRecord] { destroyed.withLock { $0 } }
+  private let destroyed = Mutex<[VMRecord]>([])
+
+  /// Whether this fake clones (default true); false makes it a backend without `clone`.
+  var supportsClone: Bool {
+    get { cloning.withLock { $0 } }
+    set { cloning.withLock { $0 = newValue } }
+  }
+  private let cloning = Mutex(true)
 
   /// Writes the clone's `disk.raw` and reports a chain through `<source>/backing/<key>.qcow2`.
   func clone(

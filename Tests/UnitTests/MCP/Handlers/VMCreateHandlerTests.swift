@@ -213,6 +213,17 @@ import VMLabCore
     }
   }
 
+  /// CR-4: an image set after decoding (fleet's `image` argument) is still checked.
+  @Test func anImageNameOutsideImagesIsRefused() throws {
+    var requirements = try Requirements(guest: GuestSpec(os: .linux, arch: .arm64))
+    requirements.image = "../../tmp/x"
+    let error = #expect(throws: VMLabError.self) {
+      try VMCreateHandler.image(for: requirements, catalogue: .builtin)
+    }
+    #expect(error?.code == .invalidRequest)
+    #expect(error?.data["field"] == .string("image"))
+  }
+
   @Test func defaultImageIsTheFirstForTheGuest() throws {
     let requirements = try Requirements(guest: GuestSpec(os: .linux, arch: .arm64))
     #expect(try VMCreateHandler.image(for: requirements, catalogue: .builtin) == "debian-13-arm64")

@@ -67,4 +67,40 @@ import VMLabCore
     await #expect(throws: VMLabError.self) { try await f.manager.clone("web", name: "copy") }
     #expect(try f.store.list().records.map(\.name) == ["web"])
   }
+
+  /// CR-1: a profile whose engine cannot clone is refused before anything is stored, so no
+  /// cleanup runs against a record that carries the source's engine paths.
+  @Test func aProfileThatCannotCloneIsRefusedBeforeAnythingIsStored() async throws {
+    let f = try Fixture()
+    let source = try await f.create([.serial])
+    _ = try f.store.update(id: source.id) { $0.tartClone = "/Users/me/.tart/vms/\(source.id)" }
+    f.backend.supportsClone = false
+    let refused = await #expect(throws: VMLabError.self) {
+      try await f.manager.clone("web", name: "copy")
+    }
+    #expect(refused?.code == .invalidRequest)
+    #expect(!f.backend.operations.contains(.destroy))
+    #expect(!f.backend.operations.contains(.clone))
+    #expect(try f.store.list().records.map(\.name) == ["web"])
+  }
+
+  /// CR-1: the clone's record carries none of the source's engine-owned fields, so neither the
+  /// engine nor a failed clone's cleanup reaches the source's resources through it.
+  @Test func theCloneDraftDropsTheSourcesEngineFields() async throws {
+    let f = try Fixture()
+    let source = try await f.create([.serial])
+    _ = try f.store.update(id: source.id) {
+      $0.tartClone = "/Users/me/.tart/vms/\(source.id)"
+      $0.brokenReason = "stale"
+    }
+    let clone = try await f.manager.clone("web", name: "copy")
+    #expect(clone.tartClone == nil)
+    #expect(clone.brokenReason == nil)
+    #expect(clone.runtime == nil)
+    f.backend.fail(.clone)
+    await #expect(throws: VMLabError.self) { try await f.manager.clone("web", name: "copy-2") }
+    let destroyed = try #require(f.backend.destroyedRecords.last)
+    #expect(destroyed.id != source.id)
+    #expect(destroyed.tartClone == nil)
+  }
 }

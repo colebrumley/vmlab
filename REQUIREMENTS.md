@@ -1035,7 +1035,7 @@ result also carries `vm` (id and name) where a VM is involved and `warnings: [St
 }
 ```
 
-Every field but `guest` has a default (Appendix G). `require` defaults to `[]`, which lands on a VZ
+Every field but `guest` has a default (Appendix G); `resources` values are capped there too. `require` defaults to `[]`, which lands on a VZ
 profile. The result of `vm_create` repeats the resolved plan so the model knows what it has.
 
 ## Appendix D — Error codes
@@ -1115,6 +1115,7 @@ six 4 GB guests with the default reserve; macOS 26.6 → VZ save/restore APIs pr
 | Setting | Default |
 |---|---|
 | CPUs / memory / disk | 2 / 4 GB / 32 GB (macOS: 4 / 8 GB / image size) |
+| Largest CPUs / memory / disk a request may ask for | 256 / 4096 GB / 65536 GB (`ResourceLimits.maxCPUs`, `maxMemoryGB`, `maxDiskGB`; more is `invalid_request`) |
 | Memory reserve kept free on the host | 4 GB (after every guest on the host, from any `VMLAB_HOME`; also against the host's available memory) |
 | Host memory pressure at which a start is refused | `warn` (`kern.memorystatus_vm_pressure_level` ≥ 2); off with `VMLAB_IGNORE_MEMORY_PRESSURE=1` or `ignoreMemoryPressure: true` in `config.json` (owner only) |
 | Concurrent starts | 4 |

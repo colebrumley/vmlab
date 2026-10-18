@@ -113,6 +113,8 @@ struct VMCreateHandler: ToolHandler {
     guestOf: (String) -> GuestSpec? = { _ in nil }
   ) throws(VMLabError) -> String {
     if let image = requirements.image {
+      // Fleet sets `image` after decoding, so the name is checked here too (CR-4).
+      try ImageStore.checkName(image, field: "image")
       let guest = guestOf(image) ?? catalogue.image(named: image)?.guest
       if let guest, guest != requirements.guest {
         throw VMLabError.invalidRequest(

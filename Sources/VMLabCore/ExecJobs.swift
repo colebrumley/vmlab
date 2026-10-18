@@ -41,8 +41,10 @@ public actor ExecJobs {
   public static let readLimit = 64 * 1024
 
   private var readers: [String: Task<Void, Never>] = [:]
+  /// How long the ssh that launches a job may take.
+  private let startTimeout: Duration
 
-  public init() {}
+  public init(startTimeout: Duration = .seconds(30)) { self.startTimeout = startTimeout }
 
   // MARK: Model-facing operations
 
@@ -58,7 +60,20 @@ public actor ExecJobs {
     try paths.prepare()
     try save(job, paths)
     let remote = RemoteShell.background(request, job: job.id, loginUser: channel.target.user)
-    let result = try await Self.ssh(channel, remote: remote, timeout: .seconds(30))
+    let result: (status: Int32, stdout: String, stderr: String)
+    do throws(VMLabError) {
+      result = try await Self.ssh(channel, remote: remote, timeout: startTimeout)
+    } catch {
+      // The guest may have launched the job before the link stalled (CR-6): end it, as a
+      // foreground timeout does, so no job runs that the model has no id for.
+      if error.code == .timeout {
+        let kill = RemoteShell.kill(job: job.id, user: job.user, loginUser: channel.target.user)
+        _ = try? await Self.ssh(channel, remote: kill, timeout: .seconds(15))
+      }
+      try? FileManager.default.removeItem(at: paths.record)
+      try? FileManager.default.removeItem(at: paths.log)
+      throw error
+    }
     guard result.status == 0, result.stdout.contains("vmlab-started") else {
       try? FileManager.default.removeItem(at: paths.record)
       try? FileManager.default.removeItem(at: paths.log)

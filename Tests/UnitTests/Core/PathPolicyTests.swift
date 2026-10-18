@@ -128,4 +128,32 @@ import VMLabCore
     let created = try await f.manager.create(draft, plan: f.plan([.sharedDir]))
     #expect(created.share?.host == "/private/tmp/vmlab-share")
   }
+
+  /// CR-4: boot images are host paths the model names; they pass the same policy.
+  @Test func bootPathsOutsideTheHomeAreRefusedAtCreate() async throws {
+    let f = try VMManagerTests.Fixture()
+    for (field, boot) in [
+      ("boot.kernel", BootSpec(mode: .kernel, kernel: "/etc/hosts")),
+      ("boot.initrd", BootSpec(mode: .kernel, kernel: "/tmp/k", initrd: "/etc/hosts")),
+      ("boot.dtb", BootSpec(mode: .kernel, kernel: "/tmp/k", dtb: "/etc/hosts")),
+      ("boot.firmware", BootSpec(mode: .firmware, firmware: "/etc/hosts")),
+      ("boot.binary", BootSpec(mode: .binary, binary: "/etc/hosts", loadAddress: "0x40000000")),
+    ] {
+      var draft = VMRecord(
+        id: "", name: "booted", profile: .qemuHVF, guest: GuestSpec(os: .linux, arch: .arm64),
+        features: [])
+      draft.boot = boot
+      let error = await #expect(throws: VMLabError.self) {
+        try await f.manager.create(draft, plan: f.plan([.directKernelBoot]))
+      }
+      #expect(error?.data["field"] == .string(field))
+    }
+    #expect(try f.store.list().records.isEmpty)
+    var draft = VMRecord(
+      id: "", name: "booted", profile: .qemuHVF, guest: GuestSpec(os: .linux, arch: .arm64),
+      features: [])
+    draft.boot = BootSpec(mode: .kernel, kernel: "/tmp/./vmlab-kernel")
+    let created = try await f.manager.create(draft, plan: f.plan([.directKernelBoot]))
+    #expect(created.boot?.kernel == "/private/tmp/vmlab-kernel")
+  }
 }

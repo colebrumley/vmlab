@@ -54,10 +54,12 @@ public struct VZBackend: Backend {
     let disk = dir.appending(path: "disk.raw")
     let source = images.imageDirectory(name).appending(path: raw)
     let diskGB = ResourceLimits.resolve(record.resources, for: .linux).diskGB
-    if let diskGB {
+    let diskBytes = try diskGB.map { (gb) throws(VMLabError) in
+      try ResourceLimits.bytes(gb, unit: 1 << 30, field: "resources.diskGB")
+    }
+    if let diskGB, let diskBytes {
       try VZDisk.refuseShrink(
-        current: VZDisk.size(of: source), toBytes: UInt64(diskGB) << 30, diskGB: diskGB,
-        image: name)
+        current: VZDisk.size(of: source), toBytes: diskBytes, diskGB: diskGB, image: name)
     }
     if !FileManager.default.fileExists(atPath: disk.path) {
       do {
@@ -69,7 +71,7 @@ public struct VZBackend: Backend {
       }
     }
     // Sparse growth of the clone; cloud-init's growpart and resizefs grow the root on first boot.
-    if let diskGB { try VZDisk.grow(disk, toBytes: UInt64(diskGB) << 30) }
+    if let diskBytes { try VZDisk.grow(disk, toBytes: diskBytes) }
     let share = SharedDirSpec.of(record)
     try share?.checkHostDirectory(vmDirectory: dir)
     let key = try SSHKeys.generate(in: dir, comment: "vmlab-\(record.id)", runner: commands)

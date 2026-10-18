@@ -63,4 +63,21 @@ import VMLabCore
       ResourceLimits.resolve(ResourceSpec(cpus: 6), for: .linux)
         == ResourceSpec(cpus: 6, memoryGB: 4, diskGB: 32))
   }
+
+  /// CR-2: byte sizes are overflow-checked, and resolve keeps stored sizes within the caps.
+  @Test func byteSizesAreCheckedAndResolveClamps() throws {
+    #expect(try ResourceLimits.bytes(2, unit: 1 << 30, field: "resources.diskGB") == 2 << 30)
+    for bad in [Int.max, -1, Int.min] {
+      let error = #expect(throws: VMLabError.self) {
+        try ResourceLimits.bytes(bad, unit: 1_000_000_000, field: "resources.diskGB")
+      }
+      #expect(error?.code == .invalidRequest)
+      #expect(error?.data["field"] == .string("resources.diskGB"))
+    }
+    let resolved = ResourceLimits.resolve(
+      ResourceSpec(cpus: Int.max, memoryGB: Int.max, diskGB: Int.max), for: .linux)
+    #expect(resolved.cpus == ResourceLimits.maxCPUs)
+    #expect(resolved.memoryGB == ResourceLimits.maxMemoryGB)
+    #expect(resolved.diskGB == ResourceLimits.maxDiskGB)
+  }
 }

@@ -65,6 +65,22 @@ import VMLabCore
       ])
   }
 
+  /// CR-1: destroy deletes only the Tart VM named after this record's own id, never another VM's
+  /// clone that a copied `tartClone` names.
+  @Test func destroyNeverDeletesAnotherVMsClone() async throws {
+    let (home, store, backend, fake) = try Self.sandbox()
+    defer { try? FileManager.default.removeItem(at: home) }
+    let source = try Self.create(store)
+    try await backend.create(source, plan: Self.plan)
+    let sourceClone = try #require(try store.load(id: source.id).tartClone)
+    var other = try Self.create(store)
+    other.tartClone = sourceClone
+    try await backend.destroy(other)
+    #expect(FileManager.default.fileExists(atPath: sourceClone))
+    #expect(!(fake.calls.withLock { $0 }.contains(["delete", source.id])))
+    #expect(!backend.supportsClone)
+  }
+
   /// A clone whose layout this build cannot read is deleted again and the create fails.
   @Test func unreadableCloneIsDeleted() async throws {
     let broken = TartTests.temporary()
@@ -130,6 +146,19 @@ import VMLabCore
 
   /// resources.diskGB grows the clone's disk with `tart set --disk-size`; a size below the
   /// clone's is refused with invalid_request and the clone deleted.
+  /// CR-2: a stored diskGB too large for bytes is refused, not a trap.
+  @Test func hugeDiskGBIsRefused() async throws {
+    let (home, store, backend, _) = try Self.sandbox()
+    defer { try? FileManager.default.removeItem(at: home) }
+    let record = try store.update(id: try Self.create(store).id) {
+      $0.resources = ResourceSpec(diskGB: Int.max)
+    }
+    let error = await #expect(throws: VMLabError.self) {
+      try await backend.create(record, plan: Self.plan)
+    }
+    #expect(error?.code == .invalidRequest)
+  }
+
   @Test func diskGBGrowsTheCloneAndRefusesShrinking() async throws {
     let (home, store, backend, fake) = try Self.sandbox()
     defer { try? FileManager.default.removeItem(at: home) }

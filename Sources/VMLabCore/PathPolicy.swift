@@ -34,7 +34,7 @@ public struct VMLabConfig: Codable, Sendable, Hashable {
 }
 
 /// Where a model-supplied host path may point (R-1102): `vm_file`'s `local`, `images register`'s
-/// `path`, `kernel` and `initrd`, and a share's `host` directory. A path is made absolute-only,
+/// `path`, `kernel` and `initrd`, a share's `host` directory and a request's `boot` images. A path is made absolute-only,
 /// standardised and canonicalised (every symlink of its longest existing prefix resolved, so
 /// `..`, `/tmp` → `/private/tmp` and a link out of the home cannot slip past), and must then lie
 /// under one of `roots`: the user's home, `/tmp`, and the user's temporary directory (`$TMPDIR`,

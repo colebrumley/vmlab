@@ -297,15 +297,48 @@ public actor ImageStore {
     return FileManager.default.homeDirectoryForCurrentUser.appending(path: ".vmlab")
   }
 
+  /// `images/<name>/`. Callers pass a name `isImageName` accepts (`checkName` at every entry
+  /// point); `pulled` refuses any other.
   public nonisolated func imageDirectory(_ name: String) -> URL { directory.appending(path: name) }
 
-  /// The record of a pulled image, or nil when it is not pulled.
+  /// The record of a pulled image, or nil when it is not pulled. Nil too for a name that is not a
+  /// single path component, and for a record whose `files` name anything but a file inside the
+  /// image's directory (canonical, symlinks resolved), so an `image.json` cannot point an engine
+  /// at another host file (CR-4).
   public nonisolated func pulled(_ name: String) -> PulledImage? {
-    let url = imageDirectory(name).appending(path: "image.json")
-    guard let data = try? Data(contentsOf: url) else { return nil }
+    guard Self.isImageName(name) else { return nil }
+    let folder = imageDirectory(name)
+    guard let data = try? Data(contentsOf: folder.appending(path: "image.json")) else { return nil }
     let decoder = JSONDecoder()
     decoder.dateDecodingStrategy = .iso8601
-    return try? decoder.decode(PulledImage.self, from: data)
+    guard let record = try? decoder.decode(PulledImage.self, from: data),
+      record.files.values.allSatisfy({ Self.isContained($0, in: folder) })
+    else { return nil }
+    return record
+  }
+
+  /// Whether `name` can name an image: one non-empty path component, not `.` or `..`.
+  public static func isImageName(_ name: String) -> Bool {
+    !name.isEmpty && name != "." && name != ".." && !name.contains("/") && !name.contains("\0")
+  }
+
+  /// `invalid_request` on `field` unless `isImageName(name)`.
+  public static func checkName(_ name: String, field: String) throws(VMLabError) {
+    guard isImageName(name) else {
+      throw VMLabError.invalidRequest(
+        field: field, reason: "\(name) is not an image name",
+        hint: "Use a name from images list.")
+    }
+  }
+
+  /// Whether the relative path `file` stays inside `folder` once canonical.
+  static func isContained(_ file: String, in folder: URL) -> Bool {
+    guard !file.isEmpty, !file.hasPrefix("/"), !file.split(separator: "/").contains("..") else {
+      return false
+    }
+    let root = PathPolicy.canonical(folder.path)
+    let resolved = PathPolicy.canonical(folder.appending(path: file).path)
+    return resolved != root && PathPolicy.isInside(resolved, root)
   }
 
   /// The guest an image runs: its pulled record's, else its catalogue entry's; nil when unknown.
@@ -408,8 +441,7 @@ public actor ImageStore {
           "raw": .string("expected \(expected), got \(actual)"),
         ])
     }
-    try? FileManager.default.removeItem(at: disk)
-    try FileManager.default.moveItem(at: partial, to: disk)
+    try Self.replace(disk, with: partial)
     try Data("\(expected)  \(entry.fileName)\n".utf8).write(to: folder.appending(path: "checksums"))
 
     var files = [entry.format.rawValue: diskName]
@@ -458,8 +490,7 @@ public actor ImageStore {
         hint: "Check free disk space and that qemu-img runs, then pull again",
         data: ["engine": .string("qemu-img"), "raw": .string(result?.output ?? "did not launch")])
     }
-    try? FileManager.default.removeItem(at: output)
-    try FileManager.default.moveItem(at: partial, to: output)
+    try Self.replace(output, with: partial)
   }
 
   /// `tart pull <ref>` into Tart's cache; the record names the ref as the Tart VM to clone.
@@ -502,11 +533,26 @@ public actor ImageStore {
       to: imageDirectory(record.name).appending(path: "image.json"), options: .atomic)
   }
 
-  static func validate(_ name: String) throws {
-    guard !name.isEmpty, name != ".", name != "..", !name.contains("/") else {
-      throw VMLabError.invalidRequest(
-        field: "name", reason: "\(name) is not an image name", hint: "Use a name from images list")
+  /// A fresh path next to `target` (same directory, so same volume) to stage its new content in.
+  static func stagingFile(for target: URL) -> URL {
+    target.deletingLastPathComponent().appending(
+      path: ".\(target.lastPathComponent).vmlab-new-\(UUID().uuidString)")
+  }
+
+  /// Puts `temp` in place of `target` in one `rename(2)`, which replaces an existing `target`
+  /// atomically: there is never a moment without either the old file or the new one.
+  static func replace(_ target: URL, with temp: URL) throws(VMLabError) {
+    guard rename(temp.path, target.path) == 0 else {
+      let reason = String(cString: strerror(errno))
+      throw VMLabError(
+        code: .internal, message: "Cannot replace \(target.path): \(reason)",
+        hint: "Check free disk space and permissions under VMLAB_HOME.",
+        data: ["path": .string(target.path)])
     }
+  }
+
+  static func validate(_ name: String) throws {
+    try checkName(name, field: "name")
   }
 
   static func downloadError(_ url: URL, _ reason: String) -> VMLabError {

@@ -82,10 +82,10 @@ public struct VZMacBackend: Backend {
       leasePath: leasePath)
   }
 
-  /// The Tart name of `record`'s clone: the recorded directory's name, else the VM id.
-  static func cloneName(_ record: VMRecord) -> String {
-    record.tartClone.map { URL(filePath: $0).lastPathComponent } ?? record.id
-  }
+  /// The Tart name of `record`'s clone: always its own id (`create` clones to that name), never
+  /// a name read from `tartClone`, so a record that carries another VM's path cannot reach that
+  /// VM's clone (CR-1).
+  static func cloneName(_ record: VMRecord) -> String { record.id }
 
   public func create(_ record: VMRecord, plan: Plan) async throws(VMLabError) {
     guard let name = record.image else {
@@ -109,7 +109,8 @@ public struct VZMacBackend: Backend {
       }
       if let diskGB = record.resources.diskGB {
         // Tart counts decimal gigabytes and only grows (`tart set --disk-size`).
-        let target = UInt64(diskGB) * 1_000_000_000
+        let target = try ResourceLimits.bytes(
+          diskGB, unit: 1_000_000_000, field: "resources.diskGB")
         let current = VZDisk.size(of: clone.disk)
         try VZDisk.refuseShrink(current: current, toBytes: target, diskGB: diskGB, image: name)
         if current < target { try tart.setDiskSize(record.id, gigabytes: diskGB) }
@@ -227,7 +228,9 @@ public struct VZMacBackend: Backend {
     let name = Self.cloneName(record)
     try tart.delete(name)
     // A clone recorded under another TART_HOME than this process sees.
-    if let path = record.tartClone, FileManager.default.fileExists(atPath: path),
+    // Only a directory named after this VM's own id is its clone.
+    if let path = record.tartClone, URL(filePath: path).lastPathComponent == name,
+      FileManager.default.fileExists(atPath: path),
       URL(filePath: path).standardizedFileURL != tart.files(of: name).directory.standardizedFileURL
     {
       try? FileManager.default.removeItem(atPath: path)

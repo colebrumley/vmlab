@@ -82,6 +82,9 @@ public actor VMManager {
     }
     // BH-1: so are the host paths named in extra.qemuArgs (checked again at start).
     try new.extra?.checkHostPaths(policy: PathPolicy.load(home: store.home), vmlabHome: store.home)
+    // CR-4: boot images are model-supplied host paths the engine reads; the same policy, plus
+    // VMLAB_HOME's images/ (where extract_kernel puts kernels), recorded canonical.
+    if let boot = new.boot { new.boot = try Self.checkedBoot(boot, home: store.home) }
     var stored = try store.create(new)
     do throws(VMLabError) {
       if let name = Self.segmentName(of: stored) {
@@ -390,5 +393,24 @@ public actor VMManager {
       code: .timeout, message: "\(what) of \(vm) was cancelled",
       hint: "Nothing was kept; call it again to retry.",
       data: ["vm": .string(vm), "cancelled": .bool(true)])
+  }
+}
+
+extension VMManager {
+  /// `boot` with every host path through `PathPolicy` (the user's home, /tmp, `$TMPDIR`, and
+  /// `home`'s images directory), each made canonical.
+  static func checkedBoot(_ boot: BootSpec, home: URL) throws(VMLabError) -> BootSpec {
+    var policy = PathPolicy.load(home: home)
+    policy.roots.append(PathPolicy.canonical(home.appending(path: "images").path))
+    var checked = boot
+    func check(_ path: String?, _ field: String) throws(VMLabError) -> String? {
+      try path.map { (p) throws(VMLabError) in try policy.check(p, field: field).path }
+    }
+    checked.kernel = try check(boot.kernel, "boot.kernel")
+    checked.initrd = try check(boot.initrd, "boot.initrd")
+    checked.dtb = try check(boot.dtb, "boot.dtb")
+    checked.firmware = try check(boot.firmware, "boot.firmware")
+    checked.binary = try check(boot.binary, "boot.binary")
+    return checked
   }
 }

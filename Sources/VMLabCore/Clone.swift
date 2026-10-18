@@ -30,10 +30,17 @@ extension VMManager {
         data: Self.stateData(source))
     }
 
+    // Refused before anything is stored: a failed clone's cleanup must never run (CR-1).
+    guard backend.supportsClone else { throw VMLabError.cloneUnsupported(source.profile) }
+
     var draft = source
     draft.name = name ?? ""
     draft.state = .created
+    // Engine-owned fields name the source's own resources (its Tart clone, its engine process,
+    // its breakage); the clone's engine makes its own.
     draft.runtime = nil
+    draft.tartClone = nil
+    draft.brokenReason = nil
     draft.checkpoints = []
     draft.createdAt = Date()
     draft.clonedFrom = CloneOrigin(vm: sourceID, checkpoint: node?.id, checkpointName: node?.name)

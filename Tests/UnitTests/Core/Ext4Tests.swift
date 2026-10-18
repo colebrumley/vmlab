@@ -256,6 +256,32 @@ struct Ext4Fixture {
     #expect(bad?.code == .invalidRequest)
   }
 
+  /// A re-registration that fails part-way keeps the kernel already registered, and leaves no
+  /// temporary file: the new copy is renamed over the old one, never deleted first.
+  @Test func aFailedReRegistrationKeepsTheOldKernel() async throws {
+    let home = FileManager.default.temporaryDirectory.appending(path: "vmlab-kernel-\(UUID())")
+    defer { try? FileManager.default.removeItem(at: home) }
+    try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+    let kernel = home.appending(path: "Image")
+    try Data("kernel".utf8).write(to: kernel)
+    let store = ImageStore(home: home)
+    let files = try await store.registerKernel("k", kernel: kernel)
+    let unreadable = home.appending(path: "Image2")
+    try Data("other".utf8).write(to: unreadable)
+    try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: unreadable.path)
+    defer {
+      try? FileManager.default.setAttributes(
+        [.posixPermissions: 0o644], ofItemAtPath: unreadable.path)
+    }
+    await #expect(throws: (any Error).self) {
+      try await store.registerKernel("k", kernel: unreadable)
+    }
+    #expect(try Data(contentsOf: files.kernel) == Data("kernel".utf8))
+    let left = try FileManager.default.contentsOfDirectory(
+      atPath: files.kernel.deletingLastPathComponent().path)
+    #expect(left == ["vmlinuz"])
+  }
+
   /// R-604: a gzip kernel (`Image.gz`) is stored uncompressed for `VZLinuxBootLoader`.
   @Test(.enabled(if: FileManager.default.isExecutableFile(atPath: GzipTests.gzip)))
   func registerKernelDecompressesAGzipKernel() async throws {
