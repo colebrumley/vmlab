@@ -3,47 +3,38 @@ import Testing
 import VMLabCore
 
 @Suite struct CapabilitiesTests {
-  /// A copy of REQUIREMENTS.md Appendix B. By C7 the code is the authority: when this test fails
-  /// because the matrix changed on purpose, fix the appendix and this copy in the same commit.
-  static let appendixB = """
-    | Feature | vz-macos | vz-linux | qemu-hvf (arm64) | qemu-tcg (any arch) |
-    |---|---|---|---|---|
-    | `exec_ssh` | Y | Y | Y | Y |
-    | `exec_agent` | N | N | Y (qemu-ga) | Y |
-    | `gui` | Y (guest Screen Sharing) | Y (in-guest VNC) | Y (QEMU VNC) | Y |
-    | `gui_preboot` | N | N | Y | Y |
-    | `gui_desktop` | Y (built in) | Y (R-504) | Y (R-504) | Y |
-    | `gui_accel` | Y | Y | N | N |
-    | `serial` | N | Y | Y | Y |
-    | `gdb` | N | N | ? `qemu_hvf_gdb` (R-702) | Y |
-    | `introspection` | N | N | Y | Y |
-    | `memory_dump` | N | N | Y | Y |
-    | `direct_kernel_boot` | N | Y | Y | Y |
-    | `custom_firmware` | N | N | Y | Y |
-    | `custom_devices` | N | N | Y | Y |
-    | `halt_at_start` | N | N | Y | Y |
-    | `checkpoint_disk` | Y | Y | Y | Y |
-    | `checkpoint_live` | ? `vz_macos_live_snapshot` (R-608) | ? `vz_linux_live_snapshot` (R-608) | ? `qemu_hvf_live_snapshot` (R-307) | Y |
-    | `pause` | Y | Y | Y | Y |
-    | `net_nat` | Y | Y | Y | Y |
-    | `net_fast` | Y | Y | C `root` or `qemu_vmnet` | C same |
-    | `net_segment` | Y (static, R-901) | Y (socketpair to vmlab-switch) | Y (-netdev dgram unix, verified on QEMU 11.1) | Y (same) |
-    | `net_port_forward` | Y (host-reachable address) | Y (same) | Y (hostfwd) | Y (hostfwd) |
-    | `net_none` | Y | Y | Y | Y |
-    | `rosetta` | N | C `rosetta_installed` | N | N |
-    | `nested_virt` | N | C `nested_supported` (M3+, macOS 15+) | N | Y (slow) |
-    | `shared_dir` | Y (virtiofs) | Y (virtiofs) | Y (9p) | Y (9p) |
-    | `cloud_init` | N | Y | Y | Y |
-    | `many_guests` | N (limit 2) | Y | Y | Y |
-    | Guest OS | macOS | Linux | Linux | Linux |
-    | Arch | arm64 | arm64 | arm64 | x86_64, arm64, riscv64, other |
-    | Performance tier (1 best) | 1 | 1 | 2 | 4 |
-    | Energy tier (1 best) | 1 | 1 | 2 | 3 |
-    | Startup tier (1 best) | 2 | 1 | 1 | 3 |
-    """
+  static let repoRoot = URL(filePath: #filePath).deletingLastPathComponent()
+    .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+
+  /// REQUIREMENTS.md Appendix B, read from the document itself so drift fails `check.sh`. By C7
+  /// the code is the authority: when these tests fail because the matrix changed on purpose, fix
+  /// the appendix in the same commit.
+  static let appendixB: String = {
+    let url = repoRoot.appending(path: "REQUIREMENTS.md")
+    guard let text = try? String(contentsOf: url, encoding: .utf8),
+      let start = text.range(of: "\n## Appendix B")
+    else { return "" }
+    let rest = text[start.upperBound...]
+    let end = rest.range(of: "\n## ")?.lowerBound ?? rest.endIndex
+    return String(rest[..<end])
+  }()
+
+  /// The matrix table of Appendix B: its header, separator and rows.
+  static var table: [Substring] {
+    appendixB.split(separator: "\n").drop { !$0.hasPrefix("| Feature |") }.prefix {
+      $0.hasPrefix("|")
+    }
+    .map { $0 }
+  }
+
+  /// The committed slow-probe snapshot of the development host (`docs/dev-host-facts.json`).
+  static func devHostProbes() throws -> SlowProbes {
+    let data = try Data(contentsOf: repoRoot.appending(path: "docs/dev-host-facts.json"))
+    return try SlowProbes.decoder.decode(SlowProbes.self, from: data)
+  }
 
   static var rows: [(String, [String])] {
-    appendixB.split(separator: "\n").dropFirst(2).map { line in
+    table.dropFirst(2).map { line in
       let cells = line.split(separator: "|").map { $0.trimmingCharacters(in: .whitespaces) }
       return (cells[0], Array(cells[1...]))
     }
@@ -71,7 +62,14 @@ import VMLabCore
     }.joined(separator: "\n")
   }
 
-  @Test func everyFeatureRowOfAppendixBIsInTheCopy() {
+  @Test func appendixBHeaderNamesTheProfilesInOrder() throws {
+    let header = try #require(Self.table.first)
+    let names = header.split(separator: "|").map { $0.trimmingCharacters(in: .whitespaces) }
+      .dropFirst().map { $0.split(separator: " ").first.map(String.init) ?? "" }
+    #expect(names == Profile.allCases.map(\.rawValue))
+  }
+
+  @Test func everyFeatureRowOfAppendixBIsInTheDocument() {
     #expect(
       Self.featureRows.map { String($0.0.dropFirst().dropLast()) }
         == Feature.allCases.map(\.rawValue))
@@ -137,6 +135,31 @@ import VMLabCore
     #expect(rows["Performance tier (1 best)"] == Profile.allCases.map { "\($0.performanceTier)" })
     #expect(rows["Energy tier (1 best)"] == Profile.allCases.map { "\($0.energyTier)" })
     #expect(rows["Startup tier (1 best)"] == Profile.allCases.map { "\($0.startupTier)" })
+  }
+
+  /// R-1103: every slow probe the matrix names has run on the development host, so the
+  /// generated matrix's verified column shows no `unknown`.
+  @Test func devHostHasAnsweredEveryProbe() throws {
+    let probes = try Self.devHostProbes()
+    for probe in SlowProbe.allCases {
+      #expect(probes[probe].result != .unknown, "\(probe.rawValue) is unknown in the snapshot")
+    }
+    for feature in Feature.allCases {
+      #expect(!FeatureDocs.verified(feature, probes: probes).contains("unknown"), "\(feature)")
+    }
+  }
+
+  /// Appendix B lists what the development host recorded, one line per probe-gated feature,
+  /// exactly as the verified column of `docs/FEATURES.md` renders it from the snapshot.
+  @Test func appendixBRecordsTheDevHostProbes() throws {
+    let probes = try Self.devHostProbes()
+    let expected = Feature.allCases.compactMap { feature -> String? in
+      let verified = FeatureDocs.verified(feature, probes: probes)
+      return verified.isEmpty ? nil : "- `\(feature.rawValue)`: \(verified)"
+    }
+    let listed = Self.appendixB.split(separator: "\n").map(String.init)
+      .filter { $0.hasPrefix("- `") }
+    #expect(listed == expected)
   }
 
   @Test func guestFilter() {
@@ -266,6 +289,18 @@ import VMLabCore
     #expect(capabilities(of: .vzLinux, host: host)[.nestedVirt] != .yes)
     host.nestedSupported = true
     #expect(capabilities(of: .vzLinux, host: host)[.nestedVirt] == .yes)
+  }
+
+  /// R-309: a `no` from `qemu_vmnet` says what vmnet needs, after the root clause.
+  @Test func vmnetNoSaysWhatItNeeds() {
+    var host = Self.host(probes: .yes)
+    host.probes[.qemuVmnet] = ProbeRecord(result: .no)
+    guard case .no(let reason) = capabilities(of: .qemuHVF, host: host)[.netFast] else {
+      Issue.record("net_fast is not no without root and vmnet")
+      return
+    }
+    #expect(reason.hasPrefix("vmlab is not running as root; and "))
+    #expect(reason.contains("com.apple.vm.networking entitlement"))
   }
 
   @Test func everyNoHasAReason() {
