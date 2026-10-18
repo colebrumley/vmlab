@@ -55,7 +55,10 @@ image. `VMRecord.extra.qemuArgs` (R-306, `ExtraSpec` in Core, which refuses vmla
 options) go last and verbatim when the plan grants `custom_devices`. Networking (R-308): one
 `-netdev user` NIC (none for `net_none`) forwards a fresh loopback port to guest 22
 (`runtime.sshPort`) and every request forward; `QEMUBackend.resolveForwards` binds a port for each
-`host: nil`, and `VMRuntime.forwards` records the ports chosen (shown as `endpoints.forwards`).
+`host: nil`, and `VMRuntime.forwards` records the ports chosen (shown as `endpoints.forwards`). A request that
+asks for `net_fast` (`Plan.requests`; granted only as root or when the `qemu_vmnet` probe said
+yes) gets `-netdev vmnet-shared` instead, with no forwards; `QEMUVmnetProbe` starts a throwaway
+edk2 guest with that NIC and answers `no` when QEMU cannot create the vmnet interface.
 `QMPClient` (an actor over a `QMPTransport`; `UnixQMPTransport` reads on its own thread) does
 the greeting and `qmp_capabilities`, matches replies to `vmlab-<n>` ids (QMP errors become
 `engine_error`, silence `timeout`, a closed socket `guest_unreachable`) and broadcasts events to

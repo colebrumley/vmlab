@@ -40,7 +40,9 @@ public final class QEMUBackend: Backend {
 
   public func start(_ record: VMRecord) async throws(VMLabError) -> VMRuntime {
     var request = try await request(record, plan: Self.plan(of: record), seed: true)
-    if record.network.mode != .disabled {
+    if Self.usesVmnet(record) {
+      request.vmnet = true
+    } else if record.network.mode != .disabled {
       request.sshHostPort = try QEMUMachine.freeLoopbackPort()
       request.forwards = try Self.resolveForwards(record.network.forwards)
     }
@@ -142,6 +144,14 @@ public final class QEMUBackend: Backend {
     }
     machines.withLock { $0[record.id] = machine }
     return machine
+  }
+
+  /// Whether the guest's NIC is `vmnet-shared` (R-309): the request asked for `net_fast` and the
+  /// plan granted it, which the matrix allows only as root or when `qemu_vmnet` probed `yes`.
+  /// `net_fast` the profile merely has (it is `yes` there) does not switch a guest off
+  /// user-mode networking, whose SSH and port forwards it relies on.
+  static func usesVmnet(_ record: VMRecord) -> Bool {
+    record.network.mode != .disabled && record.plan?.requests(.netFast) == true
   }
 
   /// `forwards` with every `host: nil` given a free loopback port (R-308). Ports are chosen by

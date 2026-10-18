@@ -17,11 +17,14 @@ public struct QEMULaunchOptions: Sendable, Hashable {
   /// The request's forwards with every host port chosen (R-308); nil uses the record's, which
   /// must then all name a host port.
   public var forwards: [PortForward]?
+  /// `net_fast` (R-309): the NIC is `vmnet-shared` (root or the `qemu_vmnet` probe) instead of
+  /// user-mode networking. The guest is then reached on its own address; nothing is forwarded.
+  public var vmnet: Bool
 
   public init(
     boot: BootSpec = BootSpec(), firmware: QEMUFirmware? = nil, disk: Bool = true,
     seed: Bool = false, gdbPort: Int? = nil, sshHostPort: Int? = nil,
-    forwards: [PortForward]? = nil
+    forwards: [PortForward]? = nil, vmnet: Bool = false
   ) {
     self.boot = boot
     self.firmware = firmware
@@ -30,6 +33,7 @@ public struct QEMULaunchOptions: Sendable, Hashable {
     self.gdbPort = gdbPort
     self.sshHostPort = sshHostPort
     self.forwards = forwards
+    self.vmnet = vmnet
   }
 }
 
@@ -104,6 +108,17 @@ public enum QEMUCommandLine {
 
     if record.network.mode == .disabled {
       args += ["-nic", "none"]
+    } else if options.vmnet {
+      if !(options.forwards ?? record.network.forwards).isEmpty {
+        throw VMLabError.invalidRequest(
+          field: "network.forwards",
+          reason: "port forwards need user-mode networking, and net_fast uses vmnet",
+          hint: "Drop net_fast to forward ports, or reach the guest on its vmnet address.")
+      }
+      args += [
+        "-netdev", "vmnet-shared,id=net0",
+        "-device", "virtio-net-pci,netdev=net0,mac=\(mac(for: record.id))",
+      ]
     } else {
       var netdev = "user,id=net0"
       if let ssh = options.sshHostPort { netdev += ",hostfwd=tcp:127.0.0.1:\(ssh)-:22" }

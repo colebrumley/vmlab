@@ -403,7 +403,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   **Verify:** command-line snapshot; integration: `ssh -p <port>` reaches the Debian guest with the
   generated key.
 
-- [ ] **R-309 vmnet fast networking (conditional)**
+- [x] **R-309 vmnet fast networking (conditional)**
   When running as root or `qemu_vmnet` probes `yes`, `net_fast` uses `-netdev vmnet-shared`. The
   probe tries `vmnet-shared` on a throwaway guest and records the answer; everywhere else the
   feature is `.no("needs root or an entitlement")`.

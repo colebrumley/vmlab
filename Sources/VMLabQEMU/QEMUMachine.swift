@@ -20,11 +20,14 @@ public struct QEMULaunchRequest: Sendable {
   public var sshHostPort: Int?
   /// The request's forwards, every host port chosen (R-308); nil forwards the record's as given.
   public var forwards: [PortForward]?
+  /// The NIC is `vmnet-shared` rather than user-mode networking (`net_fast`, R-309).
+  public var vmnet: Bool
 
   public init(
     record: VMRecord, plan: Plan, layout: QEMULayout, baseImage: URL?,
     boot: BootSpec = BootSpec(), seed: CloudInitConfig? = nil, installation: QEMUInstallation,
-    gdbPort: Int? = nil, sshHostPort: Int? = nil, forwards: [PortForward]? = nil
+    gdbPort: Int? = nil, sshHostPort: Int? = nil, forwards: [PortForward]? = nil,
+    vmnet: Bool = false
   ) {
     self.record = record
     self.plan = plan
@@ -36,6 +39,7 @@ public struct QEMULaunchRequest: Sendable {
     self.gdbPort = gdbPort
     self.sshHostPort = sshHostPort
     self.forwards = forwards
+    self.vmnet = vmnet
   }
 }
 
@@ -142,7 +146,8 @@ public actor QEMUMachine {
     try prepare(request)
     var options = QEMULaunchOptions(
       boot: request.boot, disk: request.baseImage != nil, seed: request.seed != nil,
-      gdbPort: request.gdbPort, sshHostPort: request.sshHostPort, forwards: request.forwards)
+      gdbPort: request.gdbPort, sshHostPort: request.sshHostPort, forwards: request.forwards,
+      vmnet: request.vmnet)
     if request.boot.mode == .disk {
       options.firmware = try request.installation.firmware(for: request.plan.guest.arch)
     }
@@ -166,7 +171,7 @@ public actor QEMUMachine {
     do {
       machine = try await connect(
         layout: layout, pid: pid, gdbPort: options.gdbPort, sshPort: request.sshHostPort,
-        forwards: request.record.network.mode == .disabled
+        forwards: request.record.network.mode == .disabled || request.vmnet
           ? nil : request.forwards ?? request.record.network.forwards,
         timeout: connectTimeout)
     } catch {
