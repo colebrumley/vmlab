@@ -129,11 +129,36 @@ public enum QEMUCommandLine {
     let memoryGB = resources.memoryGB ?? 4
     let defaults = hasDefaults(arch)
 
+    // R-306: the request's own arguments, when the plan grants them. Its -cpu replaces vmlab's
+    // and its -machine properties join vmlab's -machine; the rest go last.
+    var extra: ExtraSpec?
+    if let requested = record.extra, !requested.qemuArgs.isEmpty {
+      guard plan.grants(.customDevices) else {
+        throw VMLabError.invalidRequest(
+          field: "extra.qemuArgs", reason: "the plan does not grant custom_devices",
+          hint: "Require custom_devices, or drop extra.qemuArgs.")
+      }
+      try requested.validate()
+      extra = requested
+    }
+
     var args: [String] = []
     args += ["-name", "vmlab-\(record.id)"]
     args += ["-nodefaults", "-no-user-config"]
-    args += ["-machine", machine(for: arch), "-accel", accel]
-    if defaults { args += ["-cpu", accel == "hvf" ? "host" : "max"] }
+    args += ["-machine", try machineArgument(arch: arch, accel: accel, extra: extra)]
+    args += ["-accel", accel]
+    if let cpu = extra?.cpu {
+      try checkCPU(cpu.value, index: cpu.index, accel: accel)
+      args += ["-cpu", cpu.value]
+    } else if defaults {
+      args += ["-cpu", accel == "hvf" ? "host" : "max"]
+    }
+    if accel == "hvf", extra?.usesICount == true {
+      throw contradiction(
+        field: "extra.qemuArgs",
+        "-icount counts instructions under TCG, and qemu-hvf runs the "
+          + "guest on the hardware")
+    }
     args += ["-smp", "\(cpus)", "-m", "\(memoryGB * 1024)M"]
 
     args += try bootArguments(options, layout: layout)
@@ -250,17 +275,51 @@ public enum QEMUCommandLine {
       args += ["-gdb", "tcp:127.0.0.1:\(port)"]
     }
     args += ["-pidfile", layout.pidFile.path, "-display", "none", "-daemonize", "-S"]
-    // R-306: the request's own arguments, verbatim and last, when the plan grants them.
-    if let extra = record.extra, !extra.qemuArgs.isEmpty {
-      guard plan.grants(.customDevices) else {
-        throw VMLabError.invalidRequest(
-          field: "extra.qemuArgs", reason: "the plan does not grant custom_devices",
-          hint: "Require custom_devices, or drop extra.qemuArgs.")
-      }
-      try extra.validate()
-      args += extra.qemuArgs
-    }
+    if let extra { args += extra.appendedArguments }
     return args
+  }
+
+  /// An `invalid_request` for a request argument the profile cannot honour.
+  static func contradiction(field: String, _ reason: String) -> VMLabError {
+    VMLabError.invalidRequest(
+      field: field, reason: reason,
+      hint: "Drop it, or ask for a guest the plan runs on qemu-tcg (an architecture other than "
+        + "arm64).")
+  }
+
+  /// vmlab's `-machine` value: its board (or the request's, which qemu-hvf holds to `virt`) and
+  /// the request's properties after it.
+  static func machineArgument(
+    arch: GuestSpec.Arch, accel: String, extra: ExtraSpec?
+  ) throws(VMLabError) -> String {
+    var board = machine(for: arch)
+    if let requested = extra?.machineType, requested.value != board {
+      if accel == "hvf", !requested.value.hasPrefix("virt-") {
+        throw contradiction(
+          field: "extra.qemuArgs[\(requested.index)]",
+          "qemu-hvf runs the virt board, and -machine \(requested.value) is another")
+      }
+      board = requested.value
+    }
+    return ([board] + (extra?.machineProperties ?? [])).joined(separator: ",")
+  }
+
+  /// The request's `-cpu` model against the accelerator: qemu-hvf runs the host's own CPU
+  /// (`host`, or `max`, which is the same there), and `host` needs qemu-hvf.
+  static func checkCPU(_ value: String, index: Int, accel: String) throws(VMLabError) {
+    let model = String(value.prefix { $0 != "," })
+    if accel == "hvf", model != "host", model != "max" {
+      throw contradiction(
+        field: "extra.qemuArgs[\(index)]",
+        "qemu-hvf runs the host's own CPU (-cpu host or max), and -cpu \(model) is a model only "
+          + "TCG emulates")
+    }
+    if accel != "hvf", model == "host" {
+      throw VMLabError.invalidRequest(
+        field: "extra.qemuArgs[\(index)]",
+        reason: "-cpu host needs qemu-hvf, and this plan runs on \(accel)",
+        hint: "Use -cpu max or a named model such as cortex-a72, with its features after it.")
+    }
   }
 
   /// The firmware and loader arguments of each boot mode (R-305).

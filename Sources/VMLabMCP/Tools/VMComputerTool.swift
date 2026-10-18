@@ -9,9 +9,12 @@ extension ToolSpec {
       + "diffFrom a previous screenshot id to get only the changed region, or unchanged: true. "
       + "zoom crops region at full resolution. Clicks, drags, mouse_move, type, key (xdotool "
       + "names such as Return, ctrl+c, cmd+space), scroll and wait act, then return a fresh "
-      + "screenshot after settleMs. Coordinates are guest pixels unless scaled: true, which "
-      + "means the coordinates of the last scaled screenshot. cursor_position and screen_info "
-      + "return no image. Needs the gui feature.",
+      + "screenshot after settleMs (at most \(VMComputerHandler.maxSettleMs) ms). Coordinates are "
+      + "guest pixels unless scaled: true, which means the coordinates of the last scaled "
+      + "screenshot; each coordinate and region corner is 0 to \(DisplayRect.coordinateLimit). "
+      + "wait lasts at most \(Int(VMComputerHandler.maxWaitSeconds)) s; scroll sends at most "
+      + "\(VMComputerHandler.maxScrollAmount) clicks. cursor_position and screen_info return no "
+      + "image. Needs the gui feature.",
     inputSchema: Schema.input(
       [
         "vm": Schema.vm,
@@ -26,22 +29,30 @@ extension ToolSpec {
         "text": Schema.string("type: the text to type; key: the key or chord, e.g. ctrl+alt+t."),
         "scrollDirection": Schema.string(
           "scroll: direction.", enum: ["up", "down", "left", "right"]),
-        "scrollAmount": Schema.integer("scroll: wheel clicks.", minimum: 1, default: 3),
+        "scrollAmount": Schema.integer(
+          "scroll: wheel clicks.", minimum: 1, maximum: VMComputerHandler.maxScrollAmount,
+          default: 3),
         "region": Schema.array(
-          Schema.integer("Pixel coordinate.", minimum: 0),
+          coordinate,
           "[x0, y0, x1, y1]: screenshot or zoom only this rectangle.", minItems: 4, maxItems: 4),
-        "durationSeconds": Schema.number("wait: how long to wait.", minimum: 0),
+        "durationSeconds": Schema.number(
+          "wait: how long to wait, in seconds.", minimum: 0,
+          maximum: VMComputerHandler.maxWaitSeconds),
         "maxEdge": Schema.integer(
-          "Longest edge of the returned image in pixels.", minimum: 1, default: 1280),
+          "Longest edge of the returned image in pixels.", minimum: 1,
+          default: ScreenshotRequest.defaultMaxEdge),
         "format": Schema.string("Image encoding.", enum: ["png", "jpeg"], default: "png"),
         "quality": Schema.integer(
-          "jpeg quality, 1 (smallest) to 100.", minimum: 1, maximum: 100, default: 80),
+          "jpeg quality, 1 (smallest) to 100.", minimum: VMComputerHandler.qualityRange.lowerBound,
+          maximum: VMComputerHandler.qualityRange.upperBound,
+          default: ScreenshotRequest.defaultQuality),
         "diffFrom": Schema.string(
           "screenshot: id of an earlier screenshot of this VM; return only what changed."),
         "scaled": Schema.boolean(
           "Coordinates are in the last screenshot's scaled space, not guest pixels."),
         "settleMs": Schema.integer(
-          "Delay before the screenshot that follows an action.", minimum: 0, default: 300),
+          "Delay in milliseconds before the screenshot that follows an action.", minimum: 0,
+          maximum: VMComputerHandler.maxSettleMs, default: VMComputerHandler.defaultSettleMs),
       ], required: ["vm", "action"]),
     outputShape: """
       image content block +
@@ -50,8 +61,11 @@ extension ToolSpec {
       """,
     errors: [.vmNotFound, .wrongState, .capabilityMissing, .invalidRequest, .engineError])
 
+  /// One coordinate: the handler refuses any outside `0...DisplayRect.coordinateLimit`.
+  private static let coordinate = Schema.integer(
+    "Pixel coordinate.", minimum: 0, maximum: DisplayRect.coordinateLimit)
+
   private static func point(_ description: String) -> JSONValue {
-    Schema.array(
-      Schema.integer("Pixel coordinate.", minimum: 0), description, minItems: 2, maxItems: 2)
+    Schema.array(coordinate, description, minItems: 2, maxItems: 2)
   }
 }

@@ -13,7 +13,8 @@ extension ToolSpec {
       [
         "vm": Schema.vm,
         "command": Schema.string("The command, run by the guest's shell."),
-        "timeoutSeconds": Schema.timeoutSeconds("Kill the command after this long.", default: 120),
+        "timeoutSeconds": Schema.timeoutSeconds(
+          "Kill the command after this long.", default: VMExecHandler.defaultTimeoutSeconds),
         "cwd": Schema.string("Working directory in the guest."),
         "env": Schema.object(
           [:], description: "Extra environment variables.",

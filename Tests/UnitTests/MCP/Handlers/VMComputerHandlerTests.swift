@@ -248,7 +248,9 @@ final class FakeDisplay: DisplaySession, DisplayConnector {
     let f = try Fixture()
     defer { f.cleanUp() }
     let bad: [(String, JSONValue)] = [
-      ("settleMs", .number(-1)), ("format", .string("gif")), ("quality", .number(0)),
+      ("settleMs", .number(-1)),
+      ("settleMs", .number(Double(VMComputerHandler.maxSettleMs + 1))),
+      ("format", .string("gif")), ("quality", .number(0)),
       ("quality", .number(101)), ("maxEdge", .number(0)),
     ]
     for (field, value) in bad {

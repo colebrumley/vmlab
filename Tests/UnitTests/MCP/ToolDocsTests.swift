@@ -14,11 +14,14 @@ import Testing
 
   @Test func fieldsRenderWithTypesAndNesting() {
     let doc = ToolDocs.markdown()
-    #expect(doc.contains("| `vm` | string | yes |"))
+    #expect(doc.contains("| `vm` | string, ≤ 64 characters | yes |"))
     #expect(doc.contains("| `requirements` | [requirements](#requirements) | yes |"))
     #expect(doc.contains("| `quality` | integer, 1–100, default `80` |"))
     #expect(doc.contains("| `format` | `png` \\| `jpeg`, default `png` |"))
-    #expect(doc.contains("| `coordinate` | array of integer, ≥ 0 (2 items) |"))
+    #expect(doc.contains("| `coordinate` | array of integer, 0–16777216 (2 items) |"))
+    #expect(doc.contains("| `settleMs` | integer, 0–60000, default `300` |"))
+    #expect(doc.contains("| `members` | array of string, 1–64 items |"))
+    #expect(doc.contains("| `pattern` | string, ≤ 1024 characters |"))
     #expect(doc.contains("| `network.forwards[].guest` | integer, 1–65535 | yes |"))
     #expect(doc.contains("| `guest.os` | `macos` \\| `linux` | yes |"))
   }

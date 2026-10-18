@@ -85,7 +85,9 @@ public actor VMManager {
       new.share?.host = try PathPolicy.load(home: store.home).check(host, field: "share.host").path
     }
     // BH-1: so are the host paths named in extra.qemuArgs (checked again at start).
-    try new.extra?.checkHostPaths(policy: PathPolicy.load(home: store.home), vmlabHome: store.home)
+    try new.extra?.checkHostPaths(
+      policy: PathPolicy.load(home: store.home), vmlabHome: store.home,
+      allowHostCode: VMLabConfig.load(home: store.home).allowHostCode)
     // CR-4: boot images are model-supplied host paths the engine reads; the same policy, plus
     // VMLAB_HOME's images/ (where extract_kernel puts kernels), recorded canonical.
     if let boot = new.boot { new.boot = try Self.checkedBoot(boot, home: store.home) }

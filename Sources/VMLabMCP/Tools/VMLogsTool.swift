@@ -12,7 +12,9 @@ extension ToolSpec {
         "vm": Schema.vm,
         "source": Schema.string(
           "Which log.", enum: ["events", "serial", "provision", "all"], default: "all"),
-        "tail": Schema.integer("Return only the last tail lines.", minimum: 1, default: 100),
+        "tail": Schema.integer(
+          "Return only the last tail lines.", minimum: 1, maximum: VMLogsHandler.maxTail,
+          default: VMLogsHandler.defaultTail),
       ], required: ["vm"]),
     outputShape: "{ lines: [String] }",
     errors: [.vmNotFound, .invalidRequest])

@@ -232,6 +232,43 @@ endpoints, the last 20 events, any provisioning failure and the latest kernel pa
   needs `provision.sudoPassword`; without it `vm_create` refuses with `invalid_request`. A guest
   without `/sbin/mount_virtiofs` (before macOS 13) fails provisioning at step `share_check`.
 
+## Custom QEMU arguments (custom_devices)
+
+`extra.qemuArgs` hands QEMU arguments of your own; naming any implies `custom_devices`, so the
+plan is QEMU. Give each value as the argument after its option (`["-device", "virtio-rng-pci"]`,
+not `-device=...`), in QEMU's `key=value,...` form (`,,` is a literal comma; no JSON).
+
+- **Allowed:** `-device`, `-global`, `-drive`, `-blockdev`, `-object`, `-chardev`, `-netdev`,
+  `-nic` and `-net` (user, socket, stream, dgram, hubport), `-cdrom`, `-hda`..`-hdd`, `-sd`,
+  `-option-rom`, `-acpitable`, `-smbios`, `-fw_cfg`, `-rtc`, `-boot`, `-action`, `-icount`, `-d`,
+  `-dfilter`, `-D`, `-trace`, `-numa`, `-overcommit`, `-mem-prealloc`, `-mem-path`, `-audiodev` and
+  `-audio` (none or wav), `-tpmdev emulator`, `-vga`, `-usbdevice`, `-virtfs` and `-fsdev` (local),
+  `-iscsi`, `-msg`, `-compat`, `-uuid`, `-k`, `-seed`, `-watchdog-action`, `-usb`, `-no-reboot`,
+  `-no-shutdown` and a few more flags.
+- **`-cpu`** replaces vmlab's CPU model: `max,sve=on` or a named model such as `cortex-a72,pmu=on`
+  under `qemu-tcg`; only `host` or `max` (with properties) under `qemu-hvf`, and `host` only there.
+- **`-machine` / `-M`** properties join vmlab's own `-machine` (`["-machine", "highmem=off"]`).
+  Under `qemu-tcg` you may also name another board (`sbsa-ref`); under `qemu-hvf` the board stays
+  `virt`. `accel=` and the boot keys (`kernel=`, `dtb=`, ...) are refused: use `boot`.
+  `-icount` needs `qemu-tcg`.
+- **Another serial port:** vmlab keeps `-serial` (it is `vm_serial`'s console). Add
+  `["-chardev", "socket,id=s1,path=/tmp/s1.sock,server=on,wait=off", "-device",
+  "pci-serial,chardev=s1"]` (`isa-serial` on x86_64), or a `virtconsole` on a virtio-serial bus.
+- **Host paths** (`file=`, `path=`, `-D`, `-cdrom`, `-trace file=`, ...) must be absolute, under
+  your home or `/tmp`, outside `VMLAB_HOME`, and not an existing unix socket; images' backing files
+  are held to the same rule.
+- **Refused:** monitors (`-monitor`, `-qmp`, `-mon`, `mon:`), `-incoming`, `-add-fd`,
+  `-sandbox`, `-readconfig`, `-set`, `exec:` and `cmd:`, `fd=`/`script=`/`helper=`/`smb=` keys,
+  `tap`, `bridge` and `vmnet-*` netdevs, and what vmlab owns: `-smp` and `-m` (use `resources`),
+  `-kernel`, `-bios`, `-pflash` and friends (use `boot`), `-vnc`/`-display`, `-gdb` (use
+  `vm_debug`), `-snapshot`/`-loadvm` (use `vm_checkpoint`), `-accel`, `-name`, `-daemonize`.
+  The error names the argument (`field: extra.qemuArgs[i]`) and says why.
+- **The owner's opt-in:** `-plugin`, `-semihosting`, `-semihosting-config`, passthrough devices
+  (`usb-host`, `vfio-*`, `vhost-*`, `u2f-passthru`), host serial or parallel chardevs, `vhost-user`
+  netdevs and `-audiodev coreaudio` run host code or reach host hardware. They are refused unless
+  the owner sets `"allowHostCode": true` in `VMLAB_HOME/config.json`; no tool argument can, so
+  ask the owner rather than retrying. Their host paths still follow the path rule.
+
 ## Reading the result blocks
 
 In the sessions below, each ` ```json call ` block is one `tools/call` (`tool` is the tool's name,

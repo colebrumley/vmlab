@@ -24,8 +24,11 @@ extension ToolSpec {
           ], "What to do."),
         "address": Schema.string("Guest address in 0x hex, e.g. 0xffff800010000000."),
         "size": Schema.integer(
-          "read_memory: bytes to read; watchpoints: bytes to watch.", minimum: 1),
-        "data": Schema.string("write_memory: the bytes as hex, e.g. 1f2003d5."),
+          "read_memory: bytes to read, 1 to \(VMDebugHandler.maxBytes); watchpoints: bytes to "
+            + "watch, 1, 2, 4 or 8 (default 1).", minimum: 1, maximum: VMDebugHandler.maxBytes),
+        "data": Schema.string(
+          "write_memory: the bytes as hex, e.g. 1f2003d5, at most \(VMDebugHandler.maxBytes) "
+            + "bytes."),
         "kind": Schema.string(
           "breakpoint_add, breakpoint_remove: the kind of stop point.",
           enum: ["software", "hardware", "watch_write", "watch_read", "watch_access"],

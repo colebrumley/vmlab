@@ -378,7 +378,9 @@ public final class QEMUBackend: Backend {
     // BH-1: host paths in extra.qemuArgs pass the path policy again at start (a symlink may have
     // moved since create).
     let policy = PathPolicy.load(home: store.home)
-    try record.extra?.checkHostPaths(policy: policy, vmlabHome: store.home)
+    try record.extra?.checkHostPaths(
+      policy: policy, vmlabHome: store.home,
+      allowHostCode: VMLabConfig.load(home: store.home).allowHostCode)
     if let extra = record.extra {
       try Self.checkImageChains(
         extra, policy: policy, vmlabHome: store.home, qemuImg: try locate().qemuImg)
