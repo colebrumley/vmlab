@@ -86,6 +86,17 @@ enum ConfigurationBuilder {
     if let path = plan.machineIdentifier {
       platform.machineIdentifier = try machineIdentifier(at: URL(filePath: path))
     }
+    if plan.nestedVirtualization {
+      guard VZGenericPlatformConfiguration.isNestedVirtualizationSupported else {
+        throw VMLabError(
+          code: .capabilityMissing,
+          message: "This host cannot give VZ guests nested virtualization",
+          hint: "Nested virtualization needs an M3 or newer and macOS 15; recreate the VM "
+            + "without nested_virt.",
+          data: ["feature": .string("nested_virt")])
+      }
+      platform.isNestedVirtualizationEnabled = true
+    }
     machine.platform = platform
 
     switch plan.bootLoader {

@@ -616,7 +616,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   **Verify:** integration: a live checkpoint of a Linux guest with a running `yes > /dev/null`
   restores with that process still running (`pgrep yes`); the probe writes `host-facts.json`.
 
-- [ ] **R-609 Nested virtualization (conditional)**
+- [x] **R-609 Nested virtualization (conditional)**
   `nested_virt` → `VZGenericPlatformConfiguration.isNestedVirtualizationEnabled = true` when
   `VZGenericPlatformConfiguration.isNestedVirtualizationSupported`; otherwise `.no("needs an M3 or
   newer and macOS 15")`. On the dev host this is `.no`.

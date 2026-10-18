@@ -105,13 +105,16 @@ public struct VZRunnerConfig: Codable, Sendable, Hashable {
   /// Where the `VZGenericMachineIdentifier` is kept (created on first use), so every machine
   /// built for the VM is the same one: a saved state restores only into its own machine (R-608).
   public var machineIdentifier: String?
+  /// `VZGenericPlatformConfiguration.isNestedVirtualizationEnabled` (R-609): the guest can run
+  /// KVM. Only on hosts where the framework supports it (M3 or newer, macOS 15).
+  public var nestedVirtualization: Bool
 
   public init(
     cpus: Int, memoryBytes: UInt64, boot: Boot, disks: [Disk],
     network: [Network] = [.nat(macAddress: nil)], consoleLog: String? = nil,
     serialSocket: String? = nil, memoryBalloon: Bool = true, graphics: Graphics? = nil,
     directoryShares: [DirectoryShare] = [], rosetta: Bool = false,
-    machineIdentifier: String? = nil
+    machineIdentifier: String? = nil, nestedVirtualization: Bool = false
   ) {
     self.cpus = cpus
     self.memoryBytes = memoryBytes
@@ -125,11 +128,12 @@ public struct VZRunnerConfig: Codable, Sendable, Hashable {
     self.directoryShares = directoryShares
     self.rosetta = rosetta
     self.machineIdentifier = machineIdentifier
+    self.nestedVirtualization = nestedVirtualization
   }
 
   enum CodingKeys: String, CodingKey {
     case cpus, memoryBytes, boot, disks, network, consoleLog, serialSocket, memoryBalloon
-    case graphics, directoryShares, rosetta, machineIdentifier
+    case graphics, directoryShares, rosetta, machineIdentifier, nestedVirtualization
   }
 
   public init(from decoder: any Decoder) throws {
@@ -146,6 +150,7 @@ public struct VZRunnerConfig: Codable, Sendable, Hashable {
     directoryShares = try c.decodeIfPresent([DirectoryShare].self, forKey: .directoryShares) ?? []
     rosetta = try c.decodeIfPresent(Bool.self, forKey: .rosetta) ?? false
     machineIdentifier = try c.decodeIfPresent(String.self, forKey: .machineIdentifier)
+    nestedVirtualization = try c.decodeIfPresent(Bool.self, forKey: .nestedVirtualization) ?? false
   }
 
   /// The guest command line for `.kernel` boot without one: the root on the first virtio disk and
@@ -203,7 +208,9 @@ public struct VZRunnerConfig: Codable, Sendable, Hashable {
         ]
       } ?? [],
       rosetta: wantsRosetta(record),
-      machineIdentifier: vmDirectory.appending(path: "machine-id.bin").path)
+      machineIdentifier: vmDirectory.appending(path: "machine-id.bin").path,
+      nestedVirtualization: record.features.contains(.nestedVirt)
+        && (record.plan?.requested.contains(.nestedVirt) ?? false))
   }
 
   /// Whether the guest gets the Rosetta share: only when the request asked for `rosetta`

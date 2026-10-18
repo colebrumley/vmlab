@@ -83,6 +83,22 @@ import VMLabVZ
       decisions.fileSystems.last == .init(tag: "rosetta", path: nil, readOnly: true, rosetta: true))
   }
 
+  /// R-609: nested virtualization only when the plan asked for `nested_virt`.
+  @Test func nestedVirtualizationOnlyWhenRequested() throws {
+    var record = Self.record(features: [.execSSH, .nestedVirt])
+    #expect(
+      !(try VZRunnerConfig.linux(record: record, vmDirectory: Self.dir).decisions(
+        limits: Self.limits
+      ).nestedVirtualization))
+    record.plan = Plan(
+      profile: .vzLinux, guest: record.guest, resources: record.resources,
+      features: record.features, requested: [.nestedVirt], estimatedStartupSeconds: 30)
+    #expect(
+      try VZRunnerConfig.linux(record: record, vmDirectory: Self.dir).decisions(
+        limits: Self.limits
+      ).nestedVirtualization)
+  }
+
   /// A config written before R-603 (no share keys) still decodes.
   @Test func olderConfigDecodes() throws {
     let config = try VZRunnerConfig.linux(record: Self.record(), vmDirectory: Self.dir)

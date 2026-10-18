@@ -62,6 +62,13 @@ struct FixtureRunner: CommandRunning {
       !HostProbe.nestedSupported(chip: .init(model: "Apple M3", generation: 3), osVersion: "14.6"))
   }
 
+  /// R-609: the runner's own answer (`vmlab-vz capabilities`) wins over the chip inference.
+  @Test func runnerAnswersNestedSupport() {
+    #expect(HostProbe.parseNestedSupported(#"{"nestedVirtualizationSupported":true}"#) == true)
+    #expect(HostProbe.parseNestedSupported(#"{"nestedVirtualizationSupported":false}"#) == false)
+    #expect(HostProbe.parseNestedSupported("vmlab-vz: unknown command") == nil)
+  }
+
   @Test func gatherCombinesFixturesAndStoredProbes() throws {
     let home = FileManager.default.temporaryDirectory.appending(path: "vmlab-test-\(UUID())")
     defer { try? FileManager.default.removeItem(at: home) }

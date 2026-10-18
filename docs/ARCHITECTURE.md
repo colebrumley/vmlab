@@ -198,6 +198,10 @@ runner builds from (`linux(record:vmDirectory:boot:seed:)`: CPUs, memory, `Boot`
 console to `console.log` and `serial.sock`, the balloon, `Graphics` only when `gui` was granted,
 the record's share (`SharedDirSpec.of`, R-404) as the virtiofs `DirectoryShare` `share0`, and Rosetta
 (`rosettaTag`) only when the plan's `requested` holds `rosetta` (`wantsRosetta`)).
+`VZRunnerConfig.nestedVirtualization` (R-609, only when the plan requested `nested_virt`) sets
+`isNestedVirtualizationEnabled`; `vmlab-vz capabilities` prints the framework's
+`isNestedVirtualizationSupported`, which `HostProbe` reads for the `nested_supported` fact (the
+M3-and-macOS-15 inference is the fallback when the runner is absent).
 `VZCheckpoints` (R-608) is the vz-linux `CheckpointProvider`, handed out by
 `VZBackend.checkpoints(_:)` in any state and by `VZRunningVM.checkpoints`: each checkpoint is
 `<vm>/checkpoints/<id>/` with `clonefile(2)` clones of `disk.raw`, `efi-vars.bin` and

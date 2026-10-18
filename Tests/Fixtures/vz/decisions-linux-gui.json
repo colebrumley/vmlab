@@ -20,6 +20,7 @@
   "machineIdentifier" : "/vmlab/vms/vm-test01/machine-id.bin",
   "memoryBalloon" : true,
   "memoryBytes" : 4294967296,
+  "nestedVirtualization" : false,
   "network" : [
     {
       "mac" : "ce:15:5d:70:83:a6"

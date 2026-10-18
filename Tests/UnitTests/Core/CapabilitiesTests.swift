@@ -292,4 +292,22 @@ import VMLabCore
     }
     #expect(Capabilities.entry(.directKernelBoot, on: .vzLinux).availability == .yes)
   }
+
+  /// R-609: `nested_virt` on vz-linux is `no` with the reason for an M1 fact set and `yes` for an
+  /// M3 on macOS 15.
+  @Test func nestedVirtFollowsTheChip() {
+    var host = Self.host(probes: .unknown)
+    host.chip = .init(model: "Apple M1 Max", generation: 1)
+    host.osVersion = "26.6.2"
+    host.nestedSupported = HostProbe.nestedSupported(chip: host.chip, osVersion: host.osVersion)
+    guard case .no(let reason) = capabilities(of: .vzLinux, host: host)[.nestedVirt] else {
+      Issue.record("nested_virt is not no on an M1")
+      return
+    }
+    #expect(reason.contains("needs an M3 or newer and macOS 15"))
+    host.chip = .init(model: "Apple M3 Pro", generation: 3)
+    host.osVersion = "15.1"
+    host.nestedSupported = HostProbe.nestedSupported(chip: host.chip, osVersion: host.osVersion)
+    #expect(capabilities(of: .vzLinux, host: host)[.nestedVirt] == .yes)
+  }
 }

@@ -63,7 +63,7 @@ public indirect enum Condition: Sendable, Hashable {
     case .rosettaInstalled:
       "Rosetta for Linux is not installed on the host (softwareupdate --install-rosetta)"
     case .nestedSupported:
-      "nested virtualization needs an M3 or newer chip and macOS 15 or newer (host: \(host.chip.model), macOS \(host.osVersion))"
+      "nested virtualization needs an M3 or newer and macOS 15 (host: \(host.chip.model), macOS \(host.osVersion))"
     case .probe(let probe):
       switch host.probe(probe) {
       case .unknown: "probe \(probe.rawValue) has not been verified on this host"

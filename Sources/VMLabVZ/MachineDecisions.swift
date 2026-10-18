@@ -96,6 +96,8 @@ public struct VZMachineDecisions: Codable, Sendable, Hashable {
   /// The file holding the platform's `VZGenericMachineIdentifier`, created when absent; nil is a
   /// fresh identifier per machine.
   public var machineIdentifier: String?
+  /// `isNestedVirtualizationEnabled` on the generic platform (R-609).
+  public var nestedVirtualization: Bool
   public var bootLoader: BootLoader
   public var storage: [BlockDevice]
   public var network: [NATDevice]
@@ -137,6 +139,7 @@ extension VZRunnerConfig {
       memoryBytes: min(max(memoryBytes / mib * mib, limits.minMemoryBytes), limits.maxMemoryBytes),
       platform: "generic",
       machineIdentifier: machineIdentifier,
+      nestedVirtualization: nestedVirtualization,
       bootLoader: loader,
       storage: disks.map { .init(path: $0.path, readOnly: $0.readOnly) },
       network: nics,
