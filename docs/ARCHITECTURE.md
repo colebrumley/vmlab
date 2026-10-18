@@ -14,7 +14,7 @@ capability matrix (`Capabilities.swift`, the authority by C7), the selector, the
 D codes. It owns the per-VM event log (`EventLog`, one `VMEvent` JSON object per line of
 `events.jsonl`, appended with `O_APPEND` so the server and runner processes never interleave) and
 process-wide logging (`VMLabLogging`: swift-log to stderr at the `VMLAB_LOG` level, default `info`).
-`CodeSignature` reads `codesign` output so `vmlab doctor` can say whether the runner is entitled.
+`CodeSignature` reads `codesign` output so `vmlab doctor` can say whether the runner is entitled. `Profile` names the four profiles with their Appendix B tiers. `HostProbe` gathers `HostFacts` (Appendix E fast facts) through an injectable `CommandRunning` and merges the slow probes persisted in `VMLAB_HOME/host-facts.json` (`SlowProbes`), resetting to `unknown` any probe recorded under another macOS or QEMU version; `ProbeResult.countsAsYes` is how selection reads a probe (unknown counts as no).
 `FeatureDocs` renders `docs/FEATURES.md` from the matrix. It depends on swift-log only.
 
 **`VMLabQEMU`** (library). The QEMU backend: launching and supervising `qemu-system-aarch64`, the QMP
