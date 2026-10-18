@@ -50,7 +50,7 @@ public struct HostProbe: Sendable {
   public var searchPaths: [String]
   public var fileExists: @Sendable (String) -> Bool
   public var isRoot: @Sendable () -> Bool
-  /// Running guests, (macOS, all). The VM store (R-104) supplies this; zero until then.
+  /// Running guests, (macOS, all); pass `Store.runningGuests`. Zero by default.
   public var runningGuests: @Sendable () -> (macOS: Int, total: Int)
 
   public init(

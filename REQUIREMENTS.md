@@ -183,7 +183,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   -accel help`, `tart --version`, `codesign -d`; a fixture `host-facts.json` round-trips; an
   `unknown` probe makes the dependent feature unavailable in the matrix.
 
-- [ ] **R-102 Capability matrix**
+- [x] **R-102 Capability matrix**
   `Sources/VMLabCore/Capabilities.swift`: `func capabilities(of: Profile, host: HostFacts) ->
   [Feature: Availability]` where `Availability` is `.yes`, `.no(reason)`, or `.conditional(reason)`
   resolved to yes/no by host facts. Exactly Appendix B, including every condition. `docs/FEATURES.md`
@@ -207,7 +207,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   the exact expected suggestions; a property test over 500 random requirement sets asserts a
   returned plan satisfies every required feature and the dynamic limits.
 
-- [ ] **R-104 VM store and `vm.json`**
+- [x] **R-104 VM store and `vm.json`**
   `VMLAB_HOME` (default `~/.vmlab`) with the layout of Appendix F. `VMRecord` (`schemaVersion`,
   `id`, `name`, `profile`, `guest`, `features`, `resources`, `image`, `network`, `createdAt`,
   `state: created|running|paused|stopped|suspended|broken`, `runtime: { pid, controlSocket,
@@ -324,7 +324,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   integration (`VMLAB_INTEGRATION=1`): `vmlab images pull debian-13-arm64` succeeds and a second
   pull is a no-op.
 
-- [ ] **R-301 Cloud-init seed**
+- [x] **R-301 Cloud-init seed**
   `Sources/VMLabCore/CloudInit.swift` builds a NoCloud seed ISO with `hdiutil makehybrid -iso
   -joliet -default-volume-name cidata` from `user-data` and `meta-data`: hostname, the VM's SSH
   public key for the image's default user, password login off, `qemu-guest-agent` installed and
@@ -482,7 +482,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   expected image hash; integration: connect to the Debian guest's QEMU VNC socket during boot and
   get a non-blank image.
 
-- [ ] **R-501 RFB client: input**
+- [x] **R-501 RFB client: input**
   `pointer(x, y, buttons)`, `key(keysym, down)`, a US keysym table for printable ASCII and the
   named keys of Appendix C (`Return`, `Tab`, `Escape`, arrows, function keys, modifiers, `cmd` on
   macOS guests mapped to `Super_L`), and `type(text)` that sends press/release per character with
@@ -940,7 +940,7 @@ that was `unknown` when this was written (`[VERIFY]`; the item that owns it is n
 | `net_nat` | Y | Y | Y | Y |
 | `net_fast` | Y | Y | C `root` or `qemu_vmnet` | C same |
 | `net_segment` | Y (static, R-901) | Y | Y | Y |
-| `net_port_forward` | Y (host-reachable address) | Y (same) | Y (hostfwd) | Y |
+| `net_port_forward` | Y (host-reachable address) | Y (same) | Y (hostfwd) | Y (hostfwd) |
 | `net_none` | Y | Y | Y | Y |
 | `rosetta` | N | C `rosetta_installed` | N | N |
 | `nested_virt` | N | C `nested_supported` (M3+, macOS 15+) | N | Y (slow) |

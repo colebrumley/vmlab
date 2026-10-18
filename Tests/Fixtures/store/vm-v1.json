@@ -1,0 +1,47 @@
+{
+  "checkpoints" : [
+    {
+      "id" : "cp-1",
+      "name" : "clean install"
+    }
+  ],
+  "createdAt" : "2026-10-01T12:00:00Z",
+  "features" : [
+    "exec_ssh",
+    "serial",
+    "gdb",
+    "net_nat"
+  ],
+  "guest" : {
+    "arch" : "arm64",
+    "os" : "linux"
+  },
+  "id" : "vm-abc234",
+  "image" : "debian-13-arm64",
+  "name" : "kernel-lab",
+  "network" : {
+    "forwards" : [
+      {
+        "guest" : 22,
+        "host" : 2222
+      }
+    ],
+    "mode" : "nat"
+  },
+  "profile" : "qemu-hvf",
+  "resources" : {
+    "cpus" : 2,
+    "diskGB" : 32,
+    "memoryGB" : 4
+  },
+  "runtime" : {
+    "controlSocket" : "/Users/someone/.vmlab/vms/vm-abc234/control.sock",
+    "gdbEndpoint" : "unix:/Users/someone/.vmlab/vms/vm-abc234/gdb.sock",
+    "pid" : 4242,
+    "qmpSocket" : "/Users/someone/.vmlab/vms/vm-abc234/qmp.sock",
+    "serialSocket" : "/Users/someone/.vmlab/vms/vm-abc234/serial.sock",
+    "sshPort" : 2222
+  },
+  "schemaVersion" : 1,
+  "state" : "running"
+}
