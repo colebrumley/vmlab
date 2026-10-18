@@ -87,4 +87,42 @@ import VMLabQEMU
     }
     await lab.shutdown()
   }
+
+  /// R-901 Verify (integration), the macOS part: a vz-macos guest gets its static segment address
+  /// from `networksetup` in provisioning and pings a QEMU guest on the same segment.
+  @Test(
+    .enabled(if: VZMacGuestIntegrationTests.ready && VZMacGuestIntegrationTests.hostHasRoom()),
+    .timeLimit(.minutes(15)))
+  func macOSAndQEMUGuestsPing() async throws {
+    let lab = try LabHome(tag: "m")
+    do {
+      let network = NetworkSpec(mode: .nat, segment: "macmix")
+      let features: [Feature] = [.execSSH, .netNAT, .netSegment]
+      let qemu = try await lab.boot(
+        name: "q", plan: LabHome.plan(features: features + [.serial]), network: network)
+      let macPlan = Plan(
+        profile: .vzMacOS, guest: GuestSpec(os: .macos, arch: .arm64),
+        resources: ResourceSpec(cpus: 4, memoryGB: 4), features: features,
+        requested: features, estimatedStartupSeconds: 60)
+      let mac = try await lab.boot(
+        name: "mac", image: "macos-base", plan: macPlan, network: network)
+      #expect(qemu.warnings.isEmpty, "\(qemu.warnings)")
+      #expect(mac.warnings.allSatisfy { !$0.hasPrefix("ssh_unreachable") }, "\(mac.warnings)")
+      let qa = try #require(qemu.record?.segment?.address)
+      let ma = try #require(mac.record?.segment?.address)
+      let macID = try #require(mac.record?.id)
+      let report = try #require(ProvisionReport.load(from: lab.store.directory(of: macID)))
+      #expect(report.steps.contains { $0.name == "segment_address" && $0.status == .succeeded })
+      let address = try await lab.exec("mac", "ifconfig | grep 'inet \(ma) '")
+      #expect(address.exitCode == 0, "\(address.stdout)\(address.stderr)")
+      let ping = try await lab.exec("mac", "ping -c 3 -t 10 \(qa)")
+      #expect(ping.exitCode == 0, "\(ping.stdout)\(ping.stderr)")
+      let back = try await lab.exec("q", "ping -c 3 -W 2 \(ma)")
+      #expect(back.exitCode == 0, "\(back.stdout)\(back.stderr)")
+    } catch {
+      await lab.shutdown()
+      throw error
+    }
+    await lab.shutdown()
+  }
 }

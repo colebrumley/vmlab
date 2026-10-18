@@ -120,3 +120,57 @@ import VMLabCore
     #expect(mode == 0o600)
   }
 }
+
+extension MacProvisioningTests {
+  /// R-901: a segment member's provisioning writes the networksetup script, then runs it as root
+  /// with the segment NIC's MAC, address and mask; both steps are in provision.json.
+  @Test func segmentMemberGetsAStaticAddress() async throws {
+    let dir = try Self.directory()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let guest = FakeGuest()
+    var provisioner = Self.provisioner(dir, guest: guest, vnc: nil)
+    provisioner.segment = SegmentAttachment(
+      segment: "lab", address: "10.1.0.11", mac: "52:54:5e:0a:0b:0c")
+    try await provisioner.provision(ip: "192.168.64.20")
+    let calls = guest.calls.withLock { $0 }
+    #expect(
+      calls.map(\.command).last
+        == "sudo -S -p '' /bin/sh /tmp/vmlab-segment.sh 52:54:5e:0a:0b:0c 10.1.0.11 255.255.255.0")
+    #expect(calls.last?.input == "admin\n")
+    #expect(calls.dropLast().last?.input.contains("networksetup -setmanual") == true)
+    let report = try #require(ProvisionReport.load(from: dir))
+    #expect(Array(report.steps.map(\.name).suffix(2)) == ["segment_script", "segment_address"])
+    #expect(MacProvisioner.netmask(16) == "255.255.0.0")
+  }
+
+  /// The script's awk finds the service of a device in `networksetup -listnetworkserviceorder`.
+  @Test func segmentScriptFindsTheServiceOfADevice() throws {
+    let script = MacProvisioner.segmentScript
+    let line = try #require(
+      script.split(separator: "\n").first { $0.contains("listnetworkserviceorder") })
+    let program = try #require(
+      line.split(separator: "'", omittingEmptySubsequences: false).dropFirst().first)
+    let sample = """
+      An asterisk (*) denotes that a network service is disabled.
+      (1) Ethernet
+      (Hardware Port: Ethernet, Device: en0)
+
+      (2) Ethernet 2
+      (Hardware Port: Ethernet, Device: en1)
+
+      """
+    let process = Process()
+    process.executableURL = URL(filePath: "/usr/bin/awk")
+    process.arguments = ["-v", "d=en1", String(program)]
+    let input = Pipe()
+    let output = Pipe()
+    process.standardInput = input
+    process.standardOutput = output
+    try process.run()
+    input.fileHandleForWriting.write(Data(sample.utf8))
+    try input.fileHandleForWriting.close()
+    process.waitUntilExit()
+    let text = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+    #expect(text == "Ethernet 2\n")
+  }
+}

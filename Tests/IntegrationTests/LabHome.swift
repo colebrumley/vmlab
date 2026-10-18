@@ -47,6 +47,13 @@ struct LabHome {
         VZBackend(
           store: store, launcher: VZRunnerLauncher(runnerPath: VZRunnerIntegrationTests.runner),
           leaseTimeout: .seconds(90)))
+      if VZMacGuestIntegrationTests.ready {
+        registry.register(
+          VZMacBackend(
+            store: store,
+            launcher: VZRunnerLauncher(runnerPath: VZRunnerIntegrationTests.runner),
+            leaseTimeout: .seconds(240)))
+      }
     }
     segments = SegmentStore(
       home: home,
@@ -81,6 +88,10 @@ struct LabHome {
   }
 
   func shutdown() async {
+    // A macOS guest's Tart clone goes only with a destroy.
+    for record in (try? store.list().records) ?? [] where record.profile == .vzMacOS {
+      _ = try? await manager.perform(.destroy, on: record.id, force: true)
+    }
     for record in (try? store.list().records) ?? [] {
       if let backend = try? registry.backend(for: record.profile) {
         try? await backend.kill(record)

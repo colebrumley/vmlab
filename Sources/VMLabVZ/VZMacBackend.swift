@@ -8,8 +8,15 @@ extension VZRunnerConfig {
   /// MAC (so Tart's own lease lookup agrees) unless the network is `none`, no console (VZ gives
   /// macOS guests none), the balloon, and always a Mac display: Screen Sharing needs one.
   public static func macOS(
-    record: VMRecord, clone: TartVMFiles, config: TartVMConfig
+    record: VMRecord, clone: TartVMFiles, config: TartVMConfig, segmentAttachSocket: String? = nil
   ) -> VZRunnerConfig {
+    var network: [Network] =
+      record.network.mode == .disabled
+      ? [] : [.nat(macAddress: MACAddress.normalize(config.macAddress) ?? config.macAddress)]
+    // R-901: the segment NIC; provisioning gives it the static address (`networksetup`).
+    if let segment = record.segment, let socket = segmentAttachSocket, !network.isEmpty {
+      network.append(.segment(macAddress: segment.mac, attachSocket: socket))
+    }
     let resources = ResourceLimits.resolve(record.resources, for: .macos)
     let cpus = max(resources.cpus ?? 4, config.cpuCountMin)
     let memory = max(UInt64(resources.memoryGB ?? 8) << 30, config.memorySizeMin)
@@ -20,8 +27,7 @@ extension VZRunnerConfig {
         hardwareModel: config.hardwareModel ?? "", machineIdentifier: config.ecid ?? "",
         auxiliaryStorage: clone.nvram.path),
       disks: [Disk(path: clone.disk.path)],
-      network: record.network.mode == .disabled
-        ? [] : [.nat(macAddress: MACAddress.normalize(config.macAddress) ?? config.macAddress)],
+      network: network,
       consoleLog: nil,
       memoryBalloon: true,
       graphics: Graphics(
@@ -123,7 +129,11 @@ public struct VZMacBackend: Backend {
     }
     let clone = TartVMFiles(directory: URL(filePath: path))
     let tartConfig = try TartVMConfig.read(from: clone.directory)
-    let config = VZRunnerConfig.macOS(record: record, clone: clone, config: tartConfig)
+    let config = VZRunnerConfig.macOS(
+      record: record, clone: clone, config: tartConfig,
+      segmentAttachSocket: record.segment.map {
+        SegmentStore(home: store.home).attachSocket(of: $0.segment).path
+      })
     let handle = try await launcher.launch(
       vmDirectory: store.directory(of: record.id), config: config)
     var runtime = handle.runtime
@@ -179,6 +189,7 @@ public struct VZMacBackend: Backend {
       vncPassword: Self.wantsScreenSharing(record)
         ? try MacProvisioner.ensureVNCPassword(in: dir) : nil)
     provisioner.sshTimeout = bootTimeout
+    provisioner.segment = record.network.mode == .disabled ? nil : record.segment
     try await provisioner.provision(ip: ip)
   }
 
