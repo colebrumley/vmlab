@@ -10,6 +10,34 @@ import VMLabCore
   static let disk: [Feature] = [.serial, .checkpointDisk]
   static let live: [Feature] = [.serial, .checkpointDisk, .checkpointLive]
 
+  @Test func aFailedSummaryWriteLeavesTheTreeAsItWas() throws {
+    // P3: vm.json's summary and checkpoints.json are staged first and vm.json is renamed into
+    // place before the tree, so a failure leaves the old pair rather than a tree whose node the
+    // caller is about to delete the snapshot of.
+    let home = FileManager.default.temporaryDirectory.appending(path: "vmlab-cptree-\(UUID())")
+    defer { try? FileManager.default.removeItem(at: home) }
+    let store = Store(home: home)
+    let record = try store.create(
+      VMRecord(
+        id: "", profile: .qemuHVF, guest: GuestSpec(os: .linux, arch: .arm64), features: []))
+    let recordURL = store.recordURL(of: record.id)
+    #expect(throws: VMLabError.self) {
+      try store.updateCheckpoints(of: record.id) { (tree: inout CheckpointTree, _) in
+        tree.nodes.append(CheckpointNode(id: "snap-1", name: "one", mode: .disk, state: .stopped))
+        tree.current = "snap-1"
+        // vm.json can no longer be replaced: a directory now stands in its place.
+        try? FileManager.default.removeItem(at: recordURL)
+        try? FileManager.default.createDirectory(at: recordURL, withIntermediateDirectories: false)
+        try? Data("x".utf8).write(to: recordURL.appending(path: "keep"))
+      }
+    }
+    #expect(!FileManager.default.fileExists(atPath: store.checkpointsURL(of: record.id).path))
+    let leftovers = try FileManager.default.contentsOfDirectory(
+      atPath: store.directory(of: record.id).path
+    ).filter { $0.hasSuffix(".tmp") }
+    #expect(leftovers.isEmpty)
+  }
+
   @Test func diskCheckpointsOfAStoppedGuestFormATree() async throws {
     let f = try Fixture()
     let vm = try await f.create(Self.disk)
