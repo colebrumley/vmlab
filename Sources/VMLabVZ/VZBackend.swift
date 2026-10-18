@@ -44,14 +44,23 @@ public struct VZBackend: Backend {
 
   /// Clones the pulled image's raw disk to `<vm>/disk.raw` (an APFS clone, so instant), generates
   /// `<vm>/id_ed25519` and writes `<vm>/seed.iso` for the image's login user with the console on
-  /// `hvc0`.
+  /// `hvc0`. A registered kernel-only image (R-305) booted with `boot.mode: kernel` has no disk
+  /// to clone and gets none, nor a seed, as on QEMU (CX-30).
   public func create(_ record: VMRecord, plan: Plan) async throws(VMLabError) {
     guard let name = record.image else { return }
     let images = ImageStore(home: store.home)
+    if images.pulled(name)?.format == .kernel, record.boot?.mode == .kernel { return }
     guard let pulled = images.pulled(name), let raw = pulled.files["raw"] else {
+      let kernelOnly = images.pulled(name)?.format == .kernel
       throw VMLabError(
-        code: .imageNotFound, message: "Image \(name) has no pulled raw disk",
-        hint: "Run vmlab images pull \(name).", data: ["image": .string(name)])
+        code: .imageNotFound,
+        message: kernelOnly
+          ? "Image \(name) is a kernel with no disk; it boots only with boot.mode kernel"
+          : "Image \(name) has no pulled raw disk",
+        hint: kernelOnly
+          ? "Create the VM with boot: {mode: \"kernel\"}, or use an image with a disk."
+          : "Run vmlab images pull \(name).",
+        data: ["image": .string(name)])
     }
     let dir = store.directory(of: record.id)
     let disk = dir.appending(path: "disk.raw")
@@ -149,6 +158,7 @@ public struct VZBackend: Backend {
     let config = try VZRunnerConfig.linux(
       record: record, vmDirectory: dir, boot: boot,
       seed: FileManager.default.fileExists(atPath: dir.appending(path: "seed.iso").path),
+      rootDisk: FileManager.default.fileExists(atPath: dir.appending(path: "disk.raw").path),
       segmentAttachSocket: record.segment.map {
         SegmentStore(home: store.home).attachSocket(of: $0.segment).path
       })

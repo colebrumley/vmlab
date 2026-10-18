@@ -67,6 +67,47 @@ import VMLabCore
     #expect(try store.load(id: gone.id).state == .stopped)
   }
 
+  /// CX-30: a registered kernel-only image was refused on vz-linux (no raw disk) though QEMU
+  /// boots it. With boot.mode kernel it gets no disk and no seed, and the runner config none.
+  @Test func aKernelOnlyImageBootsWithoutADisk() async throws {
+    let home = FileManager.default.temporaryDirectory.appending(path: "vmlab-vzkn-\(UUID())")
+    defer { try? FileManager.default.removeItem(at: home) }
+    let images = ImageStore(home: home)
+    let imageDir = images.imageDirectory("tiny-kernel")
+    try FileManager.default.createDirectory(at: imageDir, withIntermediateDirectories: true)
+    try Data("kernel".utf8).write(to: imageDir.appending(path: "Image"))
+    let pulled = PulledImage(
+      name: "tiny-kernel", guest: GuestSpec(os: .linux, arch: .arm64), source: "fixture",
+      format: .kernel, checksum: nil, files: ["kernel": "Image"], login: ImageLogin(user: "root"),
+      pulledAt: Date())
+    let encoder = JSONEncoder()
+    encoder.dateEncodingStrategy = .iso8601
+    try encoder.encode(pulled).write(to: imageDir.appending(path: "image.json"))
+    let store = Store(home: home)
+    var draft = VMRecord(
+      id: "", profile: .vzLinux, guest: GuestSpec(os: .linux, arch: .arm64), features: [],
+      image: "tiny-kernel")
+    let plan = Plan(
+      profile: .vzLinux, guest: draft.guest, resources: ResourceSpec(), features: [],
+      estimatedStartupSeconds: 5)
+    // Disk boot of a kernel says why it cannot work.
+    let diskBoot = try store.create(draft)
+    let error = await #expect(throws: VMLabError.self) {
+      try await VZBackend(store: store).create(diskBoot, plan: plan)
+    }
+    #expect(error?.message.contains("boot.mode kernel") == true)
+
+    draft.name = "kernel"
+    draft.boot = BootSpec(mode: .kernel, kernel: imageDir.appending(path: "Image").path)
+    let record = try store.create(draft)
+    try await VZBackend(store: store).create(record, plan: plan)
+    let dir = store.directory(of: record.id)
+    #expect(!FileManager.default.fileExists(atPath: dir.appending(path: "disk.raw").path))
+    let config = try VZRunnerConfig.linux(
+      record: record, vmDirectory: dir, boot: record.boot, seed: false, rootDisk: false)
+    #expect(config.disks.isEmpty)
+  }
+
   static let tools =
     FileManager.default.isExecutableFile(atPath: "/usr/bin/ssh-keygen")
     && FileManager.default.isExecutableFile(atPath: "/usr/bin/hdiutil")

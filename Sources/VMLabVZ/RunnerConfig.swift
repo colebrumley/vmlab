@@ -169,13 +169,14 @@ public struct VZRunnerConfig: Codable, Sendable, Hashable {
 
   /// The complete Linux machine for `record` in `vmDirectory`: its resources (Appendix G defaults
   /// for the rest), `.disk` boot (default) through EFI with `<vm>/efi-vars.bin` or `.kernel` boot
-  /// through `VZLinuxBootLoader`, `<vm>/disk.raw`, `<vm>/seed.iso` read-only when `seed`, one NAT
+  /// through `VZLinuxBootLoader`, `<vm>/disk.raw` unless `rootDisk` is false (a kernel-only
+  /// image), `<vm>/seed.iso` read-only when `seed`, one NAT
   /// NIC with `stableMAC(for:)` unless the network is `none`, the console appended to
   /// `<vm>/console.log` and served on `<vm>/serial.sock`, the record's share (`SharedDirSpec.of`) over virtiofs
   /// as `share0`, Rosetta when the plan asked for `rosetta`, the balloon, and graphics only when `gui` was granted.
   public static func linux(
     record: VMRecord, vmDirectory: URL, boot: BootSpec? = nil, seed: Bool = true,
-    segmentAttachSocket: String? = nil
+    rootDisk: Bool = true, segmentAttachSocket: String? = nil
   ) throws(VMLabError) -> VZRunnerConfig {
     let resources = ResourceLimits.resolve(record.resources, for: .linux)
     let loader: Boot
@@ -197,7 +198,7 @@ public struct VZRunnerConfig: Codable, Sendable, Hashable {
         reason: "Virtualization.framework boots only Apple EFI or a Linux kernel",
         hint: "Use boot.mode disk or kernel, or require custom_firmware to get a QEMU profile.")
     }
-    var disks = [Disk(path: vmDirectory.appending(path: "disk.raw").path)]
+    var disks = rootDisk ? [Disk(path: vmDirectory.appending(path: "disk.raw").path)] : []
     if seed {
       disks.append(Disk(path: vmDirectory.appending(path: "seed.iso").path, readOnly: true))
     }
