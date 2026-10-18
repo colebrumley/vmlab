@@ -33,12 +33,12 @@ import VMLabCore
     try store.create(
       VMRecord(
         id: "", profile: .vzMacOS, guest: GuestSpec(os: .macos, arch: .arm64),
-        features: [.execSSH, .gui], image: "macos-base"))
+        features: [.execSSH, .gui], image: "macos-base", plan: plan))
   }
 
   static let plan = Plan(
     profile: .vzMacOS, guest: GuestSpec(os: .macos, arch: .arm64), resources: ResourceSpec(),
-    features: [.execSSH, .gui], estimatedStartupSeconds: 60)
+    features: [.execSSH, .gui], requested: [.gui], estimatedStartupSeconds: 60)
 
   /// create runs `tart clone <ref> <vm-id>` and records the clone's directory in vm.json;
   /// destroy runs `tart delete <vm-id>`.

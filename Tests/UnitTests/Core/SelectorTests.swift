@@ -41,6 +41,29 @@ import Testing
     return nil
   }
 
+  /// R-310: qemu-tcg caps the CPUs at 8 and says so; other architectures get a defaults warning.
+  @Test func tcgCapsCPUsAndWarnsAboutOtherArchitectures() throws {
+    let many = try select(
+      try Requirements(guest: Self.x86, resources: ResourceSpec(cpus: 12)), host: Self.devHost(),
+      running: .empty
+    ).get()
+    #expect(many.profile == .qemuTCG && many.resources.cpus == 8)
+    #expect(many.notes.contains { $0.contains("at most 8 virtual CPUs; 12 were asked for") })
+    #expect(many.notes.contains { $0.contains("emulates the guest CPU") })
+
+    let ppc = try select(
+      try Requirements(guest: GuestSpec(os: .linux, arch: .other("ppc64"))), host: Self.devHost(),
+      running: .empty
+    ).get()
+    #expect(ppc.profile == .qemuTCG)
+    #expect(ppc.notes.contains { $0.contains("no defaults for ppc64 beyond -machine virt") })
+    let riscv = try select(
+      try Requirements(guest: GuestSpec(os: .linux, arch: .riscv64)), host: Self.devHost(),
+      running: .empty
+    ).get()
+    #expect(riscv.profile == .qemuTCG && !riscv.notes.contains { $0.contains("no defaults") })
+  }
+
   // MARK: Appendix I worked examples, in table order
 
   @Test func linuxWithNothingRequiredIsVZLinux() throws {
@@ -357,5 +380,51 @@ import Testing
       }
     }
     #expect(plans > 50)
+  }
+
+  // MARK: R-504 desktop provisioning
+
+  @Test func guiOnVZLinuxInstallsTheDesktop() throws {
+    let plan = try Self.plan(Self.arm, require: [.gui]).get()
+    #expect(plan.profile == .vzLinux)
+    #expect(plan.provisionsDesktop)
+    #expect(plan.startupTier == Profile.vzLinux.startupTier + 1)
+    #expect(plan.estimatedStartupSeconds == 15 + Plan.desktopInstallSeconds)
+    #expect(plan.notes.contains { $0.contains("desktop") && $0.contains("first boot") })
+  }
+
+  @Test func guiAloneOnQEMUInstallsNothing() throws {
+    let plan = try Self.plan(Self.arm, require: [.gui, .gdb]).get()
+    #expect(plan.profile == .qemuHVF)
+    #expect(!plan.provisionsDesktop)
+    #expect(plan.startupTier == Profile.qemuHVF.startupTier)
+    #expect(plan.estimatedStartupSeconds == 20)
+    #expect(!plan.notes.contains { $0.contains("desktop") })
+  }
+
+  @Test func guiDesktopOnQEMUInstallsTheDesktop() throws {
+    let plan = try Self.plan(Self.arm, require: [.guiDesktop, .gdb]).get()
+    #expect(plan.profile == .qemuHVF)
+    #expect(plan.provisionsDesktop)
+    #expect(plan.startupTier == Profile.qemuHVF.startupTier + 1)
+    #expect(plan.estimatedStartupSeconds == 20 + Plan.desktopInstallSeconds)
+  }
+
+  @Test func macOSNeverInstallsADesktop() throws {
+    let plan = try Self.plan(Self.mac, require: [.gui]).get()
+    #expect(!plan.provisionsDesktop)
+    #expect(plan.startupTier == Profile.vzMacOS.startupTier)
+  }
+
+  @Test func storedPlanWithoutStartupTierDecodes() throws {
+    let plan = try Self.plan(Self.arm, require: [.gui]).get()
+    guard
+      case .object(var object) = try JSONDecoder().decode(
+        JSONValue.self, from: JSONEncoder().encode(plan))
+    else { return }
+    object["startupTier"] = nil
+    let decoded = try JSONDecoder().decode(
+      Plan.self, from: JSONEncoder().encode(JSONValue.object(object)))
+    #expect(decoded == plan)
   }
 }

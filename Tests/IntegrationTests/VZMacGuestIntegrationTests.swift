@@ -59,7 +59,7 @@ import VMLabVZ
     let manager = VMManager(store: store, backends: registry)
     let plan = Plan(
       profile: .vzMacOS, guest: GuestSpec(os: .macos, arch: .arm64),
-      resources: ResourceSpec(cpus: 4, memoryGB: 8), features: features,
+      resources: ResourceSpec(cpus: 4, memoryGB: 8), features: features, requested: features,
       estimatedStartupSeconds: 60)
     let created = try await manager.create(
       VMRecord(id: "", profile: .vzMacOS, guest: plan.guest, features: [], image: "macos-base"),

@@ -1,5 +1,6 @@
 import VMLabCore
 import VMLabQEMU
+import VMLabRFB
 import VMLabVZ
 
 /// The one place that names the engines: `vmlab` calls `registerAll` at startup so `VMManager`
@@ -9,13 +10,17 @@ public enum Engines {
   /// The profiles `registerAll` fills.
   public static let profiles: [Profile] = [.qemuHVF, .qemuTCG, .vzLinux, .vzMacOS]
 
-  /// Registers QEMU for `qemu-hvf` and `qemu-tcg` and VZ for `vz-linux` and `vz-macos`, all on
-  /// `store`.
-  public static func registerAll(store: Store, into registry: BackendRegistry = Backends.shared) {
+  /// Registers QEMU for `qemu-hvf` and `qemu-tcg` and VZ for `vz-linux` and `vz-macos`, all on `store`, and
+  /// the RFB display connector every profile's display speaks (R-502).
+  public static func registerAll(
+    store: Store, into registry: BackendRegistry = Backends.shared,
+    displays: DisplayConnectorRegistry = Displays.shared
+  ) {
     registry.register(QEMUBackend(profile: .qemuHVF, store: store))
     registry.register(QEMUBackend(profile: .qemuTCG, store: store))
     registry.register(VZBackend(store: store))
     registry.register(VZMacBackend(store: store))
+    displays.register(RFBDisplayConnector())
   }
 
   /// Registers the slow probes the engine modules own (`vmlab doctor --probe` runs them).

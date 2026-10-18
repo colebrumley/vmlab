@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "id": "vm-tcgppc",
+  "name": "power",
+  "profile": "qemu-tcg",
+  "guest": { "os": "linux", "arch": "ppc64" },
+  "features": ["serial", "direct_kernel_boot"],
+  "resources": { "cpus": 2, "memoryGB": 1 },
+  "network": { "mode": "none" },
+  "createdAt": "2026-10-01T12:00:00Z",
+  "state": "created"
+}

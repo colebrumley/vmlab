@@ -1,7 +1,7 @@
 import Foundation
 
 /// Renders `docs/FEATURES.md` from the capability matrix, with a final column saying what the slow
-/// probes in `host-facts.json` found on the development host.
+/// probes found on the development host, read from the committed `docs/dev-host-facts.json`.
 public enum FeatureDocs {
   /// The cell as Appendix B writes it: `Y`, `Y (note)`, `N`, `C \`fact\``, or `? \`probe\` (R-xxx)`.
   public static func cell(_ entry: Capabilities.Entry) -> String {
@@ -17,7 +17,7 @@ public enum FeatureDocs {
     }
   }
 
-  /// What the dev host's `host-facts.json` says about the slow probes behind `feature`.
+  /// What the dev host's slow-probe snapshot says about the slow probes behind `feature`.
   public static func verified(_ feature: Feature, probes: SlowProbes) -> String {
     var seen: [SlowProbe] = []
     for profile in Profile.allCases {
@@ -42,7 +42,8 @@ public enum FeatureDocs {
       "",
       "Y yes; N no (the reason is in code and in refusals); C conditional on a host fact checked at",
       "every server start; ? conditional on a slow probe (the item that runs it is named). The last",
-      "column is what `host-facts.json` on the development host recorded; `unknown` counts as no.",
+      "column is what the development host recorded (`docs/dev-host-facts.json`, refreshed with",
+      "`scripts/gen-docs.sh --refresh-host-facts`); `unknown` counts as no.",
       "",
       "| Feature | " + profiles.map(\.rawValue).joined(separator: " | ")
         + " | verified on dev host |",

@@ -98,5 +98,7 @@ public struct QEMULiveSnapshotProbe: SlowProbeRunner {
 
 extension VMLabQEMU {
   /// The slow probes this module owns, for `Engines` to register.
-  public static var probeRunners: [any SlowProbeRunner] { [QEMULiveSnapshotProbe()] }
+  public static var probeRunners: [any SlowProbeRunner] {
+    [QEMULiveSnapshotProbe(), QEMUVmnetProbe()]
+  }
 }

@@ -125,7 +125,7 @@ public struct VZRunnerConfig: Codable, Sendable, Hashable {
       loader = .linuxKernel(
         kernel: kernel, initrd: boot?.initrd,
         commandLine: boot?.cmdline ?? defaultCommandLine)
-    case .firmware:
+    case .firmware, .binary:
       throw VMLabError.invalidRequest(
         field: "boot.mode",
         reason: "Virtualization.framework boots only Apple EFI or a Linux kernel",

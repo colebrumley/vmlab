@@ -60,4 +60,46 @@ import VMLabCore
     }
     #expect(unbuilt?.code == .invalidRequest)
   }
+
+  /// R-305: register a kernel, then extract_kernel from a pulled image's ext4 root.
+  @Test func registerAndExtractKernel() async throws {
+    let f = try Fixture()
+    defer { f.cleanUp() }
+    let kernel = f.context.home.appending(path: "Image")
+    try Data("kernel".utf8).write(to: kernel)
+    let registered = try await Self.images(
+      [
+        "action": .string("register"), "name": .string("bare"), "kernel": .string(kernel.path),
+        "arch": .string("arm64"),
+      ], in: f)
+    #expect(registered.value["kernel"]?.stringValue?.hasSuffix("bare/kernel/vmlinuz") == true)
+    #expect(registered.value["initrd"] == .null)
+    let rows = try await Self.images(["action": .string("list")], in: f)
+    #expect(
+      rows.value["images"]?.arrayValue?.contains {
+        $0["name"] == .string("bare") && $0["format"] == .string("kernel")
+      } == true)
+
+    let notPulled = await #expect(throws: VMLabError.self) {
+      try await Self.images(
+        ["action": .string("extract_kernel"), "name": .string("tiny-arm64")], in: f)
+    }
+    #expect(notPulled?.code == .imageNotFound)
+
+    let folder = f.context.images.imageDirectory("disk")
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    try Ext4Fixture.build().write(to: folder.appending(path: "disk.raw"))
+    let encoder = JSONEncoder()
+    encoder.dateEncodingStrategy = .iso8601
+    try encoder.encode(
+      PulledImage(
+        name: "disk", guest: GuestSpec(os: .linux, arch: .arm64), source: "test", format: .raw,
+        checksum: nil, files: ["raw": "disk.raw"], login: ImageLogin(user: "debian"),
+        pulledAt: Date())
+    ).write(to: folder.appending(path: "image.json"))
+    let extracted = try await Self.images(
+      ["action": .string("extract_kernel"), "name": .string("disk")], in: f)
+    #expect(extracted.value["version"] == .string("6.10.0"))
+    #expect(extracted.value["files"]?.arrayValue?.count == 4)
+  }
 }

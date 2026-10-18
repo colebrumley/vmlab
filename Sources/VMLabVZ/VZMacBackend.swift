@@ -103,8 +103,8 @@ public struct VZMacBackend: Backend {
       }
       try store.update(id: record.id) { $0.tartClone = clone.directory.path }
       let dir = store.directory(of: record.id)
-      _ = try SSHKey.ensure(
-        at: dir.appending(path: "id_ed25519"), comment: "vmlab-\(record.id)", commands: commands)
+      // VMManager makes the key first (R-400); this keeps a direct create complete.
+      try SSHKeys.generate(in: dir, comment: "vmlab-\(record.id)", runner: commands)
       if Self.wantsScreenSharing(record) { _ = try MacProvisioner.ensureVNCPassword(in: dir) }
     } catch {
       try? tart.delete(record.id)
@@ -144,9 +144,10 @@ public struct VZMacBackend: Backend {
     return runtime
   }
 
-  /// Whether provisioning sets the legacy VNC password: `gui` (or a GUI feature) was granted.
+  /// Whether provisioning sets the legacy VNC password: the plan requested a display feature,
+  /// the same test `DisplayEndpoint.forVM` uses to offer Screen Sharing (R-503).
   static func wantsScreenSharing(_ record: VMRecord) -> Bool {
-    record.features.contains { [.gui, .guiDesktop, .guiAccel].contains($0) }
+    DisplayEndpoint.isProvisioned(record)
   }
 
   /// R-606: the first boot's SSH provisioning (`MacProvisioner`).
@@ -204,6 +205,10 @@ public struct VZMacBackend: Backend {
 
   public func attach(_ record: VMRecord) async throws(VMLabError) -> any RunningVM {
     let handle = try await VMLabVZ.attach(socketPath: runner.target(record).client.socketPath)
-    return VZRunningVM(id: record.id, profile: profile, features: record.features, handle: handle)
+    let ssh = SSHEndpoint(runtime: record.runtime).map {
+      SSHTarget(record: record, endpoint: $0, store: store)
+    }
+    return VZRunningVM(
+      id: record.id, profile: profile, features: record.features, handle: handle, ssh: ssh)
   }
 }

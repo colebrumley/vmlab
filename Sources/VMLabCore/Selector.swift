@@ -7,6 +7,11 @@ public struct Plan: Codable, Sendable, Hashable {
   /// Every required feature plus every other feature that is `yes` for the profile on this host,
   /// in catalogue order.
   public var features: [Feature]
+  /// The features the request asked for (required, implied or preferred) that the profile grants,
+  /// in catalogue order. `features` also holds every other `yes`; what is provisioned for the guest
+  /// (the in-guest desktop, R-504; the VZ display, R-503) follows this list. Empty in plans stored
+  /// before it existed.
+  public var requested: [Feature]
   /// Preferred features the profile does not provide.
   public var preferredDenied: [Feature]
   /// Requested features whose answer on this host rests on a slow probe that is still `unknown`.
@@ -14,25 +19,69 @@ public struct Plan: Codable, Sendable, Hashable {
   /// Whether `unknown` probes were treated as `yes`.
   public var allowUnverified: Bool
   public var estimatedStartupSeconds: Int
+  /// The profile's Appendix B startup tier (1 best), one worse when the plan installs a desktop on
+  /// first boot (R-504).
+  public var startupTier: Int
   public var notes: [String]
 
   public init(
     profile: Profile, guest: GuestSpec, resources: ResourceSpec, features: [Feature],
-    preferredDenied: [Feature] = [], unverified: [Feature] = [], allowUnverified: Bool = false,
-    estimatedStartupSeconds: Int, notes: [String] = []
+    requested: [Feature] = [], preferredDenied: [Feature] = [], unverified: [Feature] = [],
+    allowUnverified: Bool = false, estimatedStartupSeconds: Int, startupTier: Int? = nil,
+    notes: [String] = []
   ) {
     self.profile = profile
     self.guest = guest
     self.resources = resources
     self.features = features
+    self.requested = requested
     self.preferredDenied = preferredDenied
     self.unverified = unverified
     self.allowUnverified = allowUnverified
     self.estimatedStartupSeconds = estimatedStartupSeconds
     self.notes = notes
+    self.startupTier = 0
+    self.startupTier = startupTier ?? profile.startupTier + (provisionsDesktop ? 1 : 0)
   }
 
   public func grants(_ feature: Feature) -> Bool { features.contains(feature) }
+
+  /// Whether the request asked for `feature` and the profile grants it.
+  public func requests(_ feature: Feature) -> Bool { requested.contains(feature) }
+
+  /// Whether cloud-init installs a desktop in the guest on first boot (R-504): a Linux guest that
+  /// asked for `gui_desktop`, or for `gui` on VZ, whose display is an in-guest VNC server. QEMU's
+  /// own VNC shows the console without any desktop, so `gui` alone installs nothing there.
+  public var provisionsDesktop: Bool {
+    guard guest.os == .linux else { return false }
+    return requests(.guiDesktop) || (profile.isVZ && requests(.gui))
+  }
+
+  /// The minutes-scale cost of installing the desktop, added to `estimatedStartupSeconds`.
+  public static let desktopInstallSeconds = 300
+
+  enum CodingKeys: String, CodingKey {
+    case profile, guest, resources, features, requested, preferredDenied, unverified
+    case allowUnverified, estimatedStartupSeconds, startupTier, notes
+  }
+
+  public init(from decoder: any Decoder) throws {
+    let c = try decoder.container(keyedBy: CodingKeys.self)
+    profile = try c.decode(Profile.self, forKey: .profile)
+    guest = try c.decode(GuestSpec.self, forKey: .guest)
+    resources = try c.decode(ResourceSpec.self, forKey: .resources)
+    features = try c.decode([Feature].self, forKey: .features)
+    requested = try c.decodeIfPresent([Feature].self, forKey: .requested) ?? []
+    preferredDenied = try c.decodeIfPresent([Feature].self, forKey: .preferredDenied) ?? []
+    unverified = try c.decodeIfPresent([Feature].self, forKey: .unverified) ?? []
+    allowUnverified = try c.decodeIfPresent(Bool.self, forKey: .allowUnverified) ?? false
+    estimatedStartupSeconds = try c.decode(Int.self, forKey: .estimatedStartupSeconds)
+    notes = try c.decodeIfPresent([String].self, forKey: .notes) ?? []
+    startupTier = 0
+    startupTier =
+      try c.decodeIfPresent(Int.self, forKey: .startupTier)
+      ?? profile.startupTier + (provisionsDesktop ? 1 : 0)
+  }
 }
 
 /// Why no profile can run a request (Appendix I steps 5 and 6). `error` is what the model sees.
@@ -231,6 +280,7 @@ public enum ProfileSelector {
 
     // 8. Plan.
     let features = Feature.allCases.filter { required.contains($0) || has(profile, $0) }
+    let requested = features.filter { required.contains($0) || preferred.contains($0) }
     let preferredDenied = preferred.filter { !has(profile, $0) }
     var unverified: [Feature] = []
     for feature in Feature.allCases where required.contains(feature) || preferred.contains(feature)
@@ -241,15 +291,19 @@ public enum ProfileSelector {
       }
       if onChosen || onEliminated { unverified.append(feature) }
     }
-    return .success(
-      Plan(
-        profile: profile, guest: r.guest, resources: resources, features: features,
-        preferredDenied: preferredDenied, unverified: unverified,
-        allowUnverified: allowUnverified,
-        estimatedStartupSeconds: estimatedStartupSeconds(profile, features: features, r: r),
-        notes: notes(
-          profile, r: r, required: required, granted: features, unverified: unverified,
-          allowUnverified: allowUnverified, matrix: matrix)))
+    var planned = resources
+    if profile == .qemuTCG, let cpus = planned.cpus, cpus > maxTCGCPUs {
+      planned.cpus = maxTCGCPUs
+    }
+    var plan = Plan(
+      profile: profile, guest: r.guest, resources: planned, features: features,
+      requested: requested, preferredDenied: preferredDenied, unverified: unverified,
+      allowUnverified: allowUnverified, estimatedStartupSeconds: 0)
+    plan.estimatedStartupSeconds = estimatedStartupSeconds(plan)
+    plan.notes = notes(
+      profile, r: r, required: required, granted: features, unverified: unverified,
+      allowUnverified: allowUnverified, matrix: matrix, desktop: plan.provisionsDesktop)
+    return .success(plan)
   }
 
   /// Subsets of `required` of size 1, then 2, then 3, whose removal leaves a survivor. A subset
@@ -295,24 +349,25 @@ public enum ProfileSelector {
     return out
   }
 
+  /// The most virtual CPUs a `qemu-tcg` guest gets (R-310): emulated CPUs past this add little.
+  public static let maxTCGCPUs = 8
+
   /// A rough figure for the model: time from start to a reachable guest.
-  static func estimatedStartupSeconds(_ profile: Profile, features: [Feature], r: Requirements)
-    -> Int
-  {
+  static func estimatedStartupSeconds(_ plan: Plan) -> Int {
     let base =
-      switch profile {
+      switch plan.profile {
       case .vzLinux: 15
       case .qemuHVF: 20
       case .vzMacOS: 60
       case .qemuTCG: 120
       }
-    let desktop = r.guest.os == .linux && (r.require + r.prefer).contains(.guiDesktop)
-    return base + (desktop ? 300 : 0)
+    return base + (plan.provisionsDesktop ? Plan.desktopInstallSeconds : 0)
   }
 
   static func notes(
     _ profile: Profile, r: Requirements, required: [Feature], granted: [Feature],
-    unverified: [Feature], allowUnverified: Bool, matrix: [Profile: [Feature: Availability]]
+    unverified: [Feature], allowUnverified: Bool, matrix: [Profile: [Feature: Availability]],
+    desktop: Bool = false
   ) -> [String] {
     var notes: [String] = []
     let asked = Set(required + r.prefer).intersection(granted)
@@ -321,6 +376,16 @@ public enum ProfileSelector {
         "qemu-tcg emulates the guest CPU: slow, expect many times the run time of hardware "
           + "virtualization")
     }
+    if profile == .qemuTCG, let cpus = ResourceLimits.resolve(r.resources, for: r.guest.os).cpus,
+      cpus > maxTCGCPUs
+    {
+      notes.append("qemu-tcg runs at most \(maxTCGCPUs) virtual CPUs; \(cpus) were asked for")
+    }
+    if case .other(let arch) = r.guest.arch {
+      notes.append(
+        "vmlab has no defaults for \(arch) beyond -machine virt: give boot (kernel, firmware or "
+          + "binary) and any devices in extra.qemuArgs")
+    }
     if profile == .qemuTCG, asked.contains(.nestedVirt) {
       var note = "nested virtualization is emulated under qemu-tcg and very slow"
       if case .no(let reason) = matrix[.vzLinux]?[.nestedVirt] {
@@ -328,8 +393,10 @@ public enum ProfileSelector {
       }
       notes.append(note)
     }
-    if r.guest.os == .linux, asked.contains(.guiDesktop) {
-      notes.append("the desktop is installed on first boot, which adds several minutes")
+    if desktop {
+      notes.append(
+        "a desktop (xfce4, lightdm) is installed on first boot, which adds about "
+          + "\(Plan.desktopInstallSeconds / 60) minutes to the first start")
     }
     if profile.isVZ, asked.contains(.netPortForward) {
       notes.append(
