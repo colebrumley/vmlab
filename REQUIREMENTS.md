@@ -295,7 +295,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   **Verify:** `vmlab doctor --json` on the dev host lists every prerequisite; a unit test renders a
   fixture report with one missing tool and shows its fix line.
 
-- [ ] **R-204 `vm_plan`, `vm_list`, `vm_inspect` on the server**
+- [x] **R-204 `vm_plan`, `vm_list`, `vm_inspect` on the server**
   Wire R-103, R-104 to the tools. `vm_inspect` returns the record, the runtime endpoints, the
   resolved features (so a model can rediscover what a VM has after a context reset), and the last
   20 events. `vm_plan` returns the plan or the unsatisfiable object
@@ -333,7 +333,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   **Verify:** unit test: the generated `user-data` is valid YAML with the expected keys; the ISO is
   produced and `hdiutil` lists `user-data` and `meta-data` inside.
 
-- [ ] **R-302 QEMU process and QMP client**
+- [x] **R-302 QEMU process and QMP client**
   `VMLabQEMU`: builds the command line from a `VMRecord` and `Plan` (Appendix G for defaults):
   `-machine virt -accel hvf` for `qemu-hvf`, `-accel tcg` for `qemu-tcg`, `-cpu host|max`, UEFI from
   Homebrew's edk2 for installed-disk boot, virtio-blk disks, virtio-net, `-qmp
@@ -358,7 +358,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   **Verify:** unit test against a fake socket: offsets, tail, wait with timeout; integration: the
   Debian boot log contains `login:` within 90 s via `wait`.
 
-- [ ] **R-304 Panic and crash detection**
+- [x] **R-304 Panic and crash detection**
   The serial reader matches a small table (`Kernel panic - not syncing`, `BUG:`, `Oops:`, `general
   protection fault`, `Synchronous Exception`, `rcu: INFO: rcu_sched self-detected stall`) and logs a
   `panic` event with the matched line and offset; `vm_inspect` surfaces the latest. QMP `GUEST_PANICKED`
@@ -533,7 +533,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
 
 ## Phase 6 — Virtualization.framework backend
 
-- [ ] **R-600 `vmlab-vz` runner process and control socket**
+- [x] **R-600 `vmlab-vz` runner process and control socket**
   One `vmlab-vz` process per VZ guest, started detached by `VMLabVZ`, with `<vm>/control.sock`
   speaking newline-delimited JSON: `status`, `pause`, `resume`, `stop` (ACPI/guest request via
   `requestStop`), `kill`, `save(path)`, `restore(path)`, `exit`. It writes `<vm>/vz.pid`, logs to
@@ -1063,7 +1063,8 @@ six 4 GB guests with the default reserve; macOS 26.6 → VZ save/restore APIs pr
     efi-vars.bin               VZ EFI variable store / QEMU pflash vars
     id_ed25519, id_ed25519.pub, known_hosts, vnc.pass
     qmp.sock, serial.sock, vnc.sock, control.sock, vz.pid, qemu.pid
-    serial.log, vz.log, qemu.log, provision.log, provision.json
+    vz-config.json             the machine the VZ runner builds (VZRunnerConfig)
+    serial.log, vz.log, console.log, qemu.log, provision.log, provision.json
     checkpoints.json, checkpoints/<id>/ (VZ state files and disk clones)
     manifests/<id>.json, exec/<job>.log, dumps/, pulled/, screenshots/
   segments/<name>/             switch.sock, stats.sock, switch.pid, ports/

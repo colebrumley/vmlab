@@ -11,12 +11,19 @@ public struct VMEvent: Codable, Sendable, Equatable {
   public var level: Logger.Level
   public var kind: Kind
   public var message: String
+  /// Structured detail, absent on most events: a panic's `pattern` and serial `offset`, a QMP
+  /// event's `data`.
+  public var data: [String: JSONValue]?
 
-  public init(ts: Date = Date(), level: Logger.Level = .info, kind: Kind, message: String) {
+  public init(
+    ts: Date = Date(), level: Logger.Level = .info, kind: Kind, message: String,
+    data: [String: JSONValue]? = nil
+  ) {
     self.ts = ts
     self.level = level
     self.kind = kind
     self.message = message
+    self.data = data
   }
 }
 

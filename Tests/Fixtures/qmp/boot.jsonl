@@ -1,0 +1,14 @@
+< {"QMP": {"version": {"qemu": {"micro": 2, "minor": 1, "major": 11}, "package": ""}, "capabilities": ["oob"]}}
+> {"execute":"qmp_capabilities","id":"vmlab-1"}
+< {"return": {}, "id": "vmlab-1"}
+> {"execute":"cont","id":"vmlab-2"}
+< {"timestamp": {"seconds": 1792334030, "microseconds": 988931}, "event": "RESUME"}
+< {"return": {}, "id": "vmlab-2"}
+> {"execute":"query-status","id":"vmlab-3"}
+< {"return": {"status": "running", "running": true}, "id": "vmlab-3"}
+> {"execute":"human-monitor-command","arguments":{"command-line":"bogus"},"id":"vmlab-4"}
+< {"id": "vmlab-4", "error": {"class": "GenericError", "desc": "unknown command: 'bogus'"}}
+> {"execute":"system_powerdown","id":"vmlab-5"}
+< {"timestamp": {"seconds": 1792334044, "microseconds": 45632}, "event": "POWERDOWN"}
+< {"return": {}, "id": "vmlab-5"}
+< {"timestamp": {"seconds": 1792334045, "microseconds": 251288}, "event": "SHUTDOWN", "data": {"guest": true, "reason": "guest-shutdown"}}

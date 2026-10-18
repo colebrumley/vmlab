@@ -3,7 +3,9 @@
 Read by unit tests through `#filePath`; never written at test time.
 
 - `vm-json/` — `vm.json` per schema version (constraint C4)
-- `qmp/` — recorded QMP transcripts
+- `qmp/` — recorded QMP transcripts (`<` server line, `>` client line; QEMU 11.1)
+- `qemu/` — VM records (`<name>.vm.json`) and the QEMU arguments built from them (`<name>.args`,
+  one per line; regenerate with `VMLAB_UPDATE_SNAPSHOTS=1 swift test --filter QEMUCommandLine`)
 - `rfb/` — recorded RFB captures
 - `host-facts/` — `host-facts.json` samples
 - `host-probe/` — recorded `sw_vers`, `sysctl`, `vm_stat`, `qemu-system-aarch64`, `tart` output

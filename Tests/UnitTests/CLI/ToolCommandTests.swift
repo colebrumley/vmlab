@@ -72,10 +72,13 @@ import VMLabMCP
         == .object(["state": .string("running")]))
     #expect(try InspectCommand.parse(["web"]).arguments() == .object(["vm": .string("web")]))
     #expect(try DoctorCommand.parse(["--probe"]).arguments() == .object(["probe": .bool(true)]))
+    #expect(
+      try LogsCommand.parse(["web", "--source", "events", "--tail", "5"]).arguments()
+        == .object(["vm": .string("web"), "source": .string("events"), "tail": .number(5)]))
     #expect(try FactsCommand.parse([]).arguments() == .object([:]))
     for command in [
       FactsCommand.self, DoctorCommand.self, PlanCommand.self, ListCommand.self,
-      InspectCommand.self,
+      InspectCommand.self, LogsCommand.self,
     ] as [any ToolCommand.Type] {
       #expect(ToolHandlers.handler(named: command.toolName) != nil)
     }

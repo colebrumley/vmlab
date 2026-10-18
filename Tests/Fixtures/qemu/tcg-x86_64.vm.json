@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "id": "vm-tcgx86",
+  "name": "intel",
+  "profile": "qemu-tcg",
+  "guest": { "os": "linux", "arch": "x86_64" },
+  "features": ["exec_ssh", "serial", "gdb", "net_nat"],
+  "resources": { "cpus": 1, "memoryGB": 2 },
+  "image": "debian-13-amd64",
+  "network": {},
+  "createdAt": "2026-10-01T12:00:00Z",
+  "state": "created"
+}

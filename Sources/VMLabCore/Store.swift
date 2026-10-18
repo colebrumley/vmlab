@@ -66,12 +66,15 @@ public struct VMRecord: Codable, Sendable, Hashable {
   public var state: VMState
   public var runtime: VMRuntime?
   public var checkpoints: [CheckpointRef]
+  /// The plan the selector made when the VM was created, so `vm_inspect` can show it after a
+  /// context reset. Absent from records written before it existed (additive: schema 1 still).
+  public var plan: Plan?
 
   public init(
     id: String, name: String? = nil, profile: Profile, guest: GuestSpec, features: [Feature],
     resources: ResourceSpec = ResourceSpec(), image: String? = nil,
     network: NetworkSpec = NetworkSpec(), createdAt: Date = Date(), state: VMState = .created,
-    runtime: VMRuntime? = nil, checkpoints: [CheckpointRef] = []
+    runtime: VMRuntime? = nil, checkpoints: [CheckpointRef] = [], plan: Plan? = nil
   ) {
     self.schemaVersion = Self.currentSchemaVersion
     self.id = id
@@ -86,11 +89,12 @@ public struct VMRecord: Codable, Sendable, Hashable {
     self.state = state
     self.runtime = runtime
     self.checkpoints = checkpoints
+    self.plan = plan
   }
 
   enum CodingKeys: String, CodingKey {
     case schemaVersion, id, name, profile, guest, features, resources, image, network, createdAt
-    case state, runtime, checkpoints
+    case state, runtime, checkpoints, plan
   }
 
   public init(from decoder: any Decoder) throws {
@@ -108,6 +112,7 @@ public struct VMRecord: Codable, Sendable, Hashable {
     state = try c.decode(VMState.self, forKey: .state)
     runtime = try c.decodeIfPresent(VMRuntime.self, forKey: .runtime)
     checkpoints = try c.decodeIfPresent([CheckpointRef].self, forKey: .checkpoints) ?? []
+    plan = try c.decodeIfPresent(Plan.self, forKey: .plan)
   }
 
   /// `vm-` plus six lowercase RFC 4648 base32 characters.
