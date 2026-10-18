@@ -251,7 +251,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
 
 ## Phase 2 — MCP server and CLI skeleton
 
-- [ ] **R-200 CLI executable**
+- [x] **R-200 CLI executable**
   `vmlab` with ArgumentParser: `serve`, `doctor`, `facts`, `images`, `plan`, `create`, `list`,
   `inspect`, `start`, `stop`, `kill`, `pause`, `resume`, `destroy`, `clone`, `exec`, `file`,
   `computer`, `serial`, `debug`, `introspect`, `checkpoint`, `manifest`, `logs`, `segment`, `fleet`.

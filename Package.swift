@@ -60,7 +60,7 @@ let package = Package(
       name: "UnitTests",
       dependencies: [
         "VMLabCore", "VMLabQEMU", "VMLabVZ", "VMLabRFB", "VMLabGDB", "VMLabMCP", "VMLabSwitch",
-        "vmlab-store-helper",
+        "vmlab-store-helper", "vmlab",
       ]
     ),
     .testTarget(

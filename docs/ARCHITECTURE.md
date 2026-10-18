@@ -65,11 +65,26 @@ Each tool of Appendix C is a `ToolSpec` (name, model-facing description, JSON Sc
 input as Core's `JSONValue`, documented output shape, the Appendix D codes it raises) in
 `Tools/<Tool>Tool.swift`, built with the `Schema` helpers in `Tools/ToolSpec.swift`, which also
 hold the shared `requirements` schema; `ToolCatalog.all` lists them in Appendix C order. `ToolDocs`
-renders `docs/TOOLS.md` from the schemas.
+renders `docs/TOOLS.md` from the schemas. `Handlers/` is the behaviour the MCP server and the CLI share: a
+`ToolHandler` (its `spec`, and `call(_: ToolArguments, context: ToolContext) async throws(VMLabError)
+-> ToolResult`) per built tool, registered in `ToolHandlers.all`; `ToolHandlers.call(name,
+arguments:context:)` checks the JSON arguments against the schema's top level (object, no unknown
+field, required fields present; `ToolArguments` has typed accessors) and runs the handler, and
+`ToolHandlers.specs` is what `tools/list` offers. `ToolContext` holds the `Store`, the `HostProbe` and
+the `ResourceLimits` of one `VMLAB_HOME`. A `ToolResult` is the Appendix C result object (always with
+`warnings`) plus image blocks; `ToolRendering` turns results and `VMLabError`s into JSON (the MCP text)
+or a terminal line. Built so far: `host_facts`, `host_doctor` (minimal; R-203 completes it),
+`vm_plan` (an unsatisfiable request is a result with `satisfiable: false`, never an error),
+`vm_list` and `vm_inspect`. `VMLabMCP.version` is the package version.
 
 **`vmlab`** (executable). The CLI on swift-argument-parser: every MCP tool as a subcommand with
 `--json` output, `vmlab serve` for the MCP server, `vmlab doctor`, and the hidden `vmlab gen-docs`
-that `scripts/gen-docs.sh` uses; `vmlab images pull|list|remove` (R-300) runs ahead of the R-200 frame. It bootstraps logging and hands off to Core and `VMLabMCP`.
+that `scripts/gen-docs.sh` uses. A tool subcommand conforms to `ToolCommand` (`Sources/vmlab/ToolCommand.swift`):
+it turns its flags into the tool's JSON arguments and calls the same `ToolHandlers.call` as
+`tools/call`, printing the result object with `--json` or a short human rendering; a `VMLabError` goes
+to stderr (the Appendix D object with `--json`) with exit status 1. Built: `facts`, `doctor`, `plan`,
+`list`, `inspect`, `--version`; `vmlab images pull|list|remove` (R-300) still calls `ImageStore`
+directly until the `images` handler lands. It bootstraps logging and hands off to Core and `VMLabMCP`.
 
 **`vmlab-vz`** (executable). The VZ runner: one process per Virtualization.framework guest, so a
 guest outlives the server, driven over `control.sock` in the VM directory. It is the only binary
