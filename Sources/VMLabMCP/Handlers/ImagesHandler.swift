@@ -3,12 +3,12 @@ import VMLabCore
 
 /// `images`: list, pull and remove over `ImageStore` (R-300); `pull` reports progress while it
 /// downloads. extract_kernel and the kernel form of register are R-305's; registering a disk or
-/// an IPSW is R-1002's; template_create (R-804) and prune (R-1003) are refused until their items
-/// land.
+/// an IPSW is R-1002's; prune and the confirm gate on large pulls are R-1003's; template_create
+/// (R-804) is refused until its item lands.
 struct ImagesHandler: ToolHandler {
   var spec: ToolSpec { .images }
 
-  static let owners = ["template_create": "R-804", "prune": "R-1003"]
+  static let owners = ["template_create": "R-804"]
 
   func call(_ arguments: ToolArguments, context: ToolContext) async throws(VMLabError)
     -> ToolResult
@@ -19,7 +19,8 @@ struct ImagesHandler: ToolHandler {
       return ToolResult(["images": .array(context.images.list().map { Self.row($0, context) })])
     case "pull":
       let name = try Self.name(arguments)
-      let result = try await LongOperation.pull(name, context: context)
+      let result = try await LongOperation.pull(
+        name, confirm: try arguments.bool("confirm"), context: context)
       let folder = context.images.imageDirectory(name)
       return ToolResult([
         "name": .string(name), "path": .string(folder.path),
@@ -68,11 +69,13 @@ struct ImagesHandler: ToolHandler {
       return Self.kernelResult(files, context)
     case "register":
       return try await Self.register(arguments, context: context)
+    case "prune":
+      return try await Self.prune(confirm: try arguments.bool("confirm"), context: context)
     default:
       if let owner = Self.owners[action] {
         throw VMLabError.invalidRequest(
           field: "action", reason: "images \(action) is not built yet (\(owner))",
-          hint: "list, pull, remove, register and extract_kernel work now.")
+          hint: "list, pull, remove, register, prune and extract_kernel work now.")
       }
       throw VMLabError.invalidRequest(
         field: "action", reason: "\(action) is not an images action",
@@ -144,6 +147,44 @@ struct ImagesHandler: ToolHandler {
           + "Assistant with the account admin/admin and turn on Remote Login (docs/AGENT.md)")
     }
     return ToolResult(object, warnings: warnings)
+  }
+
+  /// `prune`: removes every image no VM uses. If a VM record cannot be read nothing is removed,
+  /// since its image is unknown; more than 10 GB at once needs `confirm`.
+  static func prune(confirm: Bool, context: ToolContext) async throws(VMLabError) -> ToolResult {
+    let listed = try context.store.list()
+    let images = context.images
+    if !listed.unreadable.isEmpty {
+      let ids = listed.unreadable.keys.sorted()
+      return ToolResult(
+        ["removed": .array([]), "bytesFreed": .number(0)],
+        warnings: [
+          "kept every image: the records of \(ids.joined(separator: ", ")) cannot be read, so "
+            + "the images they use are unknown"
+        ])
+    }
+    let referenced = ImageStore.references(listed.records)
+    let doomed = images.unreferenced(referenced)
+    let total = doomed.reduce(Int64(0)) { $0 + $1.bytes }
+    if total > ImageStore.confirmAboveBytes, !confirm {
+      let gb = (Double(total) / 1e9).formatted(.number.precision(.fractionLength(1)))
+      throw VMLabError(
+        code: .confirmRequired,
+        message: "Pruning removes \(doomed.count) images, \(gb) GB: "
+          + doomed.map(\.name).joined(separator: ", "),
+        hint: "Call again with confirm: true to remove them.",
+        data: [
+          "bytes": .number(Double(total)), "names": .array(doomed.map { .string($0.name) }),
+        ])
+    }
+    let removed = try await LongOperation.typed("images prune") {
+      try await images.prune(referenced: referenced)
+    }
+    return ToolResult([
+      "removed": .array(removed.map { .string($0.name) }),
+      "bytesFreed": .number(Double(removed.reduce(Int64(0)) { $0 + $1.bytes })),
+      "kept": .array(referenced.sorted().map { .string($0) }),
+    ])
   }
 
   static func kernelResult(_ files: KernelFiles, _ context: ToolContext) -> ToolResult {

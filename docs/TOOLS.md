@@ -98,7 +98,8 @@ Manage the guest image cache in ~/.vmlab/images. list shows pulled and available
 ```
 list: { images: [ { name, guest, arch, format, pulled, bytes?, template, path? } ] }
 pull: { name, path, bytes, cached }
-remove, prune: { removed: [name], bytesFreed }
+remove: { removed: [name], bytesFreed }
+prune: { removed: [name], bytesFreed, kept: [name] }
 register, template_create, extract_kernel: { name, path, files: [path] }
 ```
 

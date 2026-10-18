@@ -803,7 +803,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   locally; the attended install is the user's, documented in `docs/AGENT.md`).
   **Verify:** unit test for `image.json`; integration: a registered raw image boots.
 
-- [ ] **R-1003 Image cache policy**
+- [x] **R-1003 Image cache policy**
   `~/.vmlab/images` reports size in `host_facts`; `images prune` removes images no VM or template
   references; pulls over 10 GB (macOS) require `confirm: true` from the tool with the size stated.
   **Verify:** unit tests for the reference check and the confirm gate.

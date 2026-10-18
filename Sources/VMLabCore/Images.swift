@@ -58,10 +58,13 @@ public struct CatalogImage: Codable, Sendable, Hashable {
   /// A qcow2 download is also converted to `disk.raw` with `qemu-img` (VZ boots raw only).
   public var convertToRaw: Bool
   public var login: ImageLogin
+  /// About how many bytes a pull downloads, for the confirm gate (R-1003); nil when unknown.
+  public var approxBytes: Int64?
 
   public init(
     name: String, guest: GuestSpec, url: String, format: ImageFormat, checksumURL: URL? = nil,
-    checksumAlgorithm: ChecksumAlgorithm? = nil, convertToRaw: Bool = false, login: ImageLogin
+    checksumAlgorithm: ChecksumAlgorithm? = nil, convertToRaw: Bool = false, login: ImageLogin,
+    approxBytes: Int64? = nil
   ) {
     self.name = name
     self.guest = guest
@@ -71,10 +74,12 @@ public struct CatalogImage: Codable, Sendable, Hashable {
     self.checksumAlgorithm = checksumAlgorithm
     self.convertToRaw = convertToRaw
     self.login = login
+    self.approxBytes = approxBytes
   }
 
   enum CodingKeys: String, CodingKey {
     case name, guest, url, format, checksumURL, checksumAlgorithm, convertToRaw, login
+    case approxBytes
   }
 
   public init(from decoder: any Decoder) throws {
@@ -88,6 +93,7 @@ public struct CatalogImage: Codable, Sendable, Hashable {
       ChecksumAlgorithm.self, forKey: .checksumAlgorithm)
     convertToRaw = try container.decodeIfPresent(Bool.self, forKey: .convertToRaw) ?? false
     login = try container.decode(ImageLogin.self, forKey: .login)
+    approxBytes = try container.decodeIfPresent(Int64.self, forKey: .approxBytes)
   }
 
   /// The name the checksum file lists the download under: the last path component of `url`.
@@ -120,25 +126,25 @@ public struct ImageCatalogue: Codable, Sendable, Hashable {
        "url": "https://cloud.debian.org/images/cloud/trixie/latest/debian-13-genericcloud-arm64.qcow2",
        "format": "qcow2", "convertToRaw": true,
        "checksumURL": "https://cloud.debian.org/images/cloud/trixie/latest/SHA512SUMS",
-       "checksumAlgorithm": "sha512", "login": {"user": "debian"}},
+       "checksumAlgorithm": "sha512", "login": {"user": "debian"}, "approxBytes": 340000000},
       {"name": "debian-13-amd64", "guest": {"os": "linux", "arch": "x86_64"},
        "url": "https://cloud.debian.org/images/cloud/trixie/latest/debian-13-genericcloud-amd64.qcow2",
        "format": "qcow2", "convertToRaw": false,
        "checksumURL": "https://cloud.debian.org/images/cloud/trixie/latest/SHA512SUMS",
-       "checksumAlgorithm": "sha512", "login": {"user": "debian"}},
+       "checksumAlgorithm": "sha512", "login": {"user": "debian"}, "approxBytes": 345000000},
       {"name": "ubuntu-24.04-arm64", "guest": {"os": "linux", "arch": "arm64"},
        "url": "https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-arm64.img",
        "format": "qcow2", "convertToRaw": true,
        "checksumURL": "https://cloud-images.ubuntu.com/noble/current/SHA256SUMS",
-       "checksumAlgorithm": "sha256", "login": {"user": "ubuntu"}},
+       "checksumAlgorithm": "sha256", "login": {"user": "ubuntu"}, "approxBytes": 620000000},
       {"name": "ubuntu-24.04-amd64", "guest": {"os": "linux", "arch": "x86_64"},
        "url": "https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img",
        "format": "qcow2", "convertToRaw": false,
        "checksumURL": "https://cloud-images.ubuntu.com/noble/current/SHA256SUMS",
-       "checksumAlgorithm": "sha256", "login": {"user": "ubuntu"}},
+       "checksumAlgorithm": "sha256", "login": {"user": "ubuntu"}, "approxBytes": 620000000},
       {"name": "macos-base", "guest": {"os": "macos", "arch": "arm64"},
        "url": "ghcr.io/cirruslabs/macos-tahoe-base:latest", "format": "tart",
-       "login": {"user": "admin", "password": "admin"}}
+       "login": {"user": "admin", "password": "admin"}, "approxBytes": 25000000000}
     ]}
     """
 }

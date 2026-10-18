@@ -16,6 +16,7 @@ struct CreateCommand: ToolCommand {
   @Option(help: "A unique name for the VM; defaults to its id.") var name: String?
   @Flag(name: .customLong("no-start"), help: "Create the VM but do not start it.")
   var noStart = false
+  @Flag(help: "Allow an image pull over 10 GB (a macOS image).") var confirm = false
 
   var json: Bool { request.json }
 
@@ -23,6 +24,7 @@ struct CreateCommand: ToolCommand {
     var object: [String: JSONValue] = ["requirements": try request.requirementsValue()]
     if let name { object["name"] = .string(name) }
     if noStart { object["autostart"] = .bool(false) }
+    if confirm { object["confirm"] = .bool(true) }
     if request.allowUnverified { object["allowUnverified"] = .bool(true) }
     return .object(object)
   }

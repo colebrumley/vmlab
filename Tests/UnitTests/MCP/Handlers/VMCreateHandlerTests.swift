@@ -14,11 +14,11 @@ import VMLabCore
     let backend: FakeBackend
     let progress = ProgressLog()
 
-    init(heartbeat: Duration = .milliseconds(40)) throws {
+    init(heartbeat: Duration = .milliseconds(40), catalogue: ImageCatalogue? = nil) throws {
       let base = try ToolHandlerTests.context()
       let (_, bin) = try ImagesTests.sandbox()
       let images = ImageStore(
-        home: base.home, catalogue: try ImagesTests.catalogue(),
+        home: base.home, catalogue: try catalogue ?? ImagesTests.catalogue(),
         downloader: ImagesTests.downloader(), runner: ConvertRunner(), searchPaths: [bin.path])
       let registry = BackendRegistry()
       let backend = FakeBackend(profile: .qemuHVF, store: base.store)

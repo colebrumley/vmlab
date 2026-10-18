@@ -9,7 +9,9 @@ struct Images: ParsableCommand {
   static let configuration = CommandConfiguration(
     commandName: "images",
     abstract: "Pull, list and remove guest images (the images tool).",
-    subcommands: [Pull.self, List.self, Remove.self, Register.self, ExtractKernel.self]
+    subcommands: [
+      Pull.self, List.self, Remove.self, Register.self, Prune.self, ExtractKernel.self,
+    ]
   )
 
   struct Pull: ToolCommand {
@@ -18,10 +20,13 @@ struct Images: ParsableCommand {
     static let toolName = "images"
 
     @Argument(help: "The image name, from `vmlab images list`.") var name: String
+    @Flag(help: "Allow a pull over 10 GB (a macOS image).") var confirm = false
     @Flag(help: "Print the result object as JSON.") var json = false
 
     func arguments() throws -> JSONValue {
-      .object(["action": .string("pull"), "name": .string(name)])
+      var object: [String: JSONValue] = ["action": .string("pull"), "name": .string(name)]
+      if confirm { object["confirm"] = .bool(true) }
+      return .object(object)
     }
 
     func render(_ result: ToolResult) -> String {
@@ -66,6 +71,32 @@ struct Images: ParsableCommand {
 
     func render(_ result: ToolResult) -> String {
       Human.strings(result.value["removed"]).isEmpty ? "\(name) was not pulled" : "Removed \(name)"
+    }
+  }
+
+  struct Prune: ToolCommand {
+    static let configuration = CommandConfiguration(
+      abstract: "Delete every pulled or registered image no VM uses.")
+    static let toolName = "images"
+
+    @Flag(help: "Allow removing more than 10 GB at once.") var confirm = false
+    @Flag(help: "Print the result object as JSON.") var json = false
+
+    func arguments() throws -> JSONValue {
+      var object: [String: JSONValue] = ["action": .string("prune")]
+      if confirm { object["confirm"] = .bool(true) }
+      return .object(object)
+    }
+
+    func render(_ result: ToolResult) -> String {
+      let removed = Human.strings(result.value["removed"])
+      let gb = (result.value["bytesFreed"]?.numberValue ?? 0) / 1e9
+      var text =
+        removed.isEmpty
+        ? "Nothing to prune"
+        : "Removed \(removed.joined(separator: ", ")) (\(String(format: "%.1f", gb)) GB)"
+      for warning in result.warnings { text += "\nwarning: \(warning)" }
+      return text
     }
   }
 

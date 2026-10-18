@@ -30,7 +30,8 @@ struct VMCreateHandler: ToolHandler {
     let image = try Self.image(
       for: requirements, catalogue: images.catalogue, guestOf: { images.guest(of: $0) })
     var warnings: [String] = []
-    if try await LongOperation.pullIfMissing(image, context: context) != nil {
+    let confirm = try arguments.bool("confirm")
+    if try await LongOperation.pullIfMissing(image, confirm: confirm, context: context) != nil {
       warnings.append("pulled image \(image) first")
     }
     try LongOperation.checkCancellation("vm_create")
