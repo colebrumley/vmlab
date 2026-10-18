@@ -21,6 +21,9 @@ public actor DisplaySessions {
 
   public let connectors: DisplayConnectorRegistry
   private var entries: [String: Entry] = [:]
+  /// The VMs with a `vm_computer` call in progress, and the calls waiting their turn.
+  private var busy: Set<String> = []
+  private var waiting: [String: [CheckedContinuation<Void, Never>]] = [:]
 
   public init(connectors: DisplayConnectorRegistry = Displays.shared) {
     self.connectors = connectors
@@ -48,6 +51,29 @@ public actor DisplaySessions {
   public func setCursor(vm: String, x: Int, y: Int) { entries[vm]?.cursor = (x, y) }
   public func frame(vm: String) -> Frame? { entries[vm]?.frame }
   public func setFrame(vm: String, _ frame: Frame) { entries[vm]?.frame = frame }
+
+  /// Runs `body` as the only `vm_computer` call on `vm`: two calls on one display would
+  /// interleave their gestures (a click inside a drag) and their modifiers. Calls on other VMs
+  /// run alongside; waiting callers go in arrival order.
+  func exclusive<T: Sendable>(
+    vm: String, _ body: () async throws(VMLabError) -> T
+  ) async throws(VMLabError) -> T {
+    if busy.contains(vm) {
+      await withCheckedContinuation { waiting[vm, default: []].append($0) }
+    } else {
+      busy.insert(vm)
+    }
+    defer {
+      if var queue = waiting[vm], !queue.isEmpty {
+        let next = queue.removeFirst()
+        waiting[vm] = queue.isEmpty ? nil : queue
+        next.resume()
+      } else {
+        busy.remove(vm)
+      }
+    }
+    return try await body()
+  }
 
   /// Closes and drops `vm`'s session.
   public func forget(vm: String) async {
@@ -88,11 +114,14 @@ struct VMComputerHandler: ToolHandler {
       try context.store.find(try arguments.string("vm") ?? ""))
     let endpoint = try DisplayEndpoint.resolve(
       record, vmDirectory: context.store.directory(of: record.id))
-    let session = try await context.displays.session(vm: record.id, endpoint: endpoint)
-    let computer = Computer(
-      vm: record.id, profile: record.profile, session: session, sessions: context.displays,
-      arguments: arguments)
-    return try await computer.perform(action)
+    let displays = context.displays
+    return try await displays.exclusive(vm: record.id) { () throws(VMLabError) -> ToolResult in
+      let session = try await displays.session(vm: record.id, endpoint: endpoint)
+      let computer = Computer(
+        vm: record.id, profile: record.profile, session: session, sessions: displays,
+        arguments: arguments)
+      return try await computer.perform(action)
+    }
   }
 }
 

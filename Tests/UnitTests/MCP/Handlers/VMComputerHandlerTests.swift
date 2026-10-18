@@ -265,6 +265,25 @@ final class FakeDisplay: DisplaySession, DisplayConnector {
     #expect(f.display.inputs.isEmpty)
   }
 
+  /// Codex P3: two GUI calls on one VM interleaved their gestures (a click landed inside a
+  /// drag with the button held). Calls on one VM now run one at a time.
+  @Test func concurrentCallsOnOneVMDoNotInterleave() async throws {
+    let f = try Fixture()
+    defer { f.cleanUp() }
+    async let drag = f.call([
+      "action": .string("left_click_drag"), "startCoordinate": Self.point(10, 10),
+      "coordinate": Self.point(90, 90),
+    ])
+    async let clicks = f.call(["action": .string("double_click"), "coordinate": Self.point(5, 5)])
+    _ = try await (drag, clicks)
+    let inputs = f.display.inputs
+    let click = inputs.indices.filter {
+      inputs[$0] == .pointer(5, 5, []) || inputs[$0] == .pointer(5, 5, .left)
+    }
+    #expect(click.count == 5)
+    #expect(click.last.map { $0 - click[0] } == 4, "\(inputs)")
+  }
+
   @Test func coordinatesOutsideTheScreenAreRefused() async throws {
     let f = try Fixture()
     defer { f.cleanUp() }
