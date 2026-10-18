@@ -330,8 +330,11 @@ public struct SharedDirSpec: Codable, Sendable, Hashable {
     }
   }
 
-  /// Throws `invalid_request` unless the host directory exists (checked at create and start).
-  public func checkHostDirectory(vmDirectory: URL) throws(VMLabError) {
+  /// Throws `invalid_request` unless the host directory exists (checked at create and start)
+  /// and, when `policy` is given, a model-named one passes it as a write path: the guest writes
+  /// the share, so a share at the home or `~/Library` would let it write the host's dotfiles.
+  public func checkHostDirectory(vmDirectory: URL, policy: PathPolicy? = nil) throws(VMLabError) {
+    if let host, let policy { _ = try policy.check(host, field: "share.host", access: .write) }
     let url = hostDirectory(vmDirectory: vmDirectory)
     if host == nil {
       try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)

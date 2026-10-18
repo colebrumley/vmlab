@@ -79,10 +79,13 @@ public actor VMManager {
     // (`require` or `prefer` without a mode) must mean no network device. Requirements already
     // refuse net_none beside mode nat, forwards or a segment.
     if plan.requests(.netNone) { new.network.mode = .disabled }
-    // R-1102: a share's host directory is model-supplied; it must pass the path policy and is
-    // recorded canonical, so a symlink swapped in later does not move it.
+    // R-1102: a share's host directory is model-supplied and the guest writes it; it must pass
+    // the path policy as a write path and is recorded canonical, so a symlink swapped in later
+    // does not move it (backends check it again at start).
     if let host = new.share?.host {
-      new.share?.host = try PathPolicy.load(home: store.home).check(host, field: "share.host").path
+      new.share?.host = try PathPolicy.load(home: store.home).check(
+        host, field: "share.host", access: .write
+      ).path
     }
     // BH-1: so are the host paths named in extra.qemuArgs (checked again at start).
     try new.extra?.checkHostPaths(

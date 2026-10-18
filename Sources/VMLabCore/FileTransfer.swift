@@ -61,40 +61,137 @@ public struct SSHFileTransfer: Sendable {
 
   /// Copies `remote` from the guest to `local`, or into `<vm>/pulled/` when `local` is nil. A
   /// `local` that is an existing directory receives the copy inside it, as `scp` does.
-  public func pull(remote: String, local: URL?, timeout: Duration = defaultTimeout)
-    async throws(VMLabError) -> FileTransferResult
-  {
+  ///
+  /// A `local` copy is a host write the model names: the final destination passes `policy` as a
+  /// write path (when given), and `scp` writes into a staging folder in `<vm>/pulled/`, which no
+  /// guest can reach, whose result is then renamed into a destination directory opened with
+  /// `O_NOFOLLOW_ANY`, so a symlink put in the way since the check (by a guest writing a shared
+  /// folder, say) is neither followed nor written through: one at the final name is replaced.
+  public func pull(
+    remote: String, local: URL?, policy: PathPolicy? = nil, timeout: Duration = defaultTimeout
+  ) async throws(VMLabError) -> FileTransferResult {
     try Self.checkRemote(remote)
     let name = Self.baseName(of: remote)
-    let destination: URL
     let files = FileManager.default
-    if let local {
-      var isDirectory: ObjCBool = false
-      if files.fileExists(atPath: local.path, isDirectory: &isDirectory), isDirectory.boolValue {
-        destination = local.appending(path: name)
-      } else {
-        destination = local
-      }
-    } else {
-      do {
-        try files.createDirectory(at: pulledDirectory, withIntermediateDirectories: true)
-      } catch {
-        throw VMLabError(
-          code: .internal, message: "Cannot create \(pulledDirectory.path)",
-          hint: "Check that the VM directory is writable.", data: ["error": .string("\(error)")])
-      }
-      destination = pulledDirectory.appending(path: name)
+    guard let local else {
+      try Self.createDirectory(pulledDirectory)
+      let destination = pulledDirectory.appending(path: name)
       // A fresh copy, so a directory pulled twice does not land inside the first copy.
       try? files.removeItem(at: destination)
+      try await copy(source: remoteSpec(remote), destination: destination.path, timeout: timeout) {
+        // Partial data (R-1101): what had landed when the copy was stopped; it is left in place.
+        [
+          "bytesCopied": .number(Double(Self.bytes(at: destination))),
+          "path": .string(destination.path),
+        ]
+      }
+      return FileTransferResult(bytes: Self.bytes(at: destination), path: destination.path)
     }
-    try await copy(source: remoteSpec(remote), destination: destination.path, timeout: timeout) {
-      // Partial data (R-1101): what had landed when the copy was stopped; it is left in place.
-      [
-        "bytesCopied": .number(Double(Self.bytes(at: destination))),
-        "path": .string(destination.path),
-      ]
+    var isDirectory: ObjCBool = false
+    let into =
+      files.fileExists(atPath: local.path, isDirectory: &isDirectory)
+      && isDirectory.boolValue
+    let requested = into ? local.appending(path: name) : local
+    let destination =
+      try policy?.check(requested.path, field: "local", access: .write)
+      ?? URL(filePath: PathPolicy.canonical(requested.path))
+    let parentPath = destination.deletingLastPathComponent().path
+    let finalName = destination.lastPathComponent
+    let parent = open(parentPath, O_RDONLY | O_DIRECTORY | O_NOFOLLOW_ANY | O_CLOEXEC)
+    guard parent >= 0 else {
+      throw VMLabError.invalidRequest(
+        field: "local",
+        reason: "\(parentPath) is not an existing directory reached without a symlink",
+        hint: "Pull into an existing directory, giving its real path.")
     }
+    defer { close(parent) }
+    var info = stat()
+    if fstatat(parent, finalName, &info, AT_SYMLINK_NOFOLLOW) == 0,
+      info.st_mode & S_IFMT == S_IFDIR
+    {
+      throw VMLabError.invalidRequest(
+        field: "local", reason: "\(destination.path) already exists as a directory",
+        hint: "Pull to a new path, or into the directory that should receive the copy.")
+    }
+    let staging = pulledDirectory.appending(path: ".staging-\(UUID().uuidString)")
+    try Self.createDirectory(staging)
+    let staged = staging.appending(path: finalName)
+    var keepStaging = false
+    defer { if !keepStaging { try? files.removeItem(at: staging) } }
+    do {
+      try await copy(source: remoteSpec(remote), destination: staged.path, timeout: timeout) {
+        [
+          "bytesCopied": .number(Double(Self.bytes(at: staged))), "path": .string(staged.path),
+        ]
+      }
+    } catch {
+      // A timeout's partial data stays in the staging folder its refusal names.
+      keepStaging = error.code == .timeout
+      throw error
+    }
+    try Self.move(staged, into: parent, name: finalName, shown: destination.path)
     return FileTransferResult(bytes: Self.bytes(at: destination), path: destination.path)
+  }
+
+  static func createDirectory(_ url: URL) throws(VMLabError) {
+    do {
+      try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+    } catch {
+      throw VMLabError(
+        code: .internal, message: "Cannot create \(url.path)",
+        hint: "Check that the VM directory is writable.", data: ["error": .string("\(error)")])
+    }
+  }
+
+  /// Renames `source` to `name` in the directory `parent`, replacing a file or symlink there and
+  /// never following one; across volumes, copies it in with `openat(O_NOFOLLOW)`.
+  static func move(_ source: URL, into parent: Int32, name: String, shown: String)
+    throws(VMLabError)
+  {
+    if renameat(AT_FDCWD, source.path, parent, name) == 0 { return }
+    var code = errno
+    if code == EXDEV {
+      code = copyTree(source.path, into: parent, name: name)
+      if code == 0 { return }
+    }
+    throw VMLabError.invalidRequest(
+      field: "local", reason: "cannot write \(shown): \(String(cString: strerror(code)))",
+      hint: "Pull to a new path in a directory you can write.")
+  }
+
+  /// Copies the file or directory at `source` to `name` in `parent` without following a symlink
+  /// on the destination side; 0, or the errno that stopped it.
+  static func copyTree(_ source: String, into parent: Int32, name: String) -> Int32 {
+    var info = stat()
+    guard lstat(source, &info) == 0 else { return errno }
+    switch info.st_mode & S_IFMT {
+    case S_IFDIR:
+      guard mkdirat(parent, name, 0o755) == 0 else { return errno }
+      let child = openat(parent, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+      guard child >= 0 else { return errno }
+      defer { close(child) }
+      let entries = (try? FileManager.default.contentsOfDirectory(atPath: source)) ?? []
+      for entry in entries {
+        let code = copyTree(source + "/" + entry, into: child, name: entry)
+        if code != 0 { return code }
+      }
+      return 0
+    case S_IFREG:
+      var existing = stat()
+      if fstatat(parent, name, &existing, AT_SYMLINK_NOFOLLOW) == 0 {
+        guard unlinkat(parent, name, 0) == 0 else { return errno }
+      }
+      let output = openat(
+        parent, name, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o644)
+      guard output >= 0 else { return errno }
+      defer { close(output) }
+      let input = open(source, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+      guard input >= 0 else { return errno }
+      defer { close(input) }
+      return fcopyfile(input, output, nil, copyfile_flags_t(COPYFILE_DATA)) == 0 ? 0 : errno
+    default:
+      return 0  // scp makes no links or devices; nothing else is copied.
+    }
   }
 
   /// Runs scp; on a timeout the refusal's `data` adds what `partial` reports.

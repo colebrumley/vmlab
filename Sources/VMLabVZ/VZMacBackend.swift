@@ -186,7 +186,8 @@ public struct VZMacBackend: Backend {
     let tartConfig = try TartVMConfig.read(from: clone.directory)
     let dir = store.directory(of: record.id)
     // VZ refuses to start with a missing shared directory; say which field instead.
-    try SharedDirSpec.of(record)?.checkHostDirectory(vmDirectory: dir)
+    try SharedDirSpec.of(record)?.checkHostDirectory(
+      vmDirectory: dir, policy: PathPolicy.load(home: store.home))
     let config = VZRunnerConfig.macOS(
       record: record, clone: clone, config: tartConfig,
       segmentAttachSocket: record.segment.map {

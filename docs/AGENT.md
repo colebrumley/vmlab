@@ -123,6 +123,15 @@ Every `vm_serial` and `vm_computer` result tells you how to continue: `vm_serial
 `offset` to pass as `since` next time, so you read only new text; `vm_computer screenshot` returns
 an `id` to pass as `diffFrom`, so the next one returns only the region that changed.
 
+**Host paths.** vmlab reads host files you name (`vm_file push`, `images register`, `boot`, disk
+images and ROMs in `extra.qemuArgs`) under your home, `/tmp` or `$TMPDIR`. It writes them
+(`vm_file pull`'s `local`, a `share.host` directory, which the guest writes too, and QEMU's logs,
+traces, chardev files and writable disks) only under `/tmp`, `$TMPDIR` or `~/vmlab-files` (made
+when first used), or folders the owner lists. A dotfile or dot-directory in the home (`~/.zshrc`,
+`~/.ssh`), `~/Library` and `VMLAB_HOME` are never written. A refusal is `invalid_request` naming
+the path, why, and the folders you may write; pull into one of those, or omit `local` to land in
+the VM's `pulled/`.
+
 ## Checkpoint discipline
 
 Checkpoint before every risky step: before a package upgrade, a config change you are not sure
@@ -249,9 +258,12 @@ not `-device=...`), in QEMU's `key=value,...` form (`,,` is a literal comma; no 
 - **Another serial port:** vmlab keeps `-serial` (it is `vm_serial`'s console). Add
   `["-chardev", "socket,id=s1,path=/tmp/s1.sock,server=on,wait=off", "-device",
   "pci-serial,chardev=s1"]` (`isa-serial` on x86_64), or a `virtconsole` on a virtio-serial bus.
-- **Host paths** (`file=`, `path=`, `-D`, `-cdrom`, `-trace file=`, ...) must be absolute, under
-  your home or `/tmp`, outside `VMLAB_HOME`, and not an existing unix socket; images' backing files
-  are held to the same rule.
+- **Host paths** (`file=`, `path=`, `-D`, `-cdrom`, `-trace file=`, ...) must be absolute, outside
+  `VMLAB_HOME`, and not an existing unix socket. A path QEMU only reads (`-cdrom`, `romfile=`,
+  `-device loader,file=`, a disk with `readonly=on` or `snapshot=on`, a backing file) may be under
+  your home or `/tmp`; a path it writes (`-D`, `-trace file=`, chardev `path=` and `logfile=`,
+  sockets it creates, a writable disk, `-virtfs`/`-fsdev` directories) only under `/tmp`,
+  `$TMPDIR` or `~/vmlab-files`, never a home dotfile or `~/Library`.
 - **Refused:** monitors (`-monitor`, `-qmp`, `-mon`, `mon:`), `-incoming`, `-add-fd`,
   `-sandbox`, `-readconfig`, `-set`, `exec:` and `cmd:`, `fd=`/`script=`/`helper=`/`smb=` keys,
   `tap`, `bridge` and `vmnet-*` netdevs, and what vmlab owns: `-smp` and `-m` (use `resources`),

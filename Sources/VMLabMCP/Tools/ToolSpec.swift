@@ -238,7 +238,10 @@ enum Schema {
                 + "console; add -chardev plus -device pci-serial), -incoming, -add-fd, -set, "
                 + "-readconfig, exec:/mon:/cmd:, fd/script/helper keys, tap/bridge/vmnet; "
                 + "-plugin, -semihosting and passthrough devices need the owner's allowHostCode. "
-                + "Host paths must be absolute, under the home or /tmp, and outside VMLAB_HOME."
+                + "Host paths must be absolute and outside VMLAB_HOME; paths QEMU only reads "
+                + "(-cdrom, romfile=, readonly=on disks) may be under the home or /tmp, paths it "
+                + "writes (-D, -trace file=, chardev path=, writable disks, shared dirs) only "
+                + "under /tmp, $TMPDIR or ~/vmlab-files (never a home dotfile or ~/Library)."
             )
           ], description: "Engine-specific additions."),
         "provision": object(
@@ -258,7 +261,9 @@ enum Schema {
         "share": object(
           [
             "host": string(
-              "Absolute host path of an existing directory under your home or /tmp. Omitted: the VM's own shared/ "
+              "Absolute host path of an existing directory under /tmp, $TMPDIR or ~/vmlab-files "
+                + "(the guest writes it; never the home itself, a home dotfile or ~/Library). "
+                + "Omitted: the VM's own shared/ "
                 + "directory (vm_inspect endpoints.share)."),
             "guest": string(
               "Absolute guest path it is mounted at. A macOS guest always mounts it at "

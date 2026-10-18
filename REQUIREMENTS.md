@@ -410,7 +410,8 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   `-smp`/`-m`, `-accel`, process options, `-snapshot`/`-loadvm`, `-incoming`, `-add-fd`,
   `-sandbox`, `-readconfig`, `-set`, Xen; `exec:`, `mon:` or `cmd:` in a value; host
   fd/script/helper/smb keys; tap, bridge, vmnet, l2tpv3, vde netdevs; `dbus-vmstate` and remote
-  objects; types off an option's list; and host paths outside the R-1102 path policy, inside
+  objects; types off an option's list; and host paths outside the R-1102 path policy (paths QEMU
+  writes held to its write roots), inside
   `VMLAB_HOME` or naming an existing unix socket, all `invalid_request`. The owner's
   `"allowHostCode": true` in `VMLAB_HOME/config.json` (never a tool argument) additionally permits
   `-plugin`, `-semihosting`, `-semihosting-config`, passthrough devices (`usb-host`, `vfio-*`,
@@ -871,8 +872,14 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   **Verify:** unit tests with fake sockets that stop answering.
 
 - [x] **R-1102 Security review of the tool surface**
-  Paths in `vm_file`, `vm_memory_dump`, `images register` and `shared_dir` are canonicalised and
-  must be under the user's home or `/tmp` unless `allowAnyPath` is set in `~/.vmlab/config.json`;
+  Paths in `vm_file`, `vm_memory_dump`, `images register` and `shared_dir` are canonicalised.
+  A path vmlab or QEMU only reads must be under the user's home, `/tmp` or `$TMPDIR`; a path it
+  writes (`vm_file pull`'s `local`, a share's host directory, which the guest writes, and the
+  outputs and writable disks of `extra.qemuArgs`) only under `/tmp`, `$TMPDIR`, `~/vmlab-files`
+  (created on demand) or, instead of that folder, the `writeRoots` the owner lists in
+  `~/.vmlab/config.json`. `allowAnyPath` there lifts both sets of roots, but a write to a
+  dotfile or dot-directory under the home, to `~/Library` or into `VMLAB_HOME` is always
+  refused, and a pull is renamed into place so a symlink planted after the check is not followed;
   `extra.qemuArgs` keeps its option checks (R-306) and its host paths follow the same policy; `vm_introspect raw` keeps its allowlist; no tool executes a
   host shell with model-supplied strings unquoted (all host subprocesses use argument arrays).
   **Verify:** unit tests for the path policy and a grep test that no `Process` in the tree is
@@ -1112,7 +1119,7 @@ six 4 GB guests with the default reserve; macOS 26.6 → VZ save/restore APIs pr
 
 ```
 ~/.vmlab/                      (VMLAB_HOME)
-  config.json                  reserveGB, parallelStarts, allowAnyPath, ignoreMemoryPressure, allowHostCode, defaults
+  config.json                  reserveGB, parallelStarts, allowAnyPath, ignoreMemoryPressure, allowHostCode, writeRoots, defaults
   host-facts.json              slow probe results
   board.json                   session board (R-002; never committed)
   images/<name>/               image.json, disk.(raw|qcow2), kernel/, checksums
@@ -1142,6 +1149,7 @@ six 4 GB guests with the default reserve; macOS 26.6 → VZ save/restore APIs pr
 | Largest CPUs / memory / disk a request may ask for | 256 / 4096 GB / 65536 GB (`ResourceLimits.maxCPUs`, `maxMemoryGB`, `maxDiskGB`; more is `invalid_request`) |
 | Memory reserve kept free on the host | 4 GB (after every guest on the host, from any `VMLAB_HOME`; also against the host's available memory) |
 | Host memory pressure at which a start is refused | `warn` (`kern.memorystatus_vm_pressure_level` ≥ 2); off with `VMLAB_IGNORE_MEMORY_PRESSURE=1` or `ignoreMemoryPressure: true` in `config.json` (owner only) |
+| Host folders a tool may write (`vm_file pull`, `share.host`, QEMU outputs) | `/tmp`, `$TMPDIR`, `~/vmlab-files` (or the owner's `writeRoots` in `config.json` instead of the last); never a home dotfile, `~/Library` or `VMLAB_HOME` |
 | Concurrent starts | 4 |
 | macOS guests running | 2 (Apple's limit) |
 | Boot timeout until SSH (Linux / macOS / TCG) | 180 s / 300 s / 900 s |
