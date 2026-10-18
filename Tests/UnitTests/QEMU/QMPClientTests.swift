@@ -62,6 +62,24 @@ actor ScriptedQMPTransport: QMPTransport {
     .deletingLastPathComponent().deletingLastPathComponent().appending(
       path: "Fixtures/qmp/boot.jsonl")
 
+  /// BH-5: a QMP greeting whose version numbers are not small integers trapped in `Int(_:)`;
+  /// such a part reads as 0.
+  @Test func qmpGreetingWithHugeVersionDoesNotTrap() async {
+    await #expect(processExitsWith: .success) {
+      let qemu: JSONValue = .object([
+        "major": .number(1e300), "minor": .number(-1e300), "micro": .number(.infinity),
+      ])
+      _ = QMPClient.parseGreeting(["version": .object(["qemu": qemu])])
+      _ = QMPClient.parseGreeting([
+        "version": .object(["qemu": .object(["major": .number(.nan)])])
+      ])
+    }
+    let qemu: JSONValue = .object([
+      "major": .number(1e300), "minor": .number(1), "micro": .number(2),
+    ])
+    #expect(QMPClient.parseGreeting(["version": .object(["qemu": qemu])]).version == "0.1.2")
+  }
+
   @Test func fixtureTranscript() async throws {
     let transport = ScriptedQMPTransport(
       transcript: try String(contentsOf: Self.transcript, encoding: .utf8))

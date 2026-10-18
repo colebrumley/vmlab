@@ -356,7 +356,8 @@ public actor QMPClient {
     var version = ""
     if case .object(let v) = qmp["version"], case .object(let q) = v["qemu"] {
       let parts = ["major", "minor", "micro"].map { key -> String in
-        if case .number(let n) = q[key] { return String(Int(n)) }
+        // The greeting comes from the QEMU process; a part that is not an exact Int reads 0.
+        if case .number(let n) = q[key], let part = Int(exactly: n) { return String(part) }
         return "0"
       }
       version = parts.joined(separator: ".")
