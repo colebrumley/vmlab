@@ -1,0 +1,32 @@
+{
+	name=debian
+	ip_address=192.168.64.7
+	hw_address=1,2:a:3b:4c:5d:6e
+	identifier=1,2:a:3b:4c:5d:6e
+	lease=0x6acd059d
+}
+{
+	name=debian
+	ip_address=192.168.64.9
+	hw_address=1,2:a:3b:4c:5d:6e
+	identifier=1,2:a:3b:4c:5d:6e
+	lease=0x6acd1000
+}
+{
+	name=ubuntu
+	ip_address=192.168.64.4
+	hw_address=ff,f1:f5:dd:7f:0:2:0:0:ab:11:ea:e5:4a:d7:7b:f4:7a:61
+	identifier=ff,f1:f5:dd:7f:0:2:0:0:ab:11:ea:e5:4a:d7:7b:f4:7a:61
+	lease=0x6accf5df
+}
+{
+	name=old
+	ip_address=192.168.64.3
+	hw_address=1,52:54:0:a:c:1
+	identifier=1,52:54:0:a:c:1
+	lease=0x5f000000
+}
+{
+	name=broken
+	hw_address=1,52:54:0:a:c:2
+}

@@ -47,7 +47,7 @@ import VMLabVZ
 
     let launcher = VZRunnerLauncher(runnerPath: Self.runner)
     var handle: VZRunnerHandle? = try await launcher.launch(
-      vmDirectory: dir, config: .linuxEFI(record: record, vmDirectory: dir))
+      vmDirectory: dir, config: try .linux(record: record, vmDirectory: dir, seed: false))
     let pid = try #require(handle?.pid)
     defer {
       kill(pid, SIGKILL)

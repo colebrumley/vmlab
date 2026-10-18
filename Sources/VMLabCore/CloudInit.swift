@@ -88,6 +88,10 @@ public struct CloudInitConfig: Codable, Sendable, Hashable {
   public var segment: SegmentNIC?
   public var mounts: [GuestMount]
   public var console: ConsoleDevice
+  /// MAC of the NAT NIC when the host finds the guest's address by MAC (VZ reads vmnet's
+  /// `dhcpd_leases`): `network-config` then matches it and sets `dhcp-identifier: mac`, because
+  /// systemd-networkd's default DUID client identifier hides the MAC from the lease file.
+  public var dhcpIdentifierMAC: String?
   /// User-supplied `user-data`, merged after ours (cloud-config, shell script, boothook or
   /// include). Its cloud-config keys win; lists are appended.
   public var extraUserData: String?
@@ -95,7 +99,8 @@ public struct CloudInitConfig: Codable, Sendable, Hashable {
   public init(
     instanceID: String, hostname: String, user: String, sshPublicKey: String,
     packages: [String] = [], gui: GUIStack? = nil, segment: SegmentNIC? = nil,
-    mounts: [GuestMount] = [], console: ConsoleDevice = .ttyAMA0, extraUserData: String? = nil
+    mounts: [GuestMount] = [], console: ConsoleDevice = .ttyAMA0,
+    dhcpIdentifierMAC: String? = nil, extraUserData: String? = nil
   ) {
     self.instanceID = instanceID
     self.hostname = hostname
@@ -106,6 +111,7 @@ public struct CloudInitConfig: Codable, Sendable, Hashable {
     self.segment = segment
     self.mounts = mounts
     self.console = console
+    self.dhcpIdentifierMAC = dhcpIdentifierMAC
     self.extraUserData = extraUserData
   }
 }
@@ -222,32 +228,28 @@ public enum CloudInit {
     ]).render()
   }
 
-  /// The `network-config` (version 2) file, only when a segment NIC needs a static address.
+  /// The `network-config` (version 2) file, only when a segment NIC needs a static address or
+  /// the NAT NIC must identify itself to DHCP by MAC.
   public static func networkConfig(_ config: CloudInitConfig) -> String? {
-    guard let segment = config.segment else { return nil }
-    return YAML.map([
-      ("version", 2),
-      (
-        "ethernets",
-        .map([
-          (
-            "nat0",
-            .map([
-              ("match", .map([("macaddress", .string(segment.primaryMAC.lowercased()))])),
-              ("dhcp4", true),
-            ])
-          ),
-          (
-            "seg0",
-            .map([
-              ("match", .map([("macaddress", .string(segment.mac.lowercased()))])),
-              ("dhcp4", false),
-              ("addresses", .list([.string("\(segment.address)/\(segment.prefixLength)")])),
-            ])
-          ),
-        ])
-      ),
-    ]).render()
+    guard let primary = config.dhcpIdentifierMAC ?? config.segment?.primaryMAC else { return nil }
+    var nat: [(String, YAML)] = [
+      ("match", .map([("macaddress", .string(primary.lowercased()))])),
+      ("dhcp4", true),
+    ]
+    if config.dhcpIdentifierMAC != nil { nat.append(("dhcp-identifier", "mac")) }
+    var ethernets: [(String, YAML)] = [("nat0", .map(nat))]
+    if let segment = config.segment {
+      ethernets.append(
+        (
+          "seg0",
+          .map([
+            ("match", .map([("macaddress", .string(segment.mac.lowercased()))])),
+            ("dhcp4", false),
+            ("addresses", .list([.string("\(segment.address)/\(segment.prefixLength)")])),
+          ])
+        ))
+    }
+    return YAML.map([("version", 2), ("ethernets", .map(ethernets))]).render()
   }
 
   /// Writes the seed files into `directory` and builds `iso` from them with `hdiutil makehybrid`.
