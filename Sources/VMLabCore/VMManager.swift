@@ -18,6 +18,8 @@ public actor VMManager {
   public nonisolated let readiness: any GuestReadiness
   /// Runs `ssh-keygen` for a new VM's key pair.
   public nonisolated let keygen: any CommandRunning
+  /// What a first start does once SSH answers (R-1001: `provision`).
+  public nonisolated let provisioner: any GuestProvisioning
 
   private var busy: Set<String> = []
   private var waiters: [String: [CheckedContinuation<Void, Never>]] = [:]
@@ -25,12 +27,14 @@ public actor VMManager {
   public init(
     store: Store, backends: BackendRegistry = Backends.shared,
     readiness: any GuestReadiness = SSHReadiness(), keygen: any CommandRunning = ProcessRunner(),
+    provisioner: any GuestProvisioning = SSHProvisioner(),
     manifests: (any GuestManifestTaker)? = nil
   ) {
     self.store = store
     self.backends = backends
     self.readiness = readiness
     self.keygen = keygen
+    self.provisioner = provisioner
     self.manifests = manifests
   }
 
@@ -88,18 +92,20 @@ public actor VMManager {
   /// engine, leaving the VM `suspended`; starting a suspended VM restores that checkpoint.
   @discardableResult
   public func perform(
-    _ action: LifecycleAction, on vm: String
+    _ action: LifecycleAction, on vm: String, force: Bool = false
   ) async throws(VMLabError) -> VMRecord? {
-    try await run(action, on: vm).record
+    try await run(action, on: vm, force: force).record
   }
 
   /// `perform`, with the warnings the action produced. A start of a VM granted `exec_ssh` records
   /// `running` with its runtime as soon as the engine is up (so a crash of this process leaves a
   /// record to reattach to), then waits, still holding the VM's lock, until SSH answers or the
   /// boot timeout (Appendix G) passes; a guest that never answers stays `running` with an
-  /// `ssh_unreachable` warning.
+  /// `ssh_unreachable` warning. `destroy` refuses (`invalid_request`, field `force`) while
+  /// another VM's backing chain reads a file of this one, unless `force`, which destroys it all
+  /// the same and warns that those VMs can no longer boot.
   public func run(
-    _ action: LifecycleAction, on vm: String
+    _ action: LifecycleAction, on vm: String, force: Bool = false
   ) async throws(VMLabError) -> Outcome {
     let id = try store.find(vm).id
     await acquire(id)
@@ -107,12 +113,38 @@ public actor VMManager {
     let record = try store.load(id: id)
     let target = try Lifecycle.transition(action, from: record.state, vm: record.id)
     let backend = try backends.backend(for: record.profile)
+    var warnings: [String] = []
+    if action == .destroy {
+      let dependents = try dependents(of: record)
+      if !dependents.isEmpty {
+        let names = dependents.map { "\($0.name) (\($0.id))" }.joined(separator: ", ")
+        guard force else {
+          throw VMLabError(
+            code: .invalidRequest,
+            message: "VM \(id)'s disk backs the disk of \(names)",
+            hint: "Destroy those VMs first, or pass force: true to destroy this one anyway "
+              + "(they will no longer boot).",
+            data: [
+              "field": .string("force"), "reason": .string("other VMs depend on this disk"),
+              "vm": .string(id), "dependents": .array(dependents.map { .string($0.id) }),
+            ])
+        }
+        warnings.append("destroyed with force: \(names) read its disk and can no longer boot")
+      }
+    }
     do {
       let updated = try await apply(action, target: target, to: record, with: backend)
-      var warnings: [String] = []
-      if action == .start, let updated, let warning = await waitForSSH(updated, backend: backend) {
-        warnings.append(warning)
-        if warning != Self.noEndpoint(id) { await log(id, warning, level: .warning) }
+      if action == .start, let updated {
+        let ready = await waitForSSH(updated, backend: backend)
+        if let warning = ready.warning {
+          warnings.append(warning)
+          if warning != Self.noEndpoint(id) { await log(id, warning, level: .warning) }
+        } else if let target = ready.target {
+          for warning in await provisioner.provision(updated, target: target) {
+            warnings.append(warning)
+            await log(id, warning, level: .warning)
+          }
+        }
       }
       return Outcome(record: updated, warnings: warnings)
     } catch {
@@ -162,16 +194,21 @@ public actor VMManager {
     return updated
   }
 
-  /// Nil when the guest answered SSH or is not one to wait for (no `exec_ssh`, networking off);
-  /// otherwise the warning.
-  private func waitForSSH(_ record: VMRecord, backend: any Backend) async -> String? {
-    guard record.features.contains(.execSSH), record.network.mode != .disabled else { return nil }
+  /// The target when the guest answered SSH; neither when it is not one to wait for (no
+  /// `exec_ssh`, networking off); otherwise the warning.
+  private func waitForSSH(
+    _ record: VMRecord, backend: any Backend
+  ) async -> (target: SSHTarget?, warning: String?) {
+    guard record.features.contains(.execSSH), record.network.mode != .disabled else {
+      return (nil, nil)
+    }
     let timeout = ResourceLimits.bootTimeout(profile: record.profile, os: record.guest.os)
     guard let endpoint = await backend.sshEndpoint(record, timeout: timeout) else {
-      return Self.noEndpoint(record.id)
+      return (nil, Self.noEndpoint(record.id))
     }
     let target = SSHTarget(record: record, endpoint: endpoint, store: store)
-    return await readiness.wait(for: target, timeout: timeout)
+    if let warning = await readiness.wait(for: target, timeout: timeout) { return (nil, warning) }
+    return (target, nil)
   }
 
   static func noEndpoint(_ id: String) -> String {

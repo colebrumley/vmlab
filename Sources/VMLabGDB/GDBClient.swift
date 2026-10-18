@@ -78,6 +78,7 @@ public actor GDBClient {
   }
 
   public func close() async {
+    closedError = closedError ?? .connectionClosed
     await transport.close()
     reader?.cancel()
   }
@@ -87,6 +88,9 @@ public actor GDBClient {
   public func onDeadPeer(_ handler: @escaping @Sendable (String) async -> Void) {
     deadPeerHandler = handler
   }
+
+  /// True once the stub closed the connection (or `close` ran); every later command fails.
+  public var isClosed: Bool { closedError != nil }
 
   // MARK: Queries
 
@@ -164,6 +168,11 @@ public actor GDBClient {
   public func halt(timeout: Duration) async throws -> StopReason {
     if state == .running { try await interrupt() }
     return try await waitForStop(timeout: timeout)
+  }
+
+  /// `Hg<thread>`: the thread later `g`, `p` and `m` packets act on.
+  public func selectThread(_ thread: String) async throws {
+    try await exclusive { try await self.expectOK(GDBCommand.selectThread(thread)) }
   }
 
   // MARK: Registers

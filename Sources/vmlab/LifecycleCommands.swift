@@ -16,6 +16,7 @@ struct CreateCommand: ToolCommand {
   @Option(help: "A unique name for the VM; defaults to its id.") var name: String?
   @Flag(name: .customLong("no-start"), help: "Create the VM but do not start it.")
   var noStart = false
+  @Flag(help: "Allow an image pull over 10 GB (a macOS image).") var confirm = false
 
   var json: Bool { request.json }
 
@@ -23,6 +24,7 @@ struct CreateCommand: ToolCommand {
     var object: [String: JSONValue] = ["requirements": try request.requirementsValue()]
     if let name { object["name"] = .string(name) }
     if noStart { object["autostart"] = .bool(false) }
+    if confirm { object["confirm"] = .bool(true) }
     if request.allowUnverified { object["allowUnverified"] = .bool(true) }
     return .object(object)
   }
@@ -124,4 +126,23 @@ struct DestroyCommand: LifecycleCommand {
   @Flag(help: "Print the result object as JSON.") var json = false
 
   var extra: [String: JSONValue] { force ? ["force": .bool(true)] : [:] }
+}
+
+struct CloneCommand: LifecycleCommand {
+  static let configuration = CommandConfiguration(
+    commandName: "clone",
+    abstract: "Make a new VM from a VM's current disk or a checkpoint (vm_lifecycle clone).")
+  static let action = "clone"
+  @Argument(help: "The source VM's id or name.") var vm: String
+  @Option(help: "The new VM's name; defaults to its id.") var name: String?
+  @Option(help: "A checkpoint of the source to clone from (default: its current disk).")
+  var from: String?
+  @Flag(help: "Print the result object as JSON.") var json = false
+
+  var extra: [String: JSONValue] {
+    var object: [String: JSONValue] = [:]
+    if let name { object["name"] = .string(name) }
+    if let from { object["from"] = .string(from) }
+    return object
+  }
 }

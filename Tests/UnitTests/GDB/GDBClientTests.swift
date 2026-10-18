@@ -8,6 +8,11 @@ import VMLabGDB
   /// A QEMU-like arm64 stub: serves `target.xml` and its includes in small `qXfer` chunks, and a
   /// `g` reply with x0 = 0x1000, x1..x30 = n * 0x10, sp = 0xffff00008000fff0, pc = 0x40080000.
   static func arm64Stub(chunk: Int = 100) throws -> FakeGDBStub {
+    FakeGDBStub(handler: try arm64Handler(chunk: chunk))
+  }
+
+  /// The answers of `arm64Stub`, for stubs on other transports.
+  static func arm64Handler(chunk: Int = 100) throws -> FakeGDBStub.Handler {
     let annexes = [
       "target.xml": try GDBFixtures.text("target.xml"),
       "aarch64-core.xml": try GDBFixtures.text("aarch64-core.xml"),
@@ -19,7 +24,7 @@ import VMLabGDB
     g += GDBFixtures.littleEndian(0x4008_0000)
     g += GDBFixtures.littleEndian(0x3c5, bytes: 4)
     let registers = g
-    return FakeGDBStub { packet in
+    return { packet in
       if packet.hasPrefix("qSupported") {
         return ["PacketSize=1000;qXfer:features:read+;vContSupported+"]
       }

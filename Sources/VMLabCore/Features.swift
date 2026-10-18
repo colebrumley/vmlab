@@ -396,6 +396,8 @@ public struct Requirements: Codable, Sendable, Hashable {
   public var image: String?
   public var boot: BootSpec?
   public var extra: ExtraSpec?
+  /// First-boot packages, user-data and commands (R-1001).
+  public var provision: ProvisionSpec?
   /// A host directory to mount in the guest (R-404); implies `shared_dir`.
   public var share: SharedDirSpec?
 
@@ -404,7 +406,7 @@ public struct Requirements: Codable, Sendable, Hashable {
     guest: GuestSpec, require: [Feature] = [], prefer: [Feature] = [],
     resources: ResourceSpec = ResourceSpec(), network: NetworkSpec = NetworkSpec(),
     image: String? = nil, boot: BootSpec? = nil, extra: ExtraSpec? = nil,
-    share: SharedDirSpec? = nil
+    provision: ProvisionSpec? = nil, share: SharedDirSpec? = nil
   ) throws(VMLabError) {
     self.guest = guest
     self.require = require
@@ -414,12 +416,13 @@ public struct Requirements: Codable, Sendable, Hashable {
     self.image = image
     self.boot = boot
     self.extra = extra
+    self.provision = provision
     self.share = share
     try validate()
   }
 
   enum CodingKeys: String, CodingKey {
-    case guest, require, prefer, resources, network, image, boot, extra, share
+    case guest, require, prefer, resources, network, image, boot, extra, provision, share
   }
 
   public init(from decoder: any Decoder) throws {
@@ -432,6 +435,7 @@ public struct Requirements: Codable, Sendable, Hashable {
     image = try c.decodeIfPresent(String.self, forKey: .image)
     boot = try c.decodeIfPresent(BootSpec.self, forKey: .boot)
     extra = try c.decodeIfPresent(ExtraSpec.self, forKey: .extra)
+    provision = try c.decodeIfPresent(ProvisionSpec.self, forKey: .provision)
     share = try c.decodeIfPresent(SharedDirSpec.self, forKey: .share)
     try validate()
   }
@@ -524,6 +528,14 @@ public struct Requirements: Codable, Sendable, Hashable {
     if let extra, !extra.qemuArgs.isEmpty {
       named.append((.customDevices, "extra.qemuArgs"))
     }
+    if let provision, !provision.isEmpty {
+      // Linux provisioning is the seed's; macOS commands go over SSH.
+      if guest.os == .macos {
+        if !provision.runCommands.isEmpty { named.append((.execSSH, "provision.runCommands")) }
+      } else {
+        named.append((.cloudInit, "provision"))
+      }
+    }
     if share != nil { named.append((.sharedDir, "share")) }
     return named
   }
@@ -573,6 +585,7 @@ public struct Requirements: Codable, Sendable, Hashable {
       }
     }
     try extra?.validate()
+    try provision?.validate(guest: guest)
     try share?.validate()
     try checkContradictions()
   }
