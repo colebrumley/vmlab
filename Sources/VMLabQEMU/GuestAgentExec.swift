@@ -6,7 +6,8 @@ import VMLabCore
 /// process group), then `guest-exec-status` polled until it exits. The agent runs as root, so
 /// root is the "login user". It needs no guest network and works before sshd is up. At the
 /// deadline a second `guest-exec` runs `RemoteShell.kill` on the group, and the refusal is
-/// `timeout` with whatever output the agent returns once the group is gone.
+/// `timeout` with whatever output the agent returns once the group is gone. A status poll that
+/// fails kills the group the same way before its error is returned.
 public struct GuestAgentExecChannel: ExecChannel {
   public static let loginUser = "root"
   /// The environment the command starts with (`guest-exec` otherwise inherits the agent's).
@@ -49,7 +50,14 @@ public struct GuestAgentExecChannel: ExecChannel {
         cancelled = true
         break
       }
-      let reply = try await agent.execute("guest-exec-status", arguments: ["pid": pid])
+      let reply: JSONValue
+      do {
+        reply = try await agent.execute("guest-exec-status", arguments: ["pid": pid])
+      } catch let error as VMLabError {
+        // The command is still running in the guest: kill its group before reporting.
+        _ = await Self.kill(job: job, pid: pid, user: request.user, agent: agent, reap: reapTimeout)
+        throw error
+      }
       if reply["exited"] == .bool(true), case .object(let object) = reply {
         status = object
         break

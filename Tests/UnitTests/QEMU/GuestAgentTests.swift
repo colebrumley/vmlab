@@ -232,6 +232,33 @@ final class FakeAgent: Sendable {
     #expect(killed.withLock { $0 })
   }
 
+  /// CX-9b: a status poll that fails (the agent errors or goes quiet) still kills the job's group
+  /// before the error reaches the caller, so the guest command does not keep running.
+  @Test func aFailedStatusPollStillKillsTheGroup() async throws {
+    let killed = Mutex(false)
+    let fake = FakeAgent { command, arguments in
+      switch command {
+      case "guest-exec":
+        let script = arguments["arg"]?.arrayValue?.last?.stringValue ?? ""
+        if script.contains("kill -TERM") { killed.withLock { $0 = true } }
+        return .object(["return": .object(["pid": .number(77)])])
+      case "guest-exec-status":
+        return .object([
+          "error": .object(["class": .string("GenericError"), "desc": .string("boom")])
+        ])
+      default: return .object(["return": .object([:])])
+      }
+    }
+    var (channel, dir) = try Self.channel(fake)
+    channel.reapTimeout = .milliseconds(100)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let error = await #expect(throws: VMLabError.self) {
+      try await channel.run(ExecRequest(command: "sleep 300", timeout: .seconds(30)))
+    }
+    #expect(error?.code == .engineError)
+    #expect(killed.withLock { $0 })
+  }
+
   @Test func bigOutputIsCutWithALog() async throws {
     let big = String(repeating: "a", count: 200 * 1024)
     let fake = FakeAgent { command, _ in
