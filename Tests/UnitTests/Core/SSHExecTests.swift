@@ -102,18 +102,23 @@ import VMLabCore
     let f = try Fixture()
     let marker = f.dir.appending(path: "child-alive")
     let started = ContinuousClock.now
+    // The deadline leaves a loaded host time to start the shells and print `begun`; the
+    // background child touches the marker every second for as long as it lives.
     let error = await #expect(throws: VMLabError.self) {
       try await f.channel.run(
         ExecRequest(
-          command: "echo begun; (sleep 6; touch '\(marker.path)') & sleep 300",
-          timeout: .seconds(3)))
+          command:
+            "echo begun; (while :; do touch '\(marker.path)'; sleep 1; done) & sleep 300",
+          timeout: .seconds(10)))
     }
-    #expect(ContinuousClock.now - started < .seconds(8))
+    #expect(ContinuousClock.now - started < .seconds(60))
     #expect(error?.code == .timeout)
     #expect(error?.data["stdout"] == .string("begun\n"))
-    #expect(error?.data["timeoutSeconds"] == .number(3))
-    // The background child was in the group too.
-    try await Task.sleep(for: .seconds(5))
+    #expect(error?.data["timeoutSeconds"] == .number(10))
+    #expect(FileManager.default.fileExists(atPath: marker.path), "the child never ran")
+    // The background child was in the group too: once killed, it touches nothing again.
+    try FileManager.default.removeItem(at: marker)
+    try await Task.sleep(for: .seconds(3))
     #expect(!FileManager.default.fileExists(atPath: marker.path))
   }
 

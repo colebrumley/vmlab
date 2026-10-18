@@ -91,8 +91,17 @@ public struct ToolProgress: Sendable {
         await step("\(message) (\(elapsed) s)")
       }
     }
-    defer { heartbeat.cancel() }
-    return try await body()
+    let outcome: Result<T, VMLabError>
+    do throws(VMLabError) {
+      outcome = .success(try await body())
+    } catch {
+      outcome = .failure(error)
+    }
+    // A heartbeat already past its sleep would otherwise report after the call ended, out of
+    // order with the caller's next step: wait for it to finish.
+    heartbeat.cancel()
+    await heartbeat.value
+    return try outcome.get()
   }
 
   private final class Counter: Sendable {

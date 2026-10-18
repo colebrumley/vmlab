@@ -229,7 +229,9 @@ public final class SwitchServer: @unchecked Sendable {
       let sent = buffer.withUnsafeBytes { send(fd, $0.baseAddress, count, MSG_DONTWAIT) }
       guard sent < 0 else { continue }
       switch errno {
-      case ECONNREFUSED, ENOENT, ENOTCONN, ECONNRESET, EPIPE, EBADF:
+      // macOS reports a closed peer once, as ECONNRESET; later sends on the now unconnected
+      // socket fail with EDESTADDRREQ.
+      case ECONNREFUSED, ENOENT, ENOTCONN, ECONNRESET, EPIPE, EBADF, EDESTADDRREQ:
         removePort(target)
       default:
         core.countCongested()

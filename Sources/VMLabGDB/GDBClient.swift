@@ -137,7 +137,7 @@ public actor GDBClient {
   public func interrupt() async throws {
     startReader()
     if let error = closedError { throw error }
-    try await transport.send(GDBPacket.interrupt)
+    try await send(GDBPacket.interrupt)
   }
 
   /// Blocks until the target stops and returns why, with the pc resolved. When the target is
@@ -436,13 +436,7 @@ public actor GDBClient {
     var attempts = 0
     while true {
       if let error = closedError { throw error }
-      do {
-        try await transport.send(frame)
-      } catch {
-        // The socket is gone; say so now rather than when the reader gets to its end of file.
-        closedError = closedError ?? .connectionClosed
-        throw error
-      }
+      try await send(frame)
       let event = try await fromPeer("the ack of \(Self.name(payload))") {
         try await self.nextEvent(timeout: self.options.replyTimeout)
       }
@@ -537,6 +531,17 @@ public actor GDBClient {
       current.continuation.resume(returning: event)
     } else {
       events.append(event)
+    }
+  }
+
+  /// Writes to the stub. A write that finds the connection gone closes the client at once: the
+  /// reader may not have seen end of file yet, and `isClosed` must not lag the error.
+  private func send(_ bytes: [UInt8]) async throws {
+    do {
+      try await transport.send(bytes)
+    } catch GDBError.connectionClosed {
+      if closedError == nil { readerEnded(.connectionClosed) }
+      throw GDBError.connectionClosed
     }
   }
 

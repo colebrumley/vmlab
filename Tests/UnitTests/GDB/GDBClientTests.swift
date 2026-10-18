@@ -162,6 +162,22 @@ import VMLabGDB
     #expect(stub.received == ["Z0,1000,4"])
   }
 
+  /// A write that finds the connection gone closes the client, even before the reader has seen
+  /// end of file (the stub's half of a TCP hang-up can arrive in either order).
+  @Test func aFailedWriteClosesTheClient() async throws {
+    final class Unwritable: GDBTransport, @unchecked Sendable {
+      let incoming = AsyncThrowingStream<[UInt8], any Error> { _ in }
+      func send(_ bytes: [UInt8]) async throws { throw GDBError.connectionClosed }
+      func close() async {}
+    }
+    let client = GDBClient(transport: Unwritable())
+    #expect(!(await client.isClosed))
+    await #expect(throws: GDBError.connectionClosed) {
+      try await client.insertBreakpoint(.software, address: 0x1000, kind: 4)
+    }
+    #expect(await client.isClosed)
+  }
+
   @Test func givesUpAfterTooManyNacks() async throws {
     let stub = FakeGDBStub(nackFirst: 10) { _ in ["OK"] }
     let client = GDBClient(transport: stub, options: .init(maxRetransmits: 3))

@@ -24,6 +24,7 @@ import VMLabVZ
     let home: URL
     let store: Store
     let manager: VMManager
+    let registry: BackendRegistry
     let record: VMRecord
 
     var directory: URL { store.directory(of: record.id) }
@@ -41,12 +42,27 @@ import VMLabVZ
   /// Fewer than two macOS guests on the host (Apple's limit, shared by every session).
   static func hostHasRoom() -> Bool {
     let processes = ProcessRunner().run("/bin/ps", ["-Ao", "command"])?.output ?? ""
-    let tartGuests = processes.split(separator: "\n").filter { $0.contains("tart run") }.count
-    let vmlabGuests = Store(home: images.deletingLastPathComponent()).runningGuests().macOS
-    return tartGuests + vmlabGuests < 2
+    var guests = 0
+    for line in processes.split(separator: "\n") {
+      if line.contains("tart run") { guests += 1 }
+      // Any session's vmlab-vz runner of a macOS guest (its config boots `macOS`).
+      guard let range = line.range(of: "vmlab-vz run ") else { continue }
+      let vm = URL(
+        filePath: String(line[range.upperBound...].split(separator: " ").first ?? ""))
+      if let config = try? String(
+        contentsOf: VZRunnerPaths(vmDirectory: vm).config, encoding: .utf8),
+        config.contains("\"macOS\"")
+      {
+        guests += 1
+      }
+    }
+    if guests >= 2 { print("skipping: \(guests) macOS guests already run on this host") }
+    return guests < 2
   }
 
-  static func makeGuest(features: [Feature], suffix: String) async throws -> Guest {
+  static func makeGuest(
+    features: [Feature], suffix: String, provision: ProvisionSpec? = nil
+  ) async throws -> Guest {
     let home = URL(filePath: "/tmp/vmlab-test-\(getpid())-\(suffix)")
     try? FileManager.default.removeItem(at: home)
     try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
@@ -65,10 +81,13 @@ import VMLabVZ
       resources: ResourceSpec(cpus: 4, memoryGB: 8), features: features, requested: features,
       estimatedStartupSeconds: 60)
     let created = try await manager.create(
-      VMRecord(id: "", profile: .vzMacOS, guest: plan.guest, features: [], image: "macos-base"),
+      VMRecord(
+        id: "", profile: .vzMacOS, guest: plan.guest, features: [], image: "macos-base",
+        provision: provision),
       plan: plan)
     return Guest(
-      home: home, store: store, manager: manager, record: try store.load(id: created.id))
+      home: home, store: store, manager: manager, registry: registry,
+      record: try store.load(id: created.id))
   }
 
   /// R-605: the clone boots, its lease is found by the clone's MAC, and `ssh admin@<ip>` with the

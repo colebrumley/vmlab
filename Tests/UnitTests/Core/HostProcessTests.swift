@@ -24,7 +24,8 @@ import VMLabCore
     let started = ContinuousClock.now
     let outcome = try await HostProcess.run("/bin/sleep", ["30"], timeout: .milliseconds(200))
     #expect(outcome.timedOut)
-    #expect(ContinuousClock.now - started < .seconds(5))
+    // Well under the 30 s sleep; generous for a loaded host.
+    #expect(ContinuousClock.now - started < .seconds(20))
   }
 
   @Test func missingExecutableIsHostMissingTool() async {

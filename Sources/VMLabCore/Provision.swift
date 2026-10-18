@@ -138,6 +138,11 @@ public struct ProvisionReport: Codable, Sendable, Hashable {
       ?? steps.first { $0.status == .failed }
   }
 
+  /// Whether the request's own steps (cloud-init or `runCommands`) were collected already.
+  public var hasRequestedSteps: Bool {
+    steps.contains { $0.name == ProvisionStep.cloudInit || $0.name.hasPrefix("runCommands[") }
+  }
+
   public static func url(in vmDirectory: URL) -> URL {
     vmDirectory.appending(path: "provision.json")
   }
@@ -181,7 +186,7 @@ public protocol GuestProvisioning: Sendable {
 /// waits for cloud-init (`cloud-init status --wait`), then reads back the steps the seed's runner
 /// recorded (R-1004); on a macOS guest it runs `provision.runCommands` one by one as the login
 /// user (after R-606's own first-boot steps). Steps go to `<vm>/provision.json` and their output
-/// to `<vm>/provision.log`; a VM that already has a report is not provisioned again.
+/// to `<vm>/provision.log`; a VM whose report already has them is not provisioned again.
 public struct SSHProvisioner: GuestProvisioning {
   /// Runs one command in the guest; `SSHExecChannel` unless a test replaces it.
   public var exec: @Sendable (SSHTarget, ExecRequest) async throws(VMLabError) -> ExecResult
@@ -201,14 +206,17 @@ public struct SSHProvisioner: GuestProvisioning {
 
   public func provision(_ record: VMRecord, target: SSHTarget) async -> [String] {
     let directory = target.vmDirectory
+    // A macOS guest's report already holds the backend's own first-boot steps (R-606: ssh,
+    // authorized_keys, hostname, screen_sharing); the request's steps are added after them.
+    let existing = ProvisionReport.load(from: directory)
     guard let spec = record.provision, !spec.isEmpty,
-      ProvisionReport.load(from: directory) == nil
+      !(existing?.hasRequestedSteps ?? false), existing?.failure == nil
     else { return [] }
     let steps =
       record.guest.os == .macos
       ? await runCommands(spec.runCommands, target: target)
       : await collectCloudInit(spec.runCommands, target: target)
-    let report = ProvisionReport(vm: record.id, steps: steps)
+    let report = ProvisionReport(vm: record.id, steps: (existing?.steps ?? []) + steps)
     do { try report.write(to: directory) } catch {
       return ["provision_failed: cannot write \(ProvisionReport.url(in: directory).path): \(error)"]
     }

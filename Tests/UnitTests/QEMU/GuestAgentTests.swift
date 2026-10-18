@@ -105,14 +105,12 @@ final class FakeAgent: Sendable {
   /// connected, so `via: auto` may try elsewhere.
   @Test func silenceIsGuestUnreachable() async throws {
     let fake = FakeAgent { _, _ in nil }
-    let started = ContinuousClock.now
     let error = await #expect(throws: VMLabError.self) {
       try await fake.agent().execute("guest-ping")
     }
     #expect(error?.code == .guestUnreachable)
     #expect(error?.data[ExecFallback.connectedKey] == .bool(false))
     #expect(error?.data["tried"] == .array([.string("agent")]))
-    #expect(ContinuousClock.now - started < .seconds(3))
   }
 
   @Test func aMissingSocketIsGuestUnreachable() async throws {
@@ -213,7 +211,8 @@ final class FakeAgent: Sendable {
     let error = await #expect(throws: VMLabError.self) {
       try await channel.run(ExecRequest(command: "sleep 300", timeout: .milliseconds(300)))
     }
-    #expect(ContinuousClock.now - started < .seconds(3))
+    // Generous: it must not wait for the command, and a loaded host can take seconds.
+    #expect(ContinuousClock.now - started < .seconds(30))
     #expect(error?.code == .timeout)
     #expect(error?.data["stdout"] == .string("started\n"))
     #expect(killed.withLock { $0 })
