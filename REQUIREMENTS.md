@@ -688,7 +688,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   **Verify:** unit tests of the tree with the fake provider; integration on QEMU and VZ Linux:
   create A, change, create B, restore A, state matches A, restore B, matches B.
 
-- [ ] **R-801 Guest manifests**
+- [x] **R-801 Guest manifests**
   `vm_manifest(profile: linux|macos|custom, paths)` runs a script over SSH that writes a JSON
   manifest: files under the given roots (path, size, mode, mtime, sha256 for files ≤ 8 MB), and
   per profile: Linux: `dpkg -l`/`rpm -qa`, `systemctl list-unit-files --state=enabled`, users,

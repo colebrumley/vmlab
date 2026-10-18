@@ -454,7 +454,7 @@ Take a manifest of the running guest over SSH: files under paths (size, mode, mt
 **Result**
 
 ```
-{ id, path, counts: { files, packages, services, defaults, users, loginItems } }
+{ id, path, profile, counts: { files, packages, services, defaults, users, loginItems, profiles } }
 ```
 
 ## `vm_logs`

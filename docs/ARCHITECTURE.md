@@ -62,6 +62,16 @@ it reports the status, `RemoteShell.collect` fetches what it had not passed on a
 guest's files. `read` returns up to 64 KB of log past the offset (on a UTF-8 boundary), starting a
 reader when this process has none, which is how a job survives a server restart; `wait` polls;
 `kill` runs `RemoteShell.kill` (status 143). `stopReaders()` drops this process's readers.
+`Manifest.swift` (R-801) holds guest manifests: `GuestManifest` (files keyed by path with kind,
+size, octal mode, mtime and sha256 up to 8 MB; packages, services, users and defaults as key →
+value maps; login items and configuration profiles as lists), stored by `Store.saveManifest` at
+`<vm>/manifests/<id>.json` (`m-` and twelve hex digits). `GuestManifests.take` runs
+`ManifestScript` (POSIX `sh`, passed as an argument with stdin closed, `sudo -n` for walks and
+system queries when allowed) over the VM's exec channel: each section is the raw output of one
+command (`stat`, `sha256sum`/`shasum`, `dpkg-query`/`rpm`, `systemctl`, `getent`, `defaults
+export`, `brew`, `launchctl`, `profiles`, `dscl`, LaunchAgents and `osascript` login items)
+between `@@vmlab section` markers, read back from the exec log when the output was cut, and
+`ManifestParser` turns it into the manifest (`custom` records only the roots).
 `HostProcess` runs one host subprocess asynchronously (stdin bytes, output to file handles, a
 deadline that sends `SIGTERM` then `SIGKILL`, cancellation likewise).
 `Capabilities` is the Appendix B matrix: `Capabilities.entry(feature, on: profile)` gives the unresolved cell (`Availability.yes`, `.no(reason)` or `.conditional(Condition)`, where a `Condition` names a fast fact such as `root` or a `SlowProbe`, plus the note and the item that verifies a `?`), and `capabilities(of:host:allowUnverified:)` resolves every cell to yes or no against `HostFacts` (an `unknown` probe is no unless `allowUnverified`); `unverifiedProbes` says which probes a plan reports as unverified, and `supports(_:on:)` is the guest OS and arch filter.
@@ -203,7 +213,9 @@ request into an `ExecRequest`, picks the channel by `via` (`Channel.execSSH`, `.
 `.exec`) on `VMManager.attach`, runs it under a heartbeat and returns `exitCode`, `stdout`,
 `stderr`, `durationMs`, `truncated`, `logPath`; `background: true` starts an `ExecJobs` job over
 the VM's `SSHExecChannel` and returns `{ job }`), `vm_job` (read/wait/kill: `output`, `finished`,
-`exitCode`, `more`, `logPath`), `images`
+`exitCode`, `more`, `logPath`), `vm_manifest` (R-801: `profile` defaults to the guest's OS,
+`custom` needs `paths`; a running VM only; returns `{ id, path, profile, counts }` with the
+manifest's warnings), `images`
 (list/pull/remove), `vm_introspect` (an `IntrospectionQuery` to the attached VM's `introspection`
 channel; `raw` takes exactly one of `qmp`/`hmp`; returns `{ query, json | text }`) and
 `vm_memory_dump` (the `memory_dump` channel writes to `<vm>/dumps/<UTC time>-0x<addr>-<size>.raw`
