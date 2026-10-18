@@ -27,7 +27,10 @@ let package = Package(
     .target(name: "VMLabSwitch"),
     .target(
       name: "VMLabMCP",
-      dependencies: ["VMLabCore", .product(name: "MCP", package: "swift-sdk")]
+      dependencies: [
+        "VMLabCore", .product(name: "MCP", package: "swift-sdk"),
+        .product(name: "Logging", package: "swift-log"),
+      ]
     ),
     .executableTarget(
       name: "vmlab",

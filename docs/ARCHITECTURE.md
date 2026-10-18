@@ -21,7 +21,7 @@ matches each line against `PanicSignature.table` and appends a `panic` event (th
 `offset` and `end`), capped with one suppression notice; `EventLog.recordQMPEvent(_:data:)` is the hook the
 QEMU backend calls for QMP events (`GUEST_PANICKED` becomes `panic`, `RESET` `lifecycle`, others ignored),
 and `EventLog.latestPanic()` reads the newest. Also process-wide logging (`VMLabLogging`: swift-log to stderr at the `VMLAB_LOG` level, default `info`).
-`CodeSignature` reads `codesign` output so `vmlab doctor` can say whether the runner is entitled. `Profile` names the four profiles with their Appendix B tiers. `HostProbe` gathers `HostFacts` (Appendix E fast facts) through an injectable `CommandRunning` and merges the slow probes persisted in `VMLAB_HOME/host-facts.json` (`SlowProbes`), resetting to `unknown` any probe recorded under another macOS or QEMU version; `ProbeResult.countsAsYes` is how selection reads a probe (unknown counts as no).
+`CodeSignature` reads `codesign` output so `vmlab doctor` can say whether the runner is entitled. `Profile` names the four profiles with their Appendix B tiers. `HostProbe` gathers `HostFacts` (Appendix E fast facts) through an injectable `CommandRunning` and merges the slow probes persisted in `VMLAB_HOME/host-facts.json` (`SlowProbes`), resetting to `unknown` any probe recorded under another macOS or QEMU version; `ProbeResult.countsAsYes` is how selection reads a probe (unknown counts as no). `SlowProbeRunner.swift` is the slow probe registry: an item that owns a probe (`SlowProbe.owner`: R-307, R-309, R-608, R-702) conforms a `SlowProbeRunner` and calls `SlowProbeRunners.register`; `SlowProbeRegistry.runAll` runs them one at a time, persists each `yes` or `no` to `host-facts.json`, and reports a probe with no runner as `not_implemented`, left as it was. `docs/FEATURES.md` reads that file, so recording probes on the development host means running `scripts/gen-docs.sh`.
 `Images.swift` holds the Appendix H catalogue (`ImageCatalogue.builtin`, decoded from JSON into `CatalogImage`) and `ImageStore`, an actor over `VMLAB_HOME/images/<name>/` that pulls (URLSession through an injectable `ImageDownloading`, checksum from the published `SHA512SUMS`/`SHA256SUMS`, qcow2 to raw with `qemu-img` through `CommandRunning`), lists and removes images and records `image.json` (`PulledImage`); a re-pull whose file still matches the published checksum is a no-op. `ImageStore.defaultHome()` resolves `VMLAB_HOME`.
 `CloudInit` builds the NoCloud seed both engines attach: from a plain `CloudInitConfig` (hostname, user, SSH key, packages, optional `GUIStack`, `SegmentNIC`, `GuestMount`s, `ConsoleDevice`, extra user-data merged last as a MIME part) it emits `user-data`, `meta-data` and `network-config` with a small hand-written YAML emitter (every string double-quoted; no YAML library, C5) and runs `hdiutil makehybrid` to make the `cidata` ISO. `FeatureDocs` renders `docs/FEATURES.md` from the matrix. It depends on swift-log only.
 `Store.swift` holds the VM store: `VMRecord` (the `vm.json` of `vms/<id>/`, with `VMState`, `VMRuntime` endpoints, `CheckpointRef`s and the resolved `[Feature]`), and `Store`, which lists, loads, creates (IDs `vm-` plus six base32 characters, unique names defaulting to the ID), updates and removes records under `VMLAB_HOME` (`Store.defaultHome`). Writes go through a temp file and `rename(2)` under a per-VM `flock` on `locks/<id>.lock` (names under `locks/store.lock`, always taken after a VM lock), so two server processes never corrupt or lose an update; `StoreMigrations` upgrades older `schemaVersion`s step by step, with one fixture per released version in `Tests/Fixtures/store/`. `Store.runningGuests()` is the counter `HostProbe.runningGuests` and the budgets read. `Tests/StoreHelper` builds `vmlab-store-helper`, a test-only executable (no product) that `StoreTests` spawns as the second writer.
@@ -80,10 +80,19 @@ field, required fields present; `ToolArguments` has typed accessors) and runs th
 `ToolHandlers.specs` is what `tools/list` offers. `ToolContext` holds the `Store`, the `HostProbe` and
 the `ResourceLimits` of one `VMLAB_HOME`. A `ToolResult` is the Appendix C result object (always with
 `warnings`) plus image blocks; `ToolRendering` turns results and `VMLabError`s into JSON (the MCP text)
-or a terminal line. Built so far: `host_facts`, `host_doctor` (minimal; R-203 completes it),
+or a terminal line. Built so far: `host_facts`, `host_doctor` (checks with `detail` and `fix`, the runner and its
+entitlement, the probes with owner and date; `probe: true` runs `SlowProbeRunners.shared`),
 `vm_plan` (an unsatisfiable request is a result with `satisfiable: false`, never an error),
 `vm_list`, `vm_inspect` (with the latest `panic` event, or null) and `vm_logs` (events rendered one per
 line, tails of `serial.log` and `provision.log`; `all` is each source in turn, prefixed). `VMLabMCP.version` is the package version.
+`Server/MCPServer.swift` is the server (`VMLabServer.run(context:input:output:)`, used by
+`vmlab serve`): it reconciles the store, then serves the SDK's `StdioTransport` until stdin closes.
+`initialize` (server `vmlab`, the package version) and `ping` are the SDK's; `tools/list` sends
+`ToolHandlers.specs`; `tools/call` runs `ToolHandlers.call` and answers `content: [text(JSON)]`
+plus one `image` block per `ToolResult.images`, a `VMLabError` as `isError: true` with the
+Appendix D object as the text, and an unknown tool as JSON-RPC error -32602. When the call carries
+`_meta.progressToken`, `ToolContext.progress` (a `ToolProgress`) sends `notifications/progress`
+with it; otherwise it is `.none`.
 
 **`vmlab`** (executable). The CLI on swift-argument-parser: every MCP tool as a subcommand with
 `--json` output, `vmlab serve` for the MCP server, `vmlab doctor`, and the hidden `vmlab gen-docs`
@@ -91,7 +100,7 @@ that `scripts/gen-docs.sh` uses. A tool subcommand conforms to `ToolCommand` (`S
 it turns its flags into the tool's JSON arguments and calls the same `ToolHandlers.call` as
 `tools/call`, printing the result object with `--json` or a short human rendering; a `VMLabError` goes
 to stderr (the Appendix D object with `--json`) with exit status 1. Built: `facts`, `doctor`, `plan`,
-`list`, `inspect`, `logs`, `--version`; `vmlab images pull|list|remove` (R-300) still calls `ImageStore`
+`list`, `inspect`, `logs`, `serve`, `--version`; `vmlab images pull|list|remove` (R-300) still calls `ImageStore`
 directly until the `images` handler lands. It bootstraps logging and hands off to Core and `VMLabMCP`.
 
 **`vmlab-vz`** (executable). The VZ runner: one process per Virtualization.framework guest, so a

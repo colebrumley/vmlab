@@ -98,12 +98,14 @@ import VMLabMCP
     let checks = result.value["checks"]?.arrayValue ?? []
     let byName = Dictionary(
       uniqueKeysWithValues: checks.map { ($0["check"]?.stringValue ?? "", $0) })
-    #expect(Set(byName.keys) == ["qemu", "tart", "rosetta", "runner_signed"])
+    #expect(
+      Set(byName.keys) == ["qemu", "qemu_hvf", "tart", "rosetta", "runner_entitlement"])
     #expect(byName["qemu"]?["status"] == .string("ok") && byName["qemu"]?["fix"] == nil)
     #expect(byName["tart"]?["fix"] == .string("brew install cirruslabs/cli/tart"))
     #expect(byName["rosetta"]?["status"] == .string("missing"))
     #expect(result.value["probes"]?.objectValue?.count == SlowProbe.allCases.count)
-    #expect(result.warnings.count == 1)
+    #expect(byName["runner_entitlement"]?["status"] == .string("missing"))
+    #expect(result.warnings.contains { $0.contains("not built yet") })
   }
 
   @Test func planReturnsAPlan() async throws {

@@ -15,8 +15,11 @@ extension ToolSpec {
         "Also run the slow probes (live snapshots, GDB under HVF, vmnet); takes minutes.")
     ]),
     outputShape: """
-      { checks: [ { check, status: ok|missing|unknown, fix? } ],
-        probes: { <probe>: { result: yes|no|unknown, probedAt? } } }
+      { checks: [ { check, status: ok|missing|unknown, detail?, fix? } ],
+        probes: { <probe>: { result: yes|no|unknown, probedAt?, owner,
+                             status?: ran|skipped|failed|not_implemented, note? } },
+        runner: { path?, built, entitled }, freeMemoryGB, freeDiskGB,
+        runningGuests, runningMacOSGuests }
       """,
     errors: [.hostMissingTool, .limitMemory, .timeout])
 }

@@ -34,13 +34,41 @@ public struct ToolResult: Sendable, Hashable {
   }
 }
 
+/// Where a long call reports how far it has got. On the MCP server it sends
+/// `notifications/progress` with the call's progress token; elsewhere, and when the client sent no
+/// token, it does nothing. R-205 makes the long calls report at least every 5 s.
+public struct ToolProgress: Sendable {
+  public typealias Send =
+    @Sendable (_ progress: Double, _ total: Double?, _ message: String?) async
+    -> Void
+
+  private let send: Send?
+
+  public init(_ send: @escaping Send) { self.send = send }
+
+  private init() { self.send = nil }
+
+  /// Reports nothing.
+  public static let none = ToolProgress()
+
+  /// Whether anyone listens: false for `.none`.
+  public var isReporting: Bool { send != nil }
+
+  /// Reports `progress` (increasing on every call) out of `total` when known.
+  public func report(_ progress: Double, total: Double? = nil, message: String? = nil) async {
+    await send?(progress, total, message)
+  }
+}
+
 /// What a handler may use: the VM store, the host probe and the limits, all under one
-/// `VMLAB_HOME`. R-105 adds the backend registry here; R-201 builds one per server.
+/// `VMLAB_HOME`, plus where this call reports progress. R-105 adds the backend registry here.
 public struct ToolContext: Sendable {
   public var home: URL
   public var store: Store
   public var probe: HostProbe
   public var limits: ResourceLimits
+  /// This call's progress reporter; the MCP server sets it per `tools/call`.
+  public var progress: ToolProgress = .none
 
   /// A context on `home`; the default probe counts running guests from that store.
   public init(home: URL, probe: HostProbe? = nil, limits: ResourceLimits = .defaults) {

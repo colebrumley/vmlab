@@ -13,7 +13,7 @@ struct VMLab: AsyncParsableCommand {
     version: VMLabMCP.version,
     subcommands: [
       FactsCommand.self, DoctorCommand.self, Images.self, PlanCommand.self, ListCommand.self,
-      InspectCommand.self, GenDocs.self,
+      InspectCommand.self, Serve.self, GenDocs.self,
       LogsCommand.self,
     ]
   )
@@ -36,6 +36,17 @@ struct VMLab: AsyncParsableCommand {
     } catch {
       exit(withError: error)
     }
+  }
+}
+
+/// `vmlab serve`: the MCP server on stdin and stdout; logs go to stderr (`VMLAB_LOG` sets the
+/// level). It reconciles the store first and stops when stdin closes.
+struct Serve: AsyncParsableCommand {
+  static let configuration = CommandConfiguration(
+    commandName: "serve", abstract: "Run the MCP server on stdin and stdout.")
+
+  func run() async throws {
+    try await VMLabServer.run(context: .live())
   }
 }
 

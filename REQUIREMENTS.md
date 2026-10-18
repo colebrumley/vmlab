@@ -263,7 +263,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   linux --require serial,gdb --json` prints a `Plan` or an `Unsatisfiable`; unit test for the
   argument parsing of `plan`.
 
-- [ ] **R-201 MCP server over stdio**
+- [x] **R-201 MCP server over stdio**
   `vmlab serve` runs an MCP server with the official Swift SDK: `initialize`, `tools/list`,
   `tools/call`, `ping`, and `notifications/progress` for long calls (create, pull, checkpoint
   restore). Tool results are `content: [text(JSON)]`, plus an `image` content block for
@@ -285,7 +285,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   `properties`, `required` subset of properties, enums non-empty), every tool name matches
   `^[a-z0-9_]{1,40}$`, every description is 40–1200 characters.
 
-- [ ] **R-203 `host_doctor`**
+- [x] **R-203 `host_doctor`**
   `vmlab doctor` (and the tool): runs the fast probes, reports each prerequisite as ok/missing with
   the fix (`brew install qemu`, `brew install cirruslabs/cli/tart`, `softwareupdate
   --install-rosetta`, the signing step), reports the entitlement on `vmlab-vz`, free memory and
