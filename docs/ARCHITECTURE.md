@@ -272,8 +272,12 @@ gives both engines a screen to look at and click on. `RFBClient` (an actor) spea
 `RFBTransport`: `SocketTransport` for a unix or TCP socket, `ReplayTransport` for recorded fixture
 streams. It negotiates security None or VNC Authentication (`VNCAuth`, DES via CommonCrypto), sets
 32-bit BGRX, requests Raw, CopyRect and DesktopSize, and a background loop of incremental update
-requests keeps a `Framebuffer` current; `snapshot()` returns a `CGImage` and `Framebuffer.pngData`
-encodes PNG with ImageIO. Input (`RFBInput.swift`, `Keysym.swift`): `pointer(x:y:buttons:)` with a
+requests keeps a `Framebuffer` current; `snapshot()` returns a `CGImage` (reading the pixels in
+place) and `Framebuffer.pngData` encodes PNG with ImageIO. The guest is untrusted: a screen is at
+most `Framebuffer.maxEdge` (8192) a side and `maxPixels` (2^25) in all, an update's rectangles are
+applied to a working copy as they arrive (Raw in 1 MiB chunks) and swapped in at the end, and its
+Raw data may cover the screen at most `maxScreenCoveragePerUpdate` (8) times; past any of these the
+error is `protocolViolation` (`engine_error`). Input (`RFBInput.swift`, `Keysym.swift`): `pointer(x:y:buttons:)` with a
 `PointerButtons` mask, `key(_:down:)`, `press(_:)` for a `KeyChord` parsed from `cmd+shift+4`-style
 text (`cmd` is `Super_L`), and `type(_:gap:)`, which strikes each character with Shift where a US
 layout needs it, 10 ms apart; with a `hold`, `press` and `type` send each key event on its own,
@@ -417,7 +421,9 @@ exits. It is the only binary that needs `com.apple.security.virtualization`; `sc
 ad-hoc signs it with `Sources/vmlab-vz/vmlab-vz.entitlements` after every build.
 
 **`VMLabSwitch`** (library). The segment switch with no engine and no Core dependency.
-`SwitchCore` is the forwarding logic on integer ports: a learning MAC table with aging, flooding of
+`SwitchCore` is the forwarding logic on integer ports: a learning MAC table with aging, capped at
+`maxMACs` (4096; a full table is swept of aged entries, then new sources go unlearned and their
+traffic floods, counted as `unlearned`), flooding of
 broadcast, multicast and unknown destinations, and counters (`SwitchStats`) for frames over 1600
 bytes, malformed frames and congested ports. `SwitchServer` puts it on sockets in
 `$VMLAB_HOME/segments/<name>/` (`SegmentPaths`): every sender to the unix datagram `switch.sock`

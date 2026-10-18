@@ -18,19 +18,36 @@ public struct PixelRect: Equatable, Hashable, Codable, Sendable {
   }
 
   /// The rectangle between corners `[x0, y0]` and `[x1, y1]` (exclusive), as tool arguments give it.
+  /// Spans past `Int.max` saturate rather than trapping.
   public init(corners x0: Int, _ y0: Int, _ x1: Int, _ y1: Int) {
-    self.init(x: min(x0, x1), y: min(y0, y1), width: abs(x1 - x0), height: abs(y1 - y0))
+    self.init(
+      x: min(x0, x1), y: min(y0, y1), width: Self.gap(min(x0, x1), max(x0, x1)),
+      height: Self.gap(min(y0, y1), max(y0, y1)))
   }
 
   public var isEmpty: Bool { width <= 0 || height <= 0 }
 
-  /// The part of this rectangle inside `other`; empty when they do not overlap.
+  /// The part of this rectangle inside `other`; empty when they do not overlap. Edges past
+  /// `Int.max` saturate, so any coordinates are safe.
   public func intersection(_ other: PixelRect) -> PixelRect {
     let x0 = max(x, other.x)
     let y0 = max(y, other.y)
-    let x1 = min(x + width, other.x + other.width)
-    let y1 = min(y + height, other.y + other.height)
-    return PixelRect(x: x0, y: y0, width: max(0, x1 - x0), height: max(0, y1 - y0))
+    let x1 = min(Self.end(x, width), Self.end(other.x, other.width))
+    let y1 = min(Self.end(y, height), Self.end(other.y, other.height))
+    return PixelRect(x: x0, y: y0, width: Self.gap(x0, x1), height: Self.gap(y0, y1))
+  }
+
+  /// `start + length`, saturating.
+  private static func end(_ start: Int, _ length: Int) -> Int {
+    let (sum, overflow) = start.addingReportingOverflow(length)
+    return overflow ? (length > 0 ? .max : .min) : sum
+  }
+
+  /// `to - from` when positive, else 0, saturating at `Int.max`.
+  private static func gap(_ from: Int, _ to: Int) -> Int {
+    guard to > from else { return 0 }
+    let (difference, overflow) = to.subtractingReportingOverflow(from)
+    return overflow ? .max : difference
   }
 }
 

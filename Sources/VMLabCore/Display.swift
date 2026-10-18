@@ -107,7 +107,17 @@ extension DisplayEndpoint {
 // MARK: - Display sessions (R-502)
 
 /// A rectangle in guest pixels: origin at the top left, rows downward.
+/// `|b - a|`, saturating at `Int.max`.
+private func span(_ a: Int, _ b: Int) -> Int {
+  let (difference, overflow) = max(a, b).subtractingReportingOverflow(min(a, b))
+  return overflow ? .max : difference
+}
+
 public struct DisplayRect: Codable, Sendable, Hashable {
+  /// The largest coordinate `vm_computer` accepts from the model, in guest or screenshot pixels:
+  /// far past any screen, so regions past the edge still clip, and far from integer overflow.
+  public static let coordinateLimit = 1 << 24
+
   public var x: Int
   public var y: Int
   public var width: Int
@@ -121,8 +131,9 @@ public struct DisplayRect: Codable, Sendable, Hashable {
   }
 
   /// The rectangle between corners `[x0, y0]` and `[x1, y1]` (exclusive), as tool arguments give it.
+  /// A span past `Int.max` saturates rather than trapping.
   public init(corners x0: Int, _ y0: Int, _ x1: Int, _ y1: Int) {
-    self.init(x: min(x0, x1), y: min(y0, y1), width: abs(x1 - x0), height: abs(y1 - y0))
+    self.init(x: min(x0, x1), y: min(y0, y1), width: span(x0, x1), height: span(y0, y1))
   }
 
   public var json: JSONValue {
