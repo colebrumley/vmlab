@@ -400,14 +400,21 @@ public struct Store: Sendable {
   }
 
   /// Writes `vm.json` through a temporary file in the same directory, `fsync`, then `rename(2)`.
-  private func writeRecord(_ record: VMRecord) throws(VMLabError) {
+  /// The caller holds the VM's lock.
+  func writeRecord(_ record: VMRecord) throws(VMLabError) {
     let url = recordURL(of: record.id)
     let data: Data
     do { data = try Self.encoder.encode(record) } catch {
       throw Self.ioError("encode \(url.path)", error)
     }
+    try Self.writeAtomically(data, to: url)
+  }
+
+  /// Writes `data` to `url` through a temporary file in the same directory, `fsync`, then
+  /// `rename(2)`, so a reader sees the old or the new file, never a torn one.
+  static func writeAtomically(_ data: Data, to url: URL) throws(VMLabError) {
     let temp = url.deletingLastPathComponent().appending(
-      path: ".\(Self.recordFileName).\(getpid()).\(UUID().uuidString).tmp")
+      path: ".\(url.lastPathComponent).\(getpid()).\(UUID().uuidString).tmp")
     let fd = open(temp.path, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0o644)
     guard fd >= 0 else { throw Self.posixError("create \(temp.path)") }
     let written = data.withUnsafeBytes { write(fd, $0.baseAddress, $0.count) }
@@ -425,8 +432,9 @@ public struct Store: Sendable {
     }
   }
 
-  /// Runs `body` holding an exclusive `flock` on `locks/<name>.lock`.
-  private func withLock<T>(
+  /// Runs `body` holding an exclusive `flock` on `locks/<name>.lock` (a VM's id, or `store`).
+  /// Not reentrant: `body` must not take the same lock again.
+  func withLock<T>(
     _ name: String, _ body: () throws(VMLabError) -> T
   ) throws(VMLabError) -> T {
     do {
