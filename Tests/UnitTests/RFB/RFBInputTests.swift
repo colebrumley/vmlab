@@ -52,6 +52,26 @@ private func connectedClient() async throws -> (RFBClient, ReplayTransport, Int)
         == ev(0xffeb, true) + ev(0x20, true) + ev(0x20, false) + ev(0xffeb, false))
   }
 
+  /// Codex CX-33: cancelling a held chord between its events skipped the releases, leaving
+  /// modifiers held on the guest. Whatever was pressed is released.
+  @Test func cancelledHeldChordReleasesWhatItPressed() async throws {
+    let (client, transport, start) = try await connectedClient()
+    let pressing = Task { try await client.press("cmd+shift+4", hold: .milliseconds(200)) }
+    try await Task.sleep(for: .milliseconds(300))
+    pressing.cancel()
+    await #expect(throws: CancellationError.self) { try await pressing.value }
+    let written = Array(await transport.written[start...])
+    #expect(
+      written == ev(0xffeb, true) + ev(0xffe1, true) + ev(0xffe1, false) + ev(0xffeb, false))
+    // A cancelled type releases its Shift too.
+    let (typer, typed, from) = try await connectedClient()
+    let typing = Task { try await typer.type("A", hold: .milliseconds(200)) }
+    try await Task.sleep(for: .milliseconds(100))
+    typing.cancel()
+    _ = try? await typing.value
+    #expect(Array(await typed.written[from...]) == ev(0xffe1, true) + ev(0xffe1, false))
+  }
+
   @Test func chordCtrlAltDelete() throws {
     let chord = try KeyChord(parsing: "ctrl+alt+Delete")
     #expect(chord == KeyChord(modifiers: [0xffe3, 0xffe9], key: 0xffff))

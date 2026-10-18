@@ -70,14 +70,28 @@ extension RFBClient {
     try await press(try KeyChord(parsing: chord), hold: hold)
   }
 
-  /// Writes 8-byte key events, all at once or one per `hold`.
+  /// Writes 8-byte key events, all at once or one per `hold`. When the task is cancelled (or a
+  /// write fails) part way, every key it pressed and has not released is released, last pressed
+  /// first, so no modifier stays held on the guest.
   func send(_ events: [UInt8], hold: Duration) async throws {
     guard hold > .zero else { return try await transport.write(events) }
+    var held: [UInt32] = []
     var offset = 0
-    while offset < events.count {
-      if offset > 0 { try await Task.sleep(for: hold) }
-      try await transport.write(Array(events[offset..<min(offset + 8, events.count)]))
-      offset += 8
+    do {
+      while offset < events.count {
+        if offset > 0 { try await Task.sleep(for: hold) }
+        let event = Array(events[offset..<min(offset + 8, events.count)])
+        try await transport.write(event)
+        if event.count == 8, event[0] == 4 {
+          let keysym = event[4...].reduce(UInt32(0)) { $0 << 8 | UInt32($1) }
+          if event[1] != 0 { held.append(keysym) } else { held.removeAll { $0 == keysym } }
+        }
+        offset += 8
+      }
+    } catch {
+      let releases = held.reversed().flatMap { RFBInput.keyEvent($0, down: false) }
+      if !releases.isEmpty { try? await transport.write(releases) }
+      throw error
     }
   }
 
