@@ -293,7 +293,7 @@ actor MutableQMPTransport: QMPTransport {
     await client.close()
   }
 
-  @Test func silentPeerIsDeclaredDeadWithinTheWindow() async throws {
+  @Test(.timeLimit(.minutes(1))) func silentPeerIsDeclaredDeadWithinTheWindow() async throws {
     let transport = MutableQMPTransport()
     let client = try await QMPClient.handshake(over: transport, timeout: .seconds(2))
     let reported = Reported()
@@ -302,15 +302,17 @@ actor MutableQMPTransport: QMPTransport {
     }
     await transport.mute()
     let started = ContinuousClock.now
-    // A command that will never be answered fails with the dead-peer error, not its 30 s timeout.
+    // A command that will never be answered, with a timeout far past any bound here, can only
+    // end by the dead-peer error; it must come within a bound a busy host still meets but a
+    // watchdog ignoring the 300 ms window would not.
     await #expect {
-      try await client.execute("query-block")
+      try await client.execute("query-block", timeout: .seconds(600))
     } throws: { error in
       guard let error = error as? VMLabError else { return false }
       return DeadPeer.isDeadPeer(error) && error.data["channel"] == .string("qmp")
     }
     let elapsed = ContinuousClock.now - started
-    #expect(elapsed < .seconds(20))  // the command's own timeout is 30 s
+    #expect(elapsed < .seconds(5), "\(elapsed) for a 300 ms window")
     #expect(await reported.value?.contains("query-block") == true)
     #expect(await client.isConnected == false)
     #expect(await transport.closed)

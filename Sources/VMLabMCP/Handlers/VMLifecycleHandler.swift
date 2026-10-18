@@ -54,7 +54,7 @@ struct VMLifecycleHandler: ToolHandler {
       warnings += outcome.warnings
     }
     // vm_debug's session follows the guest (R-703): a reset may clear the CPU's debug registers,
-    // so its points go in again; a destroyed VM's session goes.
+    // so its points go in again; a destroyed VM's session goes, as does its display session.
     if action == .reset, let session = context.debug.existing(record.id) {
       do {
         try await session.afterReset(halted: record.boot?.haltAtStart == true)
@@ -63,6 +63,7 @@ struct VMLifecycleHandler: ToolHandler {
       }
     } else if action == .destroy {
       await context.debug.drop(record.id)
+      await context.displays.forget(vm: record.id)
     }
     let elapsed = ContinuousClock.now - started
     let ms = (elapsed / .milliseconds(1)).rounded()

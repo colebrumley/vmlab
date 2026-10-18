@@ -109,9 +109,19 @@ public enum FleetPlanning {
     }
   }
 
-  /// `<name>-1` to `<name>-<count>`.
+  /// `invalid_request` on `count` unless it is 1 to `maxMembers`.
+  public static func checkCount(_ count: Int) throws(VMLabError) {
+    guard count >= 1, count <= maxMembers else {
+      throw VMLabError.invalidRequest(
+        field: "count", reason: "count must be 1 to \(maxMembers), got \(count)",
+        hint: "Ask for between 1 and \(maxMembers) members.")
+    }
+  }
+
+  /// `<name>-1` to `<name>-<count>`, `count` clamped to 1...`maxMembers` (callers check it
+  /// first with `checkCount`, CX-10).
   public static func memberNames(_ name: String, count: Int) -> [String] {
-    (1...max(1, count)).map { "\(name)-\($0)" }
+    (1...min(max(1, count), maxMembers)).map { "\(name)-\($0)" }
   }
 
   /// Refuses a fleet whose members together would break the macOS limit or the memory budget,
@@ -123,11 +133,7 @@ public enum FleetPlanning {
     plan: Plan, count: Int, running: Inventory, host: HostFacts, limits: ResourceLimits,
     hostMemory: HostMemoryGuard? = nil
   ) throws(VMLabError) {
-    guard count >= 1, count <= maxMembers else {
-      throw VMLabError.invalidRequest(
-        field: "count", reason: "count must be 1 to \(maxMembers), got \(count)",
-        hint: "Ask for between 1 and \(maxMembers) members.")
-    }
+    try checkCount(count)
     let memoryGB =
       ResourceLimits.resolve(plan.resources, for: plan.guest.os).memoryGB ?? 4
     let snapshot = hostMemory?.reader.snapshot()

@@ -57,12 +57,12 @@ struct ImagesHandler: ToolHandler {
           hint: "Add vm: the VM's name or id.")
       }
       let record = try context.store.find(vm)
-      let directory = context.store.directory(of: record.id)
       let images = context.images
+      let manager = context.manager
       let image = try await context.progress.during(
         "copying \(record.id) into template \(name)", every: context.heartbeat
       ) { () throws(VMLabError) -> PulledImage in
-        try await images.createTemplate(name, from: record, vmDirectory: directory)
+        try await manager.createTemplate(name, from: record.id, images: images)
       }
       let folder = images.imageDirectory(name)
       return ToolResult([

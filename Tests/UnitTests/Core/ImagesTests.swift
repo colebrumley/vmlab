@@ -319,6 +319,90 @@ final class TartRunner: CommandRunning {
     #expect(runner.calls.withLock { $0 } == [["tart", "pull", "ghcr.io/example/tiny:latest"]])
   }
 
+  /// CX-2: an image a VM's disk reads (its `image`, or a backing chain into its directory) is
+  /// neither removed nor replaced by a pull of a changed upstream file; an unused one is.
+  @Test func imagesInUseAreNotRemovedOrReplaced() async throws {
+    let (home, bin) = try Self.sandbox()
+    let root = home.deletingLastPathComponent()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let changed = root.appending(path: "tiny-v2.qcow2")
+    var bytes = try Data(contentsOf: Self.fixtures.appending(path: "tiny.qcow2"))
+    bytes.append(contentsOf: [1, 2, 3])
+    try bytes.write(to: changed)
+    let sums = root.appending(path: "SUMS-v2")
+    try Data(
+      "\(try ChecksumAlgorithm.sha512.hexDigest(ofFileAt: changed))  tiny.qcow2\n".utf8
+    ).write(to: sums)
+    let images = ImageStore(
+      home: home, catalogue: try Self.catalogue(), downloader: Self.downloader(),
+      runner: ConvertRunner(), searchPaths: [bin.path])
+    _ = try await images.pull("tiny-arm64")
+    let disk = images.imageDirectory("tiny-arm64").appending(path: "disk.qcow2")
+    let original = try Data(contentsOf: disk)
+
+    let vms = Store(home: home)
+    let user = try vms.create(
+      VMRecord(
+        id: "vm-aaaaaa", profile: .qemuHVF, guest: GuestSpec(os: .linux, arch: .arm64),
+        features: [], image: "tiny-arm64"))
+    let removal = await #expect(throws: VMLabError.self) { try await images.remove("tiny-arm64") }
+    #expect(removal?.code == .invalidRequest)
+    #expect(removal?.data["vms"] == .array([.string(user.id)]))
+    #expect(images.pulled("tiny-arm64") != nil)
+
+    let repull = ImageStore(
+      home: home, catalogue: try Self.catalogue(),
+      downloader: FileDownloader(files: [
+        "https://example.invalid/images/tiny.qcow2": changed,
+        "https://example.invalid/images/SHA512SUMS": sums,
+      ]), runner: ConvertRunner(), searchPaths: [bin.path])
+    let replaced = await #expect(throws: VMLabError.self) { try await repull.pull("tiny-arm64") }
+    #expect(replaced?.code == .invalidRequest)
+    #expect(try Data(contentsOf: disk) == original)
+
+    // A clone's backing chain into the image directory counts too.
+    try vms.remove(id: user.id)
+    var clone = VMRecord(
+      id: "vm-bbbbbb", profile: .qemuHVF, guest: GuestSpec(os: .linux, arch: .arm64),
+      features: [])
+    clone.backingChain = [disk.path]
+    let cloned = try vms.create(clone)
+    await #expect(throws: VMLabError.self) { try await images.remove("tiny-arm64") }
+    #expect(try await images.prune(referenced: []).isEmpty)
+
+    try vms.remove(id: cloned.id)
+    #expect(try await repull.pull("tiny-arm64").changed)
+    #expect(try Data(contentsOf: disk) == bytes)
+    #expect(try await images.remove("tiny-arm64"))
+  }
+
+  /// Takes its time over each download, so two pulls overlap.
+  final class SlowDownloader: ImageDownloading {
+    let inner: FileDownloader
+    init(_ inner: FileDownloader) { self.inner = inner }
+    func data(from url: URL) async throws -> Data { try await inner.data(from: url) }
+    func download(from url: URL, to destination: URL) async throws {
+      try await Task.sleep(for: .milliseconds(200))
+      try await inner.download(from: url, to: destination)
+    }
+  }
+
+  /// CX-11: two pulls of one image at once share one download (one `.partial`), both succeed.
+  @Test func concurrentPullsOfOneImageShareOneDownload() async throws {
+    let (home, bin) = try Self.sandbox()
+    defer { try? FileManager.default.removeItem(at: home.deletingLastPathComponent()) }
+    let downloader = Self.downloader()
+    let store = ImageStore(
+      home: home, catalogue: try Self.catalogue(), downloader: SlowDownloader(downloader),
+      runner: ConvertRunner(), searchPaths: [bin.path])
+    async let first = store.pull("tiny-arm64")
+    async let second = store.pull("tiny-arm64")
+    let results = try await [first, second]
+    #expect(results[0].image == results[1].image)
+    #expect(downloader.downloads.withLock { $0 } == 1)
+    #expect(store.pulled("tiny-arm64") != nil)
+  }
+
   @Test func defaultHomeHonoursVMLabHome() {
     #expect(ImageStore.defaultHome(environment: ["VMLAB_HOME": "/tmp/x"]).path == "/tmp/x")
     #expect(ImageStore.defaultHome(environment: [:]).lastPathComponent == ".vmlab")

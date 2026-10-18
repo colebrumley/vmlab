@@ -16,7 +16,11 @@ public protocol QMPTransport: Sendable {
 public final class UnixQMPTransport: QMPTransport, @unchecked Sendable {
   public let path: String
   public let lines: AsyncStream<Data>
+  /// How long a send waits for QEMU to take a byte before it fails.
+  public let writeStall: Duration
   private let state: State
+  /// Keeps whole lines from interleaving when sends overlap.
+  private let writeLock = NSLock()
 
   /// The descriptor and whether it may still be used; guarded by `lock`.
   private final class State: @unchecked Sendable {
@@ -30,13 +34,13 @@ public final class UnixQMPTransport: QMPTransport, @unchecked Sendable {
 
   /// Connects to `path`, retrying while the socket is absent or refuses, until `timeout`.
   public static func connect(
-    path: String, timeout: Duration = .seconds(5)
+    path: String, timeout: Duration = .seconds(5), writeStall: Duration = .seconds(10)
   ) async throws(VMLabError) -> UnixQMPTransport {
     let deadline = ContinuousClock.now + timeout
     while true {
       switch UnixSocket.connect(path: path) {
       case .success(let fd):
-        return UnixQMPTransport(path: path, fd: fd)
+        return UnixQMPTransport(path: path, fd: fd, writeStall: writeStall)
       case .failure(let err) where err.retryable && ContinuousClock.now < deadline:
         try? await Task.sleep(for: .milliseconds(50))
       case .failure(let err):
@@ -51,8 +55,11 @@ public final class UnixQMPTransport: QMPTransport, @unchecked Sendable {
     }
   }
 
-  private init(path: String, fd: Int32) {
+  private init(path: String, fd: Int32, writeStall: Duration) {
     self.path = path
+    self.writeStall = writeStall
+    // Non-blocking, so a send never waits inside the descriptor's lock (CX-13).
+    SocketSend.setNonBlocking(fd)
     let state = State(fd: fd)
     self.state = state
     var continuation: AsyncStream<Data>.Continuation!
@@ -62,7 +69,7 @@ public final class UnixQMPTransport: QMPTransport, @unchecked Sendable {
       var pending = Data()
       var buffer = [UInt8](repeating: 0, count: 65536)
       while true {
-        let n = buffer.withUnsafeMutableBytes { Darwin.read(fd, $0.baseAddress, $0.count) }
+        let n = buffer.withUnsafeMutableBytes { SocketSend.read(fd, into: $0) }
         if n > 0 {
           pending.append(contentsOf: buffer[0..<n])
           while let newline = pending.firstIndex(of: 0x0A) {
@@ -71,8 +78,6 @@ public final class UnixQMPTransport: QMPTransport, @unchecked Sendable {
             if !line.isEmpty { sink.yield(Data(line)) }
             pending = Data(pending[pending.index(after: newline)...])
           }
-        } else if n < 0 && errno == EINTR {
-          continue
         } else {
           break
         }
@@ -98,20 +103,36 @@ public final class UnixQMPTransport: QMPTransport, @unchecked Sendable {
   public func send(_ line: Data) async throws {
     var bytes = [UInt8](line)
     bytes.append(0x0A)
-    try write(bytes)
+    try await write(bytes)
   }
 
-  private func write(_ bytes: [UInt8]) throws {
-    let state = self.state
-    state.lock.lock()
-    defer { state.lock.unlock() }
-    guard state.fdOpen, !state.shutDown else { throw Self.closedError(path) }
-    var sent = 0
-    while sent < bytes.count {
-      let n = bytes[sent...].withUnsafeBytes { Darwin.write(state.fd, $0.baseAddress, $0.count) }
-      if n < 0 && errno == EINTR { continue }
-      guard n > 0 else { throw Self.closedError(path) }
-      sent += n
+  /// Sends on a thread of its own, off the concurrency pool. The lock is taken only around each
+  /// non-blocking `send` (`SocketSend`), so `close()` and the reader always proceed; a peer that
+  /// takes no byte for `writeStall` fails the send with `timeout` (CX-13).
+  private func write(_ bytes: [UInt8]) async throws {
+    let (state, path, stall, writeLock) = (self.state, self.path, writeStall, self.writeLock)
+    try await withCheckedThrowingContinuation { (done: CheckedContinuation<Void, any Error>) in
+      let thread = Thread {
+        writeLock.lock()
+        defer { writeLock.unlock() }
+        do throws(SocketSend.Failure) {
+          try SocketSend.sendAll(bytes, lock: state.lock, stall: stall) {
+            state.fdOpen && !state.shutDown ? state.fd : nil
+          }
+          done.resume()
+        } catch .stalled(let sent) {
+          done.resume(
+            throwing: VMLabError(
+              code: .timeout,
+              message: "QEMU stopped reading QMP: \(sent) of \(bytes.count) bytes were sent.",
+              hint: "The guest's QEMU process may be hung; check vm_inspect.",
+              data: ["tried": .string(path), "sent": .number(Double(sent))]))
+        } catch {
+          done.resume(throwing: Self.closedError(path))
+        }
+      }
+      thread.name = "vmlab.qmp.writer"
+      thread.start()
     }
   }
 

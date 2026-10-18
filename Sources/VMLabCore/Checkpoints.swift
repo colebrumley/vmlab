@@ -173,7 +173,9 @@ extension Store {
   }
 
   /// Read-modify-write of the VM's checkpoint tree under its lock; `vm.json`'s `checkpoints`
-  /// summary is rewritten with it.
+  /// summary is rewritten with it. Both files are staged (written and synced) before either is
+  /// renamed into place, `vm.json` first: a full disk or a failed write leaves the old pair, so
+  /// the tree never names a node whose snapshot a failed caller then deletes.
   @discardableResult
   public func updateCheckpoints<T>(
     of id: String, _ body: (inout CheckpointTree, VMRecord) throws(VMLabError) -> T
@@ -187,11 +189,28 @@ extension Store {
       do { data = try Self.encoder.encode(tree) } catch {
         throw Self.ioError("encode \(CheckpointTree.fileName)", error)
       }
-      try Self.writeAtomically(data, to: checkpointsURL(of: id))
+      let treeURL = checkpointsURL(of: id)
+      let stagedTree = try Self.stage(data, for: treeURL)
       if record.checkpoints != tree.refs {
         record.checkpoints = tree.refs
-        try writeRecord(record)
+        let recordData: Data
+        do { recordData = try Self.encoder.encode(record) } catch {
+          unlink(stagedTree.path)
+          throw Self.ioError("encode \(Store.recordFileName)", error)
+        }
+        let stagedRecord: URL
+        do throws(VMLabError) {
+          stagedRecord = try Self.stage(recordData, for: recordURL(of: id))
+        } catch {
+          unlink(stagedTree.path)
+          throw error
+        }
+        do throws(VMLabError) { try Self.publish(stagedRecord, to: recordURL(of: id)) } catch {
+          unlink(stagedTree.path)
+          throw error
+        }
       }
+      try Self.publish(stagedTree, to: treeURL)
       return result
     }
   }

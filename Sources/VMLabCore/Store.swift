@@ -466,6 +466,12 @@ public struct Store: Sendable {
   /// Writes `data` to `url` through a temporary file in the same directory, `fsync`, then
   /// `rename(2)`, so a reader sees the old or the new file, never a torn one.
   static func writeAtomically(_ data: Data, to url: URL) throws(VMLabError) {
+    try publish(try stage(data, for: url), to: url)
+  }
+
+  /// Writes and `fsync`s `data` to a fresh temporary file beside `url`: the step that can run out
+  /// of space. `publish` renames it into place.
+  static func stage(_ data: Data, for url: URL) throws(VMLabError) -> URL {
     let temp = url.deletingLastPathComponent().appending(
       path: ".\(url.lastPathComponent).\(getpid()).\(UUID().uuidString).tmp")
     let fd = open(temp.path, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0o644)
@@ -478,6 +484,11 @@ public struct Store: Sendable {
       unlink(temp.path)
       throw error
     }
+    return temp
+  }
+
+  /// Renames the staged `temp` over `url`; removes `temp` when that fails.
+  static func publish(_ temp: URL, to url: URL) throws(VMLabError) {
     guard rename(temp.path, url.path) == 0 else {
       let error = Self.posixError("rename \(temp.path)")
       unlink(temp.path)

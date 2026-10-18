@@ -34,6 +34,25 @@ import VMLabCore
     #expect(f.vmDirectories().isEmpty)
   }
 
+  /// P3: destroying a VM closes and drops its display session (and its debug session).
+  @Test func destroyForgetsTheDisplaySession() async throws {
+    let f = try Fixture()
+    defer { f.cleanUp() }
+    let display = FakeDisplay()
+    var context = f.context
+    context.displays = DisplaySessions(connectors: DisplayConnectorRegistry(display))
+    _ = try await f.create(["autostart": .bool(false)])
+    let id = try context.store.find("web").id
+    _ = try await context.displays.session(
+      vm: id, endpoint: DisplayEndpoint(address: .unixSocket(path: "/tmp/v.sock"), hostSide: true))
+    await context.displays.setCursor(vm: id, x: 1, y: 2)
+    _ = try await ToolHandlers.call(
+      "vm_lifecycle", arguments: .object(["vm": .string("web"), "action": .string("destroy")]),
+      context: context)
+    #expect(await context.displays.cursor(vm: id) == nil)
+    #expect(display.events.contains(.close))
+  }
+
   /// R-400: a start whose guest gives no SSH endpoint still runs, with `ssh_unreachable`.
   @Test func startCarriesTheSSHWarning() async throws {
     let f = try Fixture()
@@ -167,10 +186,14 @@ import VMLabCore
         ]), context: f.context)
     }
     #expect(try await act("start", 30).warnings.allSatisfy { !$0.contains("timeoutSeconds") })
+    // The start's wait for SSH is the given 30 s, not the boot default.
+    #expect(f.backend.sshTimeouts == [.seconds(30)])
     let paused = try await act("pause", 30)
     #expect(paused.warnings.contains("timeoutSeconds applies to start and stop; pause ignores it"))
     _ = try await act("resume", 30)
     #expect(try await act("stop", 9).value["state"] == .string("stopped"))
+    // The stop's grace before the kill is the given 9 s.
+    #expect(f.backend.graces == [.seconds(9)])
     let zero = await #expect(throws: VMLabError.self) { try await act("start", 0) }
     #expect(zero?.data["field"] == .string("timeoutSeconds"))
   }

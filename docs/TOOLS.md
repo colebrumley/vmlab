@@ -74,7 +74,7 @@ Check the host's prerequisites (QEMU, Tart, Rosetta, the signed VZ runner and it
 
 ## `images`
 
-Manage the guest image cache in ~/.vmlab/images. list shows pulled and available images; pull downloads and verifies one by name (large pulls need confirm: true); remove deletes a pulled image; register adds a local disk image (path, guest, arch, format), an IPSW (path ending .ipsw) or a kernel (kernel, initrd); template_create turns the stopped VM vm into the template name for vm_create image: name and fleets; prune removes images no VM or template uses; extract_kernel copies the kernel, initrd, System.map and config out of a pulled Linux image for direct kernel boot. vm_create pulls what it needs itself, so call this to inspect or to pre-pull.
+Manage the guest image cache in ~/.vmlab/images. list shows pulled and available images; pull downloads and verifies one by name (large pulls need confirm: true; a changed upstream image is not pulled over one a VM uses); remove deletes a pulled image no VM uses; register adds a local disk image (path, guest, arch, format), an IPSW (path ending .ipsw) or a kernel (kernel, initrd); template_create turns the stopped VM vm into the template name for vm_create image: name and fleets; prune removes images no VM or template uses; extract_kernel copies the kernel, initrd, System.map and config out of a pulled Linux image for direct kernel boot. vm_create pulls what it needs itself, so call this to inspect or to pre-pull.
 
 **Errors:** `invalid_request`, `image_not_found`, `confirm_required`, `host_missing_tool`, `vm_not_found`, `wrong_state`
 
@@ -509,9 +509,9 @@ list: { segments: [ { name, subnet, members } ] }
 
 ## `fleet`
 
-Run several identical VMs as a group. create makes count members named <name>-1 to <name>-n from one plan of requirements (or image, a template), joins them to segment (auto makes one) and waits for SSH on each; some members may fail and are listed with their error. status reports each member; list shows fleets; exec runs command on every member, or on members, in parallel, with vm_exec's options, and returns each member's result and allSucceeded; destroy removes the fleet and its VMs.
+Run several identical VMs as a group. create makes count members named <name>-1 to <name>-n from one plan of requirements (or image, a template), joins them to segment (auto makes one) and waits for SSH on each; some members may fail and are listed with their error. status reports each member; list shows fleets; exec runs command on every member, or on members, in parallel, with vm_exec's options, and returns each member's result and allSucceeded; destroy removes the fleet and its VMs, keeping (and listing in failed) any member it could not destroy, such as one whose disk backs another VM.
 
-**Errors:** `invalid_request`, `unsatisfiable`, `unverified_capability`, `limit_macos_guests`, `limit_memory`, `image_not_found`, `vm_not_found`, `timeout`, `wrong_state`
+**Errors:** `invalid_request`, `unsatisfiable`, `unverified_capability`, `limit_macos_guests`, `limit_memory`, `image_not_found`, `confirm_required`, `vm_not_found`, `timeout`, `wrong_state`
 
 **Input**
 
@@ -520,6 +520,7 @@ Run several identical VMs as a group. create makes count members named <name>-1 
 | `action` | `create` \| `list` \| `status` \| `exec` \| `destroy` | yes | What to do. |
 | `allowUnverified` | boolean, default `false` |  | Treat features whose slow probe has not run on this host as available, instead of failing with unverified_capability. |
 | `command` | string |  | exec: the command, as for vm_exec. |
+| `confirm` | boolean, default `false` |  | create: allow a large image pull the server asks to confirm. |
 | `count` | integer, ≥ 1 |  | create: how many members. |
 | `cwd` | string |  | exec: working directory in each guest. |
 | `env` | object |  | exec: extra environment variables. |
@@ -539,7 +540,8 @@ Run several identical VMs as a group. create makes count members named <name>-1 
 create, status: { name, segment, subnet, members: [ { vm, id, state, ip?, natIP?,
   forwards?: [ { guest, host, hostReachable } ], error? } ] }
 list: { fleets: [ { name, members } ] }
-exec: { results: { <member>: ExecResult }, allSucceeded }; destroy: { destroyed: [vm] }
+exec: { results: { <member>: ExecResult }, allSucceeded }
+destroy: { destroyed: [vm], failed: [ { vm, id, error } ] }
 ```
 
 ## Requirements

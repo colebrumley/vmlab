@@ -150,6 +150,94 @@ import VMLabCore
     #expect(FleetStore(home: f.context.home).list().isEmpty)
   }
 
+  /// CX-10: a huge count is refused before any member name is built.
+  @Test func aHugeCountIsRefusedFirst() async throws {
+    let f = try Fixture()
+    defer { f.cleanUp() }
+    for count in [1_000_000_000_000, 0, -3, 65] {
+      let error = await #expect(throws: VMLabError.self) {
+        try await f.call([
+          "action": .string("create"), "name": .string("big"), "count": .number(Double(count)),
+          "requirements": VMCreateHandlerTests.Fixture.requirements,
+          "allowUnverified": .bool(true),
+        ])
+      }
+      #expect(error?.data["field"] == .string("count"), "\(count)")
+    }
+    #expect(FleetPlanning.memberNames("x", count: Int.max).count == FleetPlanning.maxMembers)
+  }
+
+  /// CX-6: destroy never forces: a member whose disk backs a VM outside the fleet is kept and
+  /// reported with its refusal; the clone still boots. Once the clone is gone, destroy finishes.
+  @Test func destroyKeepsAMemberAnOutsideCloneReadsAndSaysWhy() async throws {
+    let f = try Fixture()
+    defer { f.cleanUp() }
+    _ = try await f.call([
+      "action": .string("create"), "name": .string("node"), "count": .number(2),
+      "requirements": VMCreateHandlerTests.Fixture.requirements, "allowUnverified": .bool(true),
+    ])
+    try await f.context.manager.perform(.stop, on: "node-1")
+    let outside = try await f.context.manager.clone("node-1", name: "outside")
+    let result = try await ToolHandlers.call(
+      "fleet", arguments: .object(["action": .string("destroy"), "name": .string("node")]),
+      context: f.context)
+    #expect(result.value["destroyed"] == .array([.string("node-2")]))
+    let failed = try #require(result.value["failed"]?.arrayValue)
+    #expect(failed.map { $0["vm"] } == [.string("node-1")])
+    #expect(failed.first?["error"]?["data"]?["field"] == .string("force"))
+    #expect(result.warnings.contains { $0.contains("node-1") })
+    #expect(try f.context.store.find("node-1").name == "node-1")
+    #expect(try f.context.store.find(outside.id).name == "outside")
+
+    try await f.context.manager.perform(.destroy, on: outside.id)
+    let rest = try await f.call(["action": .string("destroy"), "name": .string("node")])
+    #expect(rest["destroyed"] == .array([.string("node-1")]))
+    #expect(rest["failed"] == .array([]))
+    #expect(try f.context.store.list().records.isEmpty)
+  }
+
+  /// CX-19: a member whose destroy fails stays in the fleet record; a bad timeoutSeconds is
+  /// refused before any segment or fleet record is made.
+  @Test func aFailedDestroyKeepsTheRecordAndBadInputsLeaveNothing() async throws {
+    let f = try Fixture()
+    defer { f.cleanUp() }
+    for bad: JSONValue in [.number(0), .number(-5), .string("soon")] {
+      await #expect(throws: VMLabError.self) {
+        try await f.call([
+          "action": .string("create"), "name": .string("lab"), "count": .number(1),
+          "requirements": VMCreateHandlerTests.Fixture.requirements,
+          "allowUnverified": .bool(true), "timeoutSeconds": bad,
+        ])
+      }
+      #expect(FleetStore(home: f.context.home).list().isEmpty)
+      #expect(f.context.manager.segments.list().isEmpty)
+    }
+
+    _ = try await f.call([
+      "action": .string("create"), "name": .string("lab"), "count": .number(2),
+      "requirements": VMCreateHandlerTests.Fixture.requirements, "allowUnverified": .bool(true),
+    ])
+    f.backend.fail(.destroy)
+    let partial = try await f.call(["action": .string("destroy"), "name": .string("lab")])
+    #expect(partial["destroyed"]?.arrayValue?.count == 1)
+    #expect(partial["failed"]?.arrayValue?.count == 1)
+    let kept = try FleetStore(home: f.context.home).load("lab")
+    #expect(kept.members.count == 1)
+    #expect(
+      try kept.members.allSatisfy { try f.context.store.load(id: $0.vm ?? "").fleet == "lab" })
+    #expect(!f.context.manager.segments.list().isEmpty)
+    let rest = try await f.call(["action": .string("destroy"), "name": .string("lab")])
+    #expect(rest["destroyed"]?.arrayValue?.count == 1)
+    #expect(FleetStore(home: f.context.home).list().isEmpty)
+    #expect(f.context.manager.segments.list().isEmpty)
+  }
+
+  /// CX-20: a large-image fleet's confirm_required can be answered: the schema takes confirm.
+  @Test func schemaTakesConfirm() {
+    #expect(ToolSpec.fleet.inputSchema["properties"]?["confirm"]?["type"] == .string("boolean"))
+    #expect(ToolSpec.fleet.errors.contains(.confirmRequired))
+  }
+
   @Test func netSegmentCreateListDestroy() async throws {
     let f = try Fixture()
     defer { f.cleanUp() }

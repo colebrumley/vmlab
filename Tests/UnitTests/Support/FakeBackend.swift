@@ -87,6 +87,13 @@ final class FakeBackend: Backend {
   }
 
   func stop(_ record: VMRecord) async throws(VMLabError) { try self.record(.stop, record) }
+  /// The timeout of every `sshEndpoint(_:timeout:)`, the start's wait for SSH.
+  var sshTimeouts: [Duration] { sshTimeoutLog.withLock { $0 } }
+  private let sshTimeoutLog = Mutex<[Duration]>([])
+  func sshEndpoint(_ record: VMRecord, timeout: Duration) async -> SSHEndpoint? {
+    sshTimeoutLog.withLock { $0.append(timeout) }
+    return SSHEndpoint(runtime: record.runtime)
+  }
   /// The grace of every `stop(_:grace:)` (nil: the default).
   var graces: [Duration?] { graceLog.withLock { $0 } }
   private let graceLog = Mutex<[Duration?]>([])

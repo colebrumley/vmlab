@@ -49,6 +49,25 @@ import VMLabCore
     #expect(row?.pulled?.template != nil)
   }
 
+  /// CX-22: template_create waits for the VM's operation lock and re-reads the record under it,
+  /// so a VM started meanwhile (by another process) is refused rather than copied mid-write.
+  @Test func templateWaitsForTheVMLockAndRechecksItsState() async throws {
+    let f = try Self.fixture()
+    let manager = VMManager(store: f.store)
+    let held = try #require(FileLock.tryLock(f.store.operationLockPath(of: f.record.id)))
+    let id = f.record.id
+    let images = f.images
+    let attempt = Task { () async throws(VMLabError) -> PulledImage in
+      try await manager.createTemplate("web", from: id, images: images)
+    }
+    try await Task.sleep(for: .milliseconds(150))
+    _ = try f.store.update(id: id) { $0.state = .running }
+    held.unlock()
+    let error = await #expect(throws: VMLabError.self) { try await attempt.value }
+    #expect(error?.code == .wrongState)
+    #expect(f.images.pulled("web") == nil)
+  }
+
   @Test func vzVMRawDiskIsCopiedAndConverted() async throws {
     let f = try Self.fixture(disk: "disk.raw")
     _ = try await f.images.createTemplate(

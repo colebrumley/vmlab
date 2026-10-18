@@ -200,9 +200,8 @@ public struct SegmentStore: Sendable {
   /// Adds `record` to the segment (created when missing) at the next free address; joining again
   /// returns the address it already has.
   public func join(_ name: String, vm record: VMRecord) throws(VMLabError) -> SegmentAttachment {
-    _ = try ensure(name)
     let mac = SegmentAttachment.mac(for: record.id)
-    let member = try update(name) { (segment: inout Segment) throws(VMLabError) -> SegmentMember in
+    let member = try joining(name) { (segment: inout Segment) throws(VMLabError) -> SegmentMember in
       if let index = segment.members.firstIndex(where: { $0.vm == record.id }) {
         segment.members[index].name = record.name
         return segment.members[index]
@@ -228,6 +227,21 @@ public struct SegmentStore: Sendable {
     return SegmentAttachment(segment: name, address: member.address, mac: member.mac)
   }
 
+  /// `update` of the segment, created first when missing. A destroy that removed it between
+  /// the create and the locked update (CX-18) is answered by creating it again.
+  private func joining<T>(
+    _ name: String, _ body: (inout Segment) throws(VMLabError) -> T
+  ) throws(VMLabError) -> T {
+    var attempt = 0
+    while true {
+      _ = try ensure(name)
+      do { return try update(name, body) } catch {
+        attempt += 1
+        guard attempt < 3, (try? load(name)) == nil else { throw error }
+      }
+    }
+  }
+
   /// Removes `vm` from the segment; a missing segment or member is not an error.
   public func leave(_ name: String, vm: String) throws(VMLabError) {
     guard (try? load(name)) != nil else { return }
@@ -237,8 +251,17 @@ public struct SegmentStore: Sendable {
     try? FileManager.default.removeItem(at: portSocket(of: name, vm: vm))
   }
 
-  /// Stops the switch and removes the segment; `wrong_state` while it has members.
+  /// Stops the switch and removes the segment; `wrong_state` while it has members. The check
+  /// and the removal hold `segment-<name>`'s lock (CX-18), so a join is either seen or comes
+  /// after, onto a segment it recreates.
   public func destroy(_ name: String) throws(VMLabError) {
+    try Self.check(name)
+    try Store(home: home).withLock("segment-\(name)") { () throws(VMLabError) in
+      try destroyLocked(name)
+    }
+  }
+
+  private func destroyLocked(_ name: String) throws(VMLabError) {
     let segment = try load(name)
     if !segment.members.isEmpty {
       throw VMLabError(

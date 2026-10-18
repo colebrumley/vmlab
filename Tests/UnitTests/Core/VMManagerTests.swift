@@ -80,6 +80,27 @@ import VMLabCore
       ])
   }
 
+  /// CX-5: `require: [net_none]` without `network.mode` stores mode `none`, so no backend
+  /// attaches its default NAT; and the selector still refuses net_none with mode nat.
+  @Test func netNoneWithoutAModeDisablesTheNetwork() async throws {
+    let f = try Fixture()
+    let draft = VMRecord(
+      id: "", name: "airgap", profile: .qemuHVF, guest: GuestSpec(os: .linux, arch: .arm64),
+      features: [], image: "debian-13-arm64")
+    var plan = f.plan([.execSSH, .netNone])
+    plan.requested = [.netNone]
+    let vm = try await f.manager.create(draft, plan: plan)
+    #expect(vm.network.mode == .disabled)
+    #expect(try f.store.load(id: vm.id).network.mode == .disabled)
+    let plain = try await f.create()
+    #expect(plain.network.mode == nil)
+    #expect(throws: VMLabError.self) {
+      try Requirements(
+        guest: GuestSpec(os: .linux, arch: .arm64), require: [.netNone],
+        network: NetworkSpec(mode: .nat))
+    }
+  }
+
   @Test func destroyKillsALiveGuestFirst() async throws {
     let f = try Fixture()
     let vm = try await f.create()

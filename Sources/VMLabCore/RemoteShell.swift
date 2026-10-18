@@ -48,14 +48,67 @@ public enum RemoteShell {
     """#
 
   /// A foreground command: stdin, stdout and stderr pass through ssh; the status is the command's.
+  /// Its stderr opens with `startMarker(job:)` before the command runs and closes with
+  /// `doneMarker(job:)` once it has ended, so the host can tell a command that never started
+  /// (safe to run elsewhere) from one that did (CX-4); the host strips both.
   static let foreground = """
     \(jobDirectory)
     mkdir -p "$d" && chmod 700 "$d" || exit 125
+    printf 'vmlab-run:%s\\n' "$1" >&2
     \(inGroup)
     rc=$?
     rm -rf "$d"
+    printf 'vmlab-done:%s\\n' "$1" >&2
     exit $rc
     """
+
+  /// The stderr line a foreground command's script writes before the command runs.
+  public static func startMarker(job: String) -> Data { Data("vmlab-run:\(job)\n".utf8) }
+  /// The stderr text a foreground command's script writes after the command has ended.
+  public static func doneMarker(job: String) -> Data { Data("vmlab-done:\(job)\n".utf8) }
+
+  /// Removes job `job`'s start and done markers from the stderr file at `url` and says which
+  /// were there. The start marker is looked for in the first 64 KB (only ssh's own messages can
+  /// come before it), the done marker in the last 4 KB (only ssh's can come after it).
+  public static func stripMarkers(stderr url: URL, job: String) -> (started: Bool, finished: Bool) {
+    guard let handle = try? FileHandle(forUpdating: url) else { return (false, false) }
+    defer { try? handle.close() }
+    let start = startMarker(job: job)
+    let done = doneMarker(job: job)
+    var size = (try? handle.seekToEnd()) ?? 0
+    let tailStart = size - min(size, UInt64(4096 + done.count))
+    try? handle.seek(toOffset: tailStart)
+    let tail = (try? handle.readToEnd()) ?? Data()
+    var finished = false
+    if let range = tail.range(of: done, options: .backwards) {
+      let at = tailStart + UInt64(range.lowerBound - tail.startIndex)
+      remove(at: at, count: UInt64(done.count), size: &size, in: handle)
+      finished = true
+    }
+    try? handle.seek(toOffset: 0)
+    let head = (try? handle.read(upToCount: 64 * 1024 + start.count)) ?? Data()
+    guard let range = head.range(of: start) else { return (false, finished) }
+    let at = UInt64(range.lowerBound - head.startIndex)
+    remove(at: at, count: UInt64(start.count), size: &size, in: handle)
+    return (true, finished)
+  }
+
+  /// Cuts `count` bytes at `at` out of the file: what follows moves down, the file shortens.
+  private static func remove(at: UInt64, count: UInt64, size: inout UInt64, in handle: FileHandle) {
+    var readAt = at + count
+    var writeAt = at
+    while readAt < size {
+      try? handle.seek(toOffset: readAt)
+      let chunk = (try? handle.read(upToCount: Int(min(1 << 20, size - readAt)))) ?? Data()
+      if chunk.isEmpty { break }
+      try? handle.seek(toOffset: writeAt)
+      try? handle.write(contentsOf: chunk)
+      readAt += UInt64(chunk.count)
+      writeAt += UInt64(chunk.count)
+    }
+    try? handle.truncate(atOffset: writeAt)
+    size = writeAt
+  }
 
   /// Ends the job's process group (`TERM`, then `KILL` a second later) and, for a background job,
   /// records `signal` as its status when it has none. A job whose group has not written its id

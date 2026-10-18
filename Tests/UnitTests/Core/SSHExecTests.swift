@@ -158,13 +158,66 @@ import VMLabCore
 
   @Test func sshFailureIsGuestUnreachable() async throws {
     let f = try Fixture()
+    let ssh = f.dir.appending(path: "ssh-refused")
+    try "#!/bin/sh\necho 'ssh: connect to host x port 1: Connection refused' >&2\nexit 255\n"
+      .write(to: ssh, atomically: true, encoding: .utf8)
+    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: ssh.path)
+    let channel = SSHExecChannel(target: f.channel.target, ssh: ssh.path)
     let error = await #expect(throws: VMLabError.self) {
-      try await f.channel.run(
-        ExecRequest(
-          command: "echo 'ssh: connect to host x port 1: Connection refused' >&2; exit 255"))
+      try await channel.run(ExecRequest(command: "true"))
     }
     #expect(error?.code == .guestUnreachable)
     #expect(error?.data["tried"] == .array([.string("ssh")]))
+  }
+
+  /// CX-4: a guest command that exits 255 with ssh-like text on stderr ran to completion, so it
+  /// is its result, never an unreachable error that `via: auto` would run a second time.
+  @Test func aGuestExit255WithSSHTextIsTheCommandsResult() async throws {
+    let f = try Fixture()
+    let result = try await f.channel.run(
+      ExecRequest(
+        command:
+          "echo 'ssh: connect to host x port 1: Connection refused' >&2; printf tail >&2; exit 255")
+    )
+    #expect(result.exitCode == 255)
+    #expect(result.stderr == "ssh: connect to host x port 1: Connection refused\ntail")
+    #expect(!result.stderr.contains("vmlab-"))
+  }
+
+  /// CX-4: both markers come out of stderr even with ssh's own lines around them.
+  @Test func markersAreStrippedAroundSSHsOwnLines() throws {
+    let url = FileManager.default.temporaryDirectory.appending(path: "vmlab-mark-\(UUID())")
+    defer { try? FileManager.default.removeItem(at: url) }
+    let text =
+      "Warning: added\n" + "vmlab-run:j-1\n" + "guest err" + "vmlab-done:j-1\n"
+      + "Connection to x closed.\n"
+    try text.write(to: url, atomically: true, encoding: .utf8)
+    let marks = RemoteShell.stripMarkers(stderr: url, job: "j-1")
+    #expect(marks == (true, true))
+    #expect(
+      try String(contentsOf: url, encoding: .utf8)
+        == "Warning: added\nguest errConnection to x closed.\n")
+  }
+
+  /// CX-4: a command that started and then lost its connection never falls back, whatever the
+  /// stderr says, since it may have had its effect.
+  @Test func aDroppedRunAfterTheStartNeverFallsBack() async throws {
+    let f = try Fixture()
+    let ssh = f.dir.appending(path: "ssh-drops")
+    try """
+    #!/bin/sh
+    for a; do last=$a; done
+    /bin/sh -c "$last" 2>&1 >/dev/null | head -n 1 >&2
+    echo 'ssh: connect to host x port 1: Connection refused' >&2
+    exit 255
+    """.write(to: ssh, atomically: true, encoding: .utf8)
+    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: ssh.path)
+    let channel = SSHExecChannel(target: f.channel.target, ssh: ssh.path)
+    let error = await #expect(throws: VMLabError.self) {
+      try await channel.run(ExecRequest(command: "sleep 0.2"))
+    }
+    #expect(error?.code == .guestUnreachable)
+    #expect(error?.data[ExecFallback.connectedKey] == .bool(true))
   }
 
   @Test func remoteCommandShape() {

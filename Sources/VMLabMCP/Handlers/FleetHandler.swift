@@ -31,10 +31,22 @@ struct FleetHandler: ToolHandler {
       ])
     case "destroy":
       let fleet = try fleets.load(try Self.name(arguments))
-      let destroyed = await Self.destroy(fleet, context: context, fleets: fleets)
-      return ToolResult([
-        "name": .string(fleet.name), "destroyed": .array(destroyed.map(JSONValue.string)),
-      ])
+      let teardown = await Self.destroy(fleet, context: context, fleets: fleets)
+      let failed: [JSONValue] = teardown.failed.map { failure in
+        .object([
+          "vm": .string(failure.name), "id": .string(failure.id),
+          "error": (try? JSONValue(encoding: failure.error)) ?? .null,
+        ])
+      }
+      let warnings = teardown.failed.map { failure in
+        "\(failure.name) was not destroyed: \(failure.error.message); the fleet record keeps it"
+      }
+      return ToolResult(
+        [
+          "name": .string(fleet.name),
+          "destroyed": .array(teardown.destroyed.map(JSONValue.string)),
+          "failed": .array(failed),
+        ], warnings: warnings)
     case "exec":
       let fleet = try fleets.load(try Self.name(arguments))
       return try await Self.exec(fleet, arguments, context: context)
@@ -61,6 +73,19 @@ struct FleetHandler: ToolHandler {
       throw VMLabError.invalidRequest(
         field: "count", reason: "create needs count", hint: "Add count: how many members.")
     }
+    try FleetPlanning.checkCount(count)
+    // CX-19: every input is checked before the segment or the fleet record is made.
+    let sshTimeout = try arguments.int("timeoutSeconds").map {
+      (seconds) throws(VMLabError) -> Duration in
+      guard seconds >= 1 else {
+        throw VMLabError.invalidRequest(
+          field: "timeoutSeconds", reason: "timeoutSeconds must be at least 1",
+          hint: "Give the per-member SSH wait in whole seconds, or leave it out.")
+      }
+      return .seconds(seconds)
+    }
+    let confirm = try arguments.bool("confirm")
+    let allowUnverified = try arguments.bool("allowUnverified")
     guard let raw = arguments["requirements"] else {
       throw VMLabError.invalidRequest(
         field: "requirements", reason: "create needs requirements",
@@ -88,7 +113,7 @@ struct FleetHandler: ToolHandler {
     let plan: Plan
     switch ProfileSelector.select(
       requirements, host: context.hostFacts(), running: context.store.inventory(),
-      allowUnverified: try arguments.bool("allowUnverified"), limits: context.limits)
+      allowUnverified: allowUnverified, limits: context.limits)
     {
     case .success(let selected): plan = selected
     case .failure(let unsatisfiable): throw unsatisfiable.error
@@ -103,7 +128,7 @@ struct FleetHandler: ToolHandler {
       for: requirements, catalogue: images.catalogue, guestOf: { images.guest(of: $0) })
     var warnings: [String] = []
     if try await LongOperation.pullIfMissing(
-      image, confirm: try arguments.bool("confirm"), context: context) != nil
+      image, confirm: confirm, context: context) != nil
     {
       warnings.append("pulled image \(image) first")
     }
@@ -126,7 +151,6 @@ struct FleetHandler: ToolHandler {
       autoSegment: autoSegment, members: names.map { FleetMember(name: $0) })
     try fleets.save(fleet)
 
-    let sshTimeout = try arguments.int("timeoutSeconds").map { Duration.seconds($0) }
     let draft = VMRecord(
       id: "", profile: plan.profile, guest: plan.guest, features: plan.features,
       resources: plan.resources, image: image, network: requirements.network,
@@ -281,33 +305,82 @@ struct FleetHandler: ToolHandler {
     return object
   }
 
-  /// Destroys every member VM (and any VM that names the fleet), the auto segment and the record.
+  /// What `destroy` did: the names of the VMs it destroyed and, for each VM it could not,
+  /// its name, id and refusal.
+  struct Teardown {
+    var destroyed: [String] = []
+    var failed: [(name: String, id: String, error: VMLabError)] = []
+  }
+
+  /// Destroys every member VM (and any VM that names the fleet), never with `force` (CX-6): a
+  /// member whose disk backs another VM's is refused and kept, as is one whose destroy fails.
+  /// Members are destroyed in rounds: one refused only for its dependents is retried after a
+  /// round that destroyed something, so one whose dependents are fleet members goes once they
+  /// have; any other failure is final. When every VM is gone the auto segment and the record go too; otherwise the record is
+  /// kept, listing the survivors (CX-19), so a later destroy can finish the job.
   static func destroy(
     _ fleet: FleetRecord, context: ToolContext, fleets: FleetStore
-  ) async -> [String] {
+  ) async -> Teardown {
     let records = (try? context.store.list().records) ?? []
-    let ids = Set(
+    var remaining = Set(
       fleet.members.compactMap(\.vm) + records.filter { $0.fleet == fleet.name }.map(\.id))
+    var survivors: Set<String> = []
     let manager = context.manager
-    let destroyed = await withTaskGroup(of: String?.self) { group in
-      for id in ids {
-        group.addTask {
-          guard let record = try? context.store.load(id: id) else { return nil }
-          do throws(VMLabError) {
-            _ = try await manager.perform(.destroy, on: id, force: true)
-          } catch {
-            return nil
+    var teardown = Teardown()
+    var refusals: [String: (name: String, error: VMLabError)] = [:]
+    while !remaining.isEmpty {
+      let round = await withTaskGroup(of: (String, String?, VMLabError?).self) { group in
+        for id in remaining {
+          group.addTask {
+            guard let record = try? context.store.load(id: id) else { return (id, nil, nil) }
+            do throws(VMLabError) {
+              _ = try await manager.perform(.destroy, on: id)
+              await context.debug.drop(id)
+              await context.displays.forget(vm: id)
+              return (id, record.name, nil)
+            } catch {
+              return (id, record.name, error)
+            }
           }
-          return record.name
         }
+        var results: [(String, String?, VMLabError?)] = []
+        for await result in group { results.append(result) }
+        return results
       }
-      var names: [String] = []
-      for await name in group { if let name { names.append(name) } }
-      return names.sorted()
+      var progressed = false
+      for (id, name, error) in round {
+        if let error, let name {
+          refusals[id] = (name, error)
+          if error.data["field"] != .string("force") {
+            remaining.remove(id)
+            survivors.insert(id)
+          }
+          continue
+        }
+        remaining.remove(id)
+        refusals[id] = nil
+        progressed = true
+        if let name { teardown.destroyed.append(name) }
+      }
+      if !progressed { break }
     }
-    if fleet.autoSegment { try? context.manager.segments.destroy(fleet.segment) }
-    fleets.remove(fleet.name)
-    return destroyed
+    survivors.formUnion(remaining)
+    teardown.destroyed.sort()
+    teardown.failed = refusals.map { (name: $0.value.name, id: $0.key, error: $0.value.error) }
+      .sorted { $0.name < $1.name }
+    if survivors.isEmpty {
+      if fleet.autoSegment { try? context.manager.segments.destroy(fleet.segment) }
+      fleets.remove(fleet.name)
+    } else {
+      var kept = fleet
+      kept.members = fleet.members.filter { $0.vm.map(survivors.contains) ?? false }
+      let listed = Set(kept.members.compactMap(\.vm))
+      for (id, refusal) in refusals where !listed.contains(id) {
+        kept.members.append(FleetMember(name: refusal.name, vm: id))
+      }
+      try? fleets.save(kept)
+    }
+    return teardown
   }
 
   static func name(_ arguments: ToolArguments) throws(VMLabError) -> String {

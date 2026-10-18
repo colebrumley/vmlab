@@ -156,6 +156,11 @@ public actor GDBClient {
           self.consoleOutput.append(contentsOf: bytes)
           continue
         }
+        // A refused resume (`E22` to a `vCont` naming an unknown thread) never ran the CPU.
+        if let error = Self.stubError(payload) {
+          self.state = .stopped
+          throw error
+        }
         guard StopReply.isStopReply(text) else {
           throw GDBError.malformedReply("expected a stop reply, got \(text.prefix(64))")
         }
@@ -177,9 +182,13 @@ public actor GDBClient {
 
   // MARK: Registers
 
-  /// `g`: the raw register block, hex as the stub sent it (`xx` marks unavailable bytes).
-  public func readRegistersRaw() async throws -> String {
-    try await exclusive { try await self.request(GDBCommand.readRegisters) }
+  /// `g`: the raw register block, hex as the stub sent it (`xx` marks unavailable bytes). With a
+  /// `thread`, `Hg` selects it in the same exclusive section, so no other call's `Hg` intervenes.
+  public func readRegistersRaw(thread: String? = nil) async throws -> String {
+    try await exclusive {
+      if let thread { try await self.expectOK(GDBCommand.selectThread(thread)) }
+      return try await self.request(GDBCommand.readRegisters)
+    }
   }
 
   /// `G`: writes the whole register block.
@@ -199,10 +208,11 @@ public actor GDBClient {
     }
   }
 
-  /// Every register the `g` reply carries, named through the register map.
-  public func registers() async throws -> [RegisterReading] {
+  /// Every register the `g` reply carries, named through the register map; of `thread` when one
+  /// is given (selected atomically with the read).
+  public func registers(thread: String? = nil) async throws -> [RegisterReading] {
     let map = try await registerMap()
-    return try map.decode(registersReply: try await readRegistersRaw())
+    return try map.decode(registersReply: try await readRegistersRaw(thread: thread))
   }
 
   /// One register by name (`pc` and `sp` also resolve to `rip`/`rsp` on x86).
@@ -229,8 +239,12 @@ public actor GDBClient {
 
   /// `m`: reads `length` bytes, in packets the stub accepts. A short read ends early only if the
   /// stub returns no bytes at all (then the error is the stub's).
-  public func readMemory(address: UInt64, length: Int) async throws -> [UInt8] {
+  /// With a `thread`, `Hg` selects it in the same exclusive section as the reads.
+  public func readMemory(address: UInt64, length: Int, thread: String? = nil) async throws
+    -> [UInt8]
+  {
     try await exclusive {
+      if let thread { try await self.expectOK(GDBCommand.selectThread(thread)) }
       var out: [UInt8] = []
       out.reserveCapacity(length)
       while out.count < length {
@@ -247,8 +261,10 @@ public actor GDBClient {
   }
 
   /// `M`: writes bytes, in packets the stub accepts.
-  public func writeMemory(address: UInt64, bytes: [UInt8]) async throws {
+  /// With a `thread`, `Hg` selects it in the same exclusive section as the writes.
+  public func writeMemory(address: UInt64, bytes: [UInt8], thread: String? = nil) async throws {
     try await exclusive {
+      if let thread { try await self.expectOK(GDBCommand.selectThread(thread)) }
       var offset = 0
       while offset < bytes.count {
         let chunk = Array(bytes[offset..<min(bytes.count, offset + self.maxWriteChunk)])

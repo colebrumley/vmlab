@@ -428,7 +428,8 @@ struct MemoryDumpCommand: ToolCommand {
 struct CheckpointCommand: ToolCommand {
   static let configuration = CommandConfiguration(
     commandName: "checkpoint",
-    abstract: "Create, list, restore or delete a VM's checkpoints (the vm_checkpoint tool).")
+    abstract:
+      "Create, list, restore, delete or diff a VM's checkpoints (the vm_checkpoint tool).")
   static let toolName = "vm_checkpoint"
 
   @Argument(help: "The VM's id or name.") var vm: String
@@ -438,11 +439,15 @@ struct CheckpointCommand: ToolCommand {
   @Option(help: "create: a note kept with the checkpoint.") var note: String?
   @Flag(help: "create: also take a guest manifest.") var manifest = false
   @Flag(help: "delete: also delete its descendants.") var recursive = false
+  @Option(help: "diff: the older side (a checkpoint, a manifest id or @now).") var from: String?
+  @Option(help: "diff: the newer side (a checkpoint, a manifest id or @now).") var to: String?
   @Flag(help: "Print the result object as JSON.") var json = false
 
   func arguments() throws -> JSONValue {
     var object: [String: JSONValue] = ["vm": .string(vm), "action": .string(action)]
     if let name { object["name"] = .string(name) }
+    if let from { object["from"] = .string(from) }
+    if let to { object["to"] = .string(to) }
     if let mode { object["mode"] = .string(mode) }
     if let note { object["note"] = .string(note) }
     if manifest { object["manifest"] = .bool(true) }
@@ -464,6 +469,9 @@ struct CheckpointCommand: ToolCommand {
       return nodes.map { line($0, current: v["current"]?.stringValue) }.joined(separator: "\n")
     }
     if let deleted = v["deleted"] { return "deleted: \(Human.list(deleted))" }
+    if action == "diff", let path = v["path"]?.stringValue {
+      return "diff \(v["from"]?.stringValue ?? "?") -> \(v["to"]?.stringValue ?? "?"): \(path)"
+    }
     if let node = v["checkpoint"] {
       let state = v["state"]?.stringValue.map { " (VM \($0))" } ?? ""
       return line(node).trimmingCharacters(in: .whitespaces) + state

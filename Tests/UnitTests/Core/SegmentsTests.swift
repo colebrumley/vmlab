@@ -42,6 +42,46 @@ import VMLabCore
     #expect(segments.list().map(\.name) == ["a", "c"])
   }
 
+  /// CX-18: destroy takes `segment-<name>`'s lock, so a join that holds it (here, a member
+  /// written while the test holds the lock) is seen and the segment is kept, not deleted.
+  @Test func destroyWaitsForTheSegmentLockAndSeesAJoin() async throws {
+    let home = Self.home()
+    defer { try? FileManager.default.removeItem(at: home) }
+    let segments = SegmentStore(home: home, switchBinary: nil)
+    var segment = try segments.create("lab")
+    let lock = try #require(
+      FileLock.tryLock(home.appending(path: "locks/segment-lab.lock").path))
+    let destroying = Task.detached { () -> VMLabError? in
+      do { try segments.destroy("lab") } catch { return error as? VMLabError }
+      return nil
+    }
+    try await Task.sleep(for: .milliseconds(200))
+    segment.members = [
+      SegmentMember(
+        vm: "vm-aaaaaa", name: "late", address: "10.1.0.10", mac: "52:54:5e:00:00:01",
+        joinedAt: Date())
+    ]
+    let encoder = JSONEncoder()
+    encoder.dateEncodingStrategy = .iso8601
+    try encoder.encode(segment).write(to: segments.recordURL(of: "lab"), options: .atomic)
+    lock.unlock()
+    let error = await destroying.value
+    #expect(error?.code == .wrongState)
+    #expect(try segments.load("lab").members.map(\.name) == ["late"])
+  }
+
+  /// CX-18: a join racing a destroy recreates the segment rather than failing or writing into
+  /// a removed directory.
+  @Test func aJoinAfterADestroyRecreatesTheSegment() throws {
+    let home = Self.home()
+    defer { try? FileManager.default.removeItem(at: home) }
+    let segments = SegmentStore(home: home, switchBinary: nil)
+    try segments.create("lab")
+    try segments.destroy("lab")
+    #expect(try segments.join("lab", vm: Self.record("vm-aaaaaa", "x")).segment == "lab")
+    #expect(try segments.load("lab").members.count == 1)
+  }
+
   @Test func joiningAMissingSegmentCreatesIt() throws {
     let home = Self.home()
     defer { try? FileManager.default.removeItem(at: home) }

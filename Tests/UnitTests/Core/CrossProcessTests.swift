@@ -15,7 +15,7 @@ import VMLabCore
   static let host = StartGateTests.host  // 32 GB, 4 GB reserve
   static let empty: @Sendable () -> Inventory = { .empty }
 
-  @Test func fileLocksExcludeEachOtherAndDieWithTheirHolder() throws {
+  @Test func fileLocksExcludeEachOther() throws {
     let path = try Self.home().appending(path: "locks/x.lock").path
     var first = FileLock.tryLock(path)
     #expect(first != nil)
@@ -23,10 +23,62 @@ import VMLabCore
     #expect(FileLock.isHeld(path))
     first?.write(Data("hello".utf8))
     #expect(FileManager.default.contents(atPath: path) == Data("hello".utf8))
-    first = nil  // deinit unlocks, as the kernel does for a process that exits
+    first = nil  // deinit unlocks
     #expect(!FileLock.isHeld(path))
     #expect(FileManager.default.contents(atPath: path) == Data())
     #expect(FileLock.tryLock(path) != nil)
+  }
+
+  /// The lock dies with its holder: a child process takes it with flock(2) (perl's flock is
+  /// flock(2) on macOS) and is SIGKILLed while holding it; the kernel frees it.
+  @Test(.enabled(if: FileManager.default.isExecutableFile(atPath: "/usr/bin/perl")))
+  func aLockDiesWithAKilledHolderProcess() throws {
+    let path = try Self.home().appending(path: "locks/x.lock").path
+    _ = FileLock.tryLock(path)?.unlock()  // creates locks/
+    let child = Process()
+    child.executableURL = URL(filePath: "/usr/bin/perl")
+    child.arguments = [
+      "-e",
+      "use Fcntl qw(:flock); open(my $f, '>>', $ARGV[0]) or die; flock($f, LOCK_EX) or die; "
+        + "$| = 1; print \"locked\\n\"; sleep 600;",
+      path,
+    ]
+    let out = Pipe()
+    child.standardOutput = out
+    try child.run()
+    defer { if child.isRunning { child.terminate() } }
+    let line = out.fileHandleForReading.availableData
+    #expect(String(decoding: line, as: UTF8.self) == "locked\n")
+    #expect(FileLock.isHeld(path))
+    #expect(FileLock.tryLock(path) == nil)
+    kill(child.processIdentifier, SIGKILL)
+    child.waitUntilExit()
+    #expect(!FileLock.isHeld(path))
+    #expect(FileLock.tryLock(path) != nil)
+  }
+
+  /// P3: when no slot file can be opened (here `locks/starts` is a file, not a directory), admit
+  /// fails with a clear error instead of polling for ever.
+  @Test func anUnopenableSlotIsAnErrorNotAWait() async throws {
+    let home = try Self.home()
+    try FileManager.default.createDirectory(
+      at: home.appending(path: "locks"), withIntermediateDirectories: true)
+    try Data("not a directory".utf8).write(to: home.appending(path: "locks/starts"))
+    let gate = FileStartGate(home: home)
+    let attempt = Task {
+      try await gate.admit(StartGateTests.linux("vm-a", 4), running: Self.empty, host: Self.host)
+    }
+    let watchdog = Task {
+      try await Task.sleep(for: .seconds(5))
+      attempt.cancel()
+    }
+    defer { watchdog.cancel() }
+    do {
+      _ = try await attempt.value
+      Issue.record("admit succeeded")
+    } catch {
+      #expect((error as? VMLabError)?.code == .internal, "\(error)")
+    }
   }
 
   @Test func twoServersShareTheMemoryBudget() async throws {

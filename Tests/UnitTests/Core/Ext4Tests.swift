@@ -201,6 +201,74 @@ struct Ext4Fixture {
     #expect(throws: VMLabError.self) { try Ext4Volume(image: url, offset: 0) }
   }
 
+  /// CX-8: a crafted image is an `engine_error`, never a trap: zero or overshifted geometry,
+  /// offsets that overflow, sizes past what a file may hold, GPT fields that overflow.
+  @Test func craftedGeometryIsAnErrorNotACrash() throws {
+    let fs = Ext4Fixture.partitionLBA * 512
+    let sb = fs + 1024
+    func patched(_ edits: (inout Data) -> Void) throws -> URL {
+      var disk = Ext4Fixture.build()
+      edits(&disk)
+      let url = FileManager.default.temporaryDirectory.appending(path: "vmlab-ext4-\(UUID()).raw")
+      try disk.write(to: url)
+      return url
+    }
+    func put(_ disk: inout Data, _ value: UInt64, _ at: Int, _ width: Int) {
+      for k in 0..<width { disk[at + k] = UInt8(value >> (8 * UInt64(k)) & 0xff) }
+    }
+    func refused(_ body: () throws -> Void) {
+      let error = #expect(throws: VMLabError.self) { try body() }
+      #expect(error?.code == .engineError)
+    }
+    let offset = UInt64(fs)
+
+    for edit in [
+      { (d: inout Data) in put(&d, 0, sb + 40, 4) },  // inodes per group 0
+      { (d: inout Data) in put(&d, 60, sb + 24, 4) },  // block size 1024 << 60
+      { (d: inout Data) in put(&d, 0, sb + 88, 2) },  // inode size 0
+      { (d: inout Data) in put(&d, 4096, sb + 88, 2) },  // inode size past the block
+    ] {
+      let url = try patched(edit)
+      defer { try? FileManager.default.removeItem(at: url) }
+      refused { _ = try Ext4Volume(image: url, offset: offset) }
+    }
+
+    let image = try Self.image()
+    defer { try? FileManager.default.removeItem(at: image) }
+    refused { _ = try Ext4Volume(image: image, offset: UInt64.max - 100) }
+
+    // A 64-bit descriptor whose inode table lies past 2^64 bytes.
+    let far = try patched {
+      put(&$0, 0xC0, sb + 96, 4)
+      put(&$0, 64, sb + 254, 2)
+      put(&$0, 0xFFFF_FFFF, fs + 2 * 1024 + 0x28, 4)
+    }
+    defer { try? FileManager.default.removeItem(at: far) }
+    refused { _ = try Ext4Volume(image: far, offset: offset).lookup("/") }
+
+    // A kernel inode claiming 2^64 - 1 bytes.
+    let huge = try patched {
+      let inode = fs + 4 * 1024 + 14 * 256
+      put(&$0, 0xFFFF_FFFF, inode + 4, 4)
+      put(&$0, 0xFFFF_FFFF, inode + 0x6C, 4)
+    }
+    defer { try? FileManager.default.removeItem(at: huge) }
+    let volume = try Ext4Volume(image: huge, offset: offset)
+    let kernel = try volume.lookup("/boot/vmlinuz-6.10.0")
+    refused { _ = try volume.contents(of: kernel) }
+    let out = huge.appendingPathExtension("out")
+    defer { try? FileManager.default.removeItem(at: out) }
+    refused { try volume.copy(kernel, to: out) }
+
+    // GPT: an entry table LBA past 2^64 bytes; a partition whose range overflows is skipped.
+    let table = try patched { put(&$0, UInt64.max, 512 + 72, 8) }
+    defer { try? FileManager.default.removeItem(at: table) }
+    refused { _ = try Ext4Volume.partitions(of: table) }
+    let range = try patched { put(&$0, UInt64.max / 2, 1024 + 40, 8) }
+    defer { try? FileManager.default.removeItem(at: range) }
+    #expect(try Ext4Volume.partitions(of: range).isEmpty)
+  }
+
   @Test func extractKernelTakesTheNewestVersion() async throws {
     let home = FileManager.default.temporaryDirectory.appending(path: "vmlab-kernel-\(UUID())")
     defer { try? FileManager.default.removeItem(at: home) }
