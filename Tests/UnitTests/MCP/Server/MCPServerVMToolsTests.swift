@@ -96,6 +96,12 @@ import VMLabCore
     #expect(result["features"]?.arrayValue?.contains(.string("gdb")) == true)
     #expect(result["endpoints"]?["gdb"] == .string("tcp:127.0.0.1:1234"))
     #expect(result["endpoints"]?["serial"]?.stringValue?.hasSuffix("serial.sock") == true)
+    // R-503: QEMU's display is its host-side VNC socket.
+    let display = try #require(result["endpoints"]?["display"])
+    #expect(display["kind"] == .string("vnc"))
+    #expect(display["hostSide"] == .bool(true))
+    #expect(display["auth"] == .string("none"))
+    #expect(display["address"]?.stringValue?.hasSuffix("/vnc.sock") == true)
     let events = try #require(result["events"]?.arrayValue)
     #expect(events.count == 2)
     #expect(events.first?["message"]?.stringValue?.hasPrefix("created") == true)

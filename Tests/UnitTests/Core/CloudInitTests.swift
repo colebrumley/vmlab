@@ -67,8 +67,8 @@ enum RubyYAML {
     ]
     let doc = try #require(try RubyYAML.parse(CloudInit.userData(config)) as? [String: Any])
     #expect(
-      doc["packages"] as? [String] == [
-        "qemu-guest-agent", "xfce4", "lightdm", "x11vnc", "build-essential",
+      doc["packages"] as? [String] == ["qemu-guest-agent"] + GUIStack.desktopPackages + [
+        "x11vnc", "build-essential",
       ])
     #expect(
       doc["mounts"] as? [[String]] == [
@@ -82,6 +82,38 @@ enum RubyYAML {
     #expect(files.map { $0["path"] }.contains("/etc/systemd/system/vmlab-vnc.service"))
     let autologin = try #require(files.first { $0["path"]?.contains("lightdm") == true })
     #expect(autologin["content"]?.contains("autologin-user=debian") == true)
+  }
+
+  /// R-504 on QEMU: the desktop without a VNC server, which QEMU's own VNC replaces.
+  @Test(.enabled(if: RubyYAML.available)) func desktopWithoutVNCServer() throws {
+    var config = Self.base()
+    config.gui = GUIStack(vncPassword: nil)
+    let doc = try #require(try RubyYAML.parse(CloudInit.userData(config)) as? [String: Any])
+    let packages = try #require(doc["packages"] as? [String])
+    #expect(packages.contains("xfce4") && packages.contains("xserver-xorg-video-fbdev"))
+    #expect(!packages.contains("x11vnc"))
+    let runcmd = try #require(doc["runcmd"] as? [[String]])
+    #expect(runcmd.contains(["systemctl", "enable", "--now", "lightdm"]))
+    #expect(runcmd.contains(["systemctl", "set-default", "graphical.target"]))
+    #expect(!runcmd.contains { $0.first == "x11vnc" })
+    let files = try #require(doc["write_files"] as? [[String: String]])
+    #expect(!files.contains { $0["path"]?.contains("vmlab-vnc") == true })
+    #expect(files.contains { $0["content"]?.contains("autologin-session=xfce") == true })
+    #expect(files.contains { $0["content"]?.contains("logind-check-graphical=false") == true })
+  }
+
+  @Test func inGuestVNCWritesAndReusesThePasswordFile() throws {
+    let dir = FileManager.default.temporaryDirectory.appending(path: "vmlab-gui-\(UUID())")
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let stack = try GUIStack.inGuestVNC(vmDirectory: dir)
+    let password = try #require(stack.vncPassword)
+    #expect(password.count == 8)
+    let file = dir.appending(path: "vnc.pass")
+    #expect(try String(contentsOf: file, encoding: .utf8) == password + "\n")
+    let mode = try FileManager.default.attributesOfItem(atPath: file.path)[.posixPermissions]
+    #expect(mode as? Int == 0o600)
+    #expect(try GUIStack.inGuestVNC(vmDirectory: dir) == stack)
+    #expect(stack.packages.last == "x11vnc")
   }
 
   @Test(.enabled(if: RubyYAML.available)) func segmentNICGetsStaticNetworkConfig() throws {

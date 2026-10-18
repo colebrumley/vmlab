@@ -118,8 +118,8 @@ Dry-run the selector: given requirements (the guest plus the features you need a
 **Result**
 
 ```
-Plan { satisfiable: true, profile, guest, resources, features, unverified,
-       preferredDenied, allowUnverified, estimatedStartupSeconds, notes }
+Plan { satisfiable: true, profile, guest, resources, features, requested, unverified,
+       preferredDenied, allowUnverified, estimatedStartupSeconds, startupTier, notes }
 or Unsatisfiable { satisfiable: false, code, message, hint, guest,
                    eliminated: { <feature>: [profile] }, reasons: { <feature>: { <profile>: why } },
                    suggestions: [ { drop: [feature], profile } ],
@@ -185,7 +185,8 @@ Everything about one VM: its record, the plan and resolved features (what channe
 
 ```
 { vm: { id, name }, record: VMRecord, plan: Plan, features: [feature],
-  endpoints: { ssh?, ip?, serial?, display?: { kind, hostSide }, gdb?,
+  endpoints: { ssh?, ip?, serial?, gdb?,
+    display?: { kind, address, auth, passwordFile?, hostSide },
     forwards?: [ { guest, host: "127.0.0.1:port" } ] },
   segments: [ { name, ip } ], events: [ Event ], panic?: { line, offset, at }, warnings }
 ```

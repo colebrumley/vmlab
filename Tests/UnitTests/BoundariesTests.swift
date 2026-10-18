@@ -69,14 +69,16 @@ import Testing
     }
   }
 
-  /// `VMLabEngines` is the only module that names the engines: it imports exactly Core and the
-  /// QEMU and VZ backends, and only the `vmlab` executable imports it.
+  /// `VMLabEngines` is the only module that names the engines: it imports exactly Core, the QEMU
+  /// and VZ backends and the RFB client behind Core's `DisplayConnector`, and only the `vmlab`
+  /// executable imports it.
   @Test func enginesModuleIsTheOnlyWiring() throws {
     let files = try Self.importsByFile(target: "VMLabEngines")
     #expect(!files.isEmpty)
     for (file, modules) in files {
       #expect(
-        modules.isSubset(of: ["VMLabCore", "VMLabQEMU", "VMLabVZ"]), "\(file) imports \(modules)")
+        modules.isSubset(of: ["Foundation", "VMLabCore", "VMLabQEMU", "VMLabVZ", "VMLabRFB"]),
+        "\(file) imports \(modules)")
     }
     for target in ["VMLabCore", "VMLabMCP", "VMLabQEMU", "VMLabVZ"] {
       for (file, modules) in try Self.importsByFile(target: target) {

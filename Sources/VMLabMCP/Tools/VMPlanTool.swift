@@ -13,8 +13,8 @@ extension ToolSpec {
       ["requirements": Schema.requirements, "allowUnverified": Schema.allowUnverified],
       required: ["requirements"]),
     outputShape: """
-      Plan { satisfiable: true, profile, guest, resources, features, unverified,
-             preferredDenied, allowUnverified, estimatedStartupSeconds, notes }
+      Plan { satisfiable: true, profile, guest, resources, features, requested, unverified,
+             preferredDenied, allowUnverified, estimatedStartupSeconds, startupTier, notes }
       or Unsatisfiable { satisfiable: false, code, message, hint, guest,
                          eliminated: { <feature>: [profile] }, reasons: { <feature>: { <profile>: why } },
                          suggestions: [ { drop: [feature], profile } ],
