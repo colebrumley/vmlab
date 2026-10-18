@@ -91,3 +91,34 @@ struct JobCommand: ToolCommand {
     return out
   }
 }
+
+/// `vmlab file`: the vm_file tool.
+struct FileCommand: ToolCommand {
+  static let configuration = CommandConfiguration(
+    commandName: "file",
+    abstract: "Copy files to or from a running guest over SSH (the vm_file tool).")
+  static let toolName = "vm_file"
+
+  @Argument(help: "The VM's id or name.") var vm: String
+  @Argument(help: "push or pull.") var action: String
+  @Argument(help: "The path in the guest.") var remote: String
+  @Argument(help: "The host path (push: required; pull: default the VM's pulled/ directory).")
+  var local: String?
+  @Flag(help: "Print the result object as JSON.") var json = false
+
+  func arguments() throws -> JSONValue {
+    var object: [String: JSONValue] = [
+      "vm": .string(vm), "action": .string(action), "remote": .string(remote),
+    ]
+    if let local {
+      let url = URL(filePath: local, relativeTo: URL.currentDirectory())
+      object["local"] = .string(url.standardizedFileURL.path)
+    }
+    return .object(object)
+  }
+
+  func render(_ result: ToolResult) -> String {
+    let bytes = Int(result.value["bytes"]?.numberValue ?? 0)
+    return "\(bytes) bytes -> \(result.value["path"]?.stringValue ?? "")"
+  }
+}

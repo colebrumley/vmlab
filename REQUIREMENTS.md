@@ -458,13 +458,13 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   **Verify:** integration: a background `for i in $(seq 1 5); do echo $i; sleep 1; done` is read
   incrementally and finishes with exit 0.
 
-- [ ] **R-403 Agent exec for QEMU guests**
+- [x] **R-403 Agent exec for QEMU guests**
   `via: agent` uses `qemu-guest-agent` through QMP (`guest-exec`, `guest-exec-status`, polling)
   when `exec_agent` was granted; it works with no guest networking and before SSH is up. `auto`
   prefers SSH when reachable, else the agent.
   **Verify:** integration: with `net_none`, `vm_exec "id"` via agent returns `uid=0`.
 
-- [ ] **R-404 File push, pull and shared directories**
+- [x] **R-404 File push, pull and shared directories**
   `vm_file push|pull` via `scp` (or `sftp` batch) with size reporting; directories recursively;
   `pull` to `<vm>/pulled/` when no local path is given. `shared_dir` grants mount a host directory
   read-write at a guest path: QEMU via 9p (`-virtfs local,...`, mounted by cloud-init `mounts`),

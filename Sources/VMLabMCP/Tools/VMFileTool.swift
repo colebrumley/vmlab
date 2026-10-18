@@ -13,7 +13,8 @@ extension ToolSpec {
         "vm": Schema.vm,
         "action": Schema.action(["push", "pull"], "Direction of the copy."),
         "remote": Schema.string("Path in the guest."),
-        "local": Schema.string("Path on the host (push: required; pull: optional)."),
+        "local": Schema.string(
+          "Absolute path on the host (push: required; pull: optional)."),
       ], required: ["vm", "action", "remote"]),
     outputShape: "{ bytes, path }",
     errors: [

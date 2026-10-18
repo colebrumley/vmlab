@@ -62,6 +62,24 @@ it reports the status, `RemoteShell.collect` fetches what it had not passed on a
 guest's files. `read` returns up to 64 KB of log past the offset (on a UTF-8 boundary), starting a
 reader when this process has none, which is how a job survives a server restart; `wait` polls;
 `kill` runs `RemoteShell.kill` (status 143). `stopReaders()` drops this process's readers.
+`AutoExecChannel.swift` (R-403) is `via: auto`, what `Channel.exec` now returns: SSH when it was
+granted, and the agent (`RunningVM.agentExec`, default nil; `Channel.execAgent`) when it was
+granted and SSH never reached the guest, which a channel marks with `data.connected: false` on its
+`guest_unreachable` (`ExecFallback`; `SSHExecChannel` sets it only for connect-phase `ssh` errors,
+so a command that started over SSH is never run twice). `ExecTimeout.error` is the shared
+`timeout` refusal with partial output; `ExecFiles` and `ExecOutput.collect` are public for the
+agent channel.
+`FileTransfer.swift` (R-404) is `SSHFileTransfer`: the system `scp` in SFTP mode (`-s`, so a
+guest path is never seen by a remote shell), `-r`, with `SSHTarget.options` (the key and
+known-hosts options `ssh` shares); `push(local:remote:)` and `pull(remote:local:)` (no local:
+`<vm>/pulled/<name>`, replaced; an existing local directory receives the copy inside it) return
+`FileTransferResult` (`bytes` of every regular file, `path`), mapping an `ssh` failure to
+`guest_unreachable` and any other `scp` error to `invalid_request` on `remote`.
+`SharedDirSpec` (in `Features.swift`, R-404) is the request's `share` (`host`, absolute, default
+`<vm>/shared/`; `guest`, default `/mnt/host`; tag `share0`), which implies `shared_dir` and is kept
+as `VMRecord.share`; `SharedDirSpec.of(record)` is what a backend mounts: the record's `share`, or
+the default when the plan *requested* `shared_dir` (every profile grants it, which alone mounts
+nothing). Both engines put it in the seed as a `GuestMount`.
 `Manifest.swift` (R-801) holds guest manifests: `GuestManifest` (files keyed by path with kind,
 size, octal mode, mtime and sha256 up to 8 MB; packages, services, users and defaults as key →
 value maps; login items and configuration profiles as lists), stored by `Store.saveManifest` at
@@ -125,7 +143,26 @@ sends `system_powerdown` and waits for the process to exit, `kill` sends `quit` 
 guest (reattaching after a server restart), resets with QMP `system_reset` (after `stop` when
 `boot.haltAtStart`, so the CPU waits at its first instruction again, R-703), builds the seed when R-400's `id_ed25519.pub` exists (with the desktop, no VNC server, when the stored plan provisions one, R-504),
 and hands out `QEMURunningVM` (serial, VNC display, GDB, QMP `query-*` introspection,
-checkpoints, memory dumps, exec over SSH through the forwarded loopback port (`SSHExecChannel`)). `QMPIntrospection`
+checkpoints, memory dumps, exec over SSH through the forwarded loopback port (`SSHExecChannel`,
+or `NoSSH`, never connected, without a network), and exec through qemu-guest-agent).
+Shared directory (R-404): `SharedDirSpec.of(record)` becomes `-virtfs local,path=...,mount_tag=share0,
+security_model=mapped-xattr` (refused unless the plan grants `shared_dir`) and a cloud-init
+`mounts` entry (`9p`, `trans=virtio,version=9p2000.L,rw,nofail`); create and start check the host
+directory exists. Debian's cloud kernel has no 9p (`CONFIG_NET_9P` unset), so the mount needs a
+kernel with it, such as Ubuntu's cloud images.
+Guest agent (R-403): when the plan grants `exec_agent` (and the arch has PCI defaults) the command
+line adds a `virtio-serial-pci` with a `virtserialport` named `org.qemu.guest_agent.0` on a
+`-chardev socket` at `<vm>/qga.sock` (QGA is not reachable through QMP). `GuestAgent` (an actor,
+`QEMUMachine.agent`) opens a connection per command, sends 0xFF plus `guest-sync-delimited` to
+discard anything a previous client left, then the command; commands from one process are
+serialised, and an unanswered sync is `guest_unreachable` with `connected: false`.
+`GuestAgentExecChannel` runs `RemoteShell.foreground` (as root, `sudo -n -u` for another user)
+with `guest-exec` of `/bin/sh -c`, base64 stdin and a fixed PATH/HOME, polls `guest-exec-status`
+(50 ms growing to 500 ms), writes the base64 output through `ExecFiles`/`ExecOutput.collect`
+(same 64 KB cut and log as SSH), and at the deadline kills the job's process group with a second
+`guest-exec` of `RemoteShell.kill`, returning `timeout` with what the agent reports. Debian's cloud
+image does not ship qemu-guest-agent: cloud-init installs it on a first boot with a network, so a
+guest created with `net_none` has an agent only when its image does. `QMPIntrospection`
 maps `status`/`block`/`pci`/`cpus` to `query-status`/`query-block`/`query-pci`/`query-cpus-fast`
 and `memory_tree`/`registers`/`devices` to HMP `info mtree`/`info registers -a`/`info qtree`, and
 allows raw only for `query-[a-z0-9-]+` and `info <words>` (anything else `invalid_request`);
@@ -228,7 +265,9 @@ request into an `ExecRequest`, picks the channel by `via` (`Channel.execSSH`, `.
 `.exec`) on `VMManager.attach`, runs it under a heartbeat and returns `exitCode`, `stdout`,
 `stderr`, `durationMs`, `truncated`, `logPath`; `background: true` starts an `ExecJobs` job over
 the VM's `SSHExecChannel` and returns `{ job }`), `vm_job` (read/wait/kill: `output`, `finished`,
-`exitCode`, `more`, `logPath`), `vm_manifest` (R-801: `profile` defaults to the guest's OS,
+`exitCode`, `more`, `logPath`), `vm_file` (R-404: push/pull through `SSHFileTransfer` over the VM's
+SSH channel, absolute host paths only, returning `bytes` and `path`; `vm_inspect` and `vm_create`
+endpoints carry `share` `{ host, guest }`), `vm_manifest` (R-801: `profile` defaults to the guest's OS,
 `custom` needs `paths`; a running VM only; returns `{ id, path, profile, counts }` with the
 manifest's warnings), `vm_checkpoint diff` (`Handlers/CheckpointDiff.swift`, R-802: each side
 is `@now`, taken with the other side's profile and roots, a manifest id, or a checkpoint whose node
@@ -271,6 +310,8 @@ go to stderr. Built: `facts`, `doctor`, `plan`, `create` (the `plan` flags plus 
 `--no-start`), `list`, `inspect`, `logs`, `start`, `stop`, `kill`, `pause`, `resume`, `reset`,
 `destroy`, `exec` and `job` (`Sources/vmlab/ExecCommands.swift`: stdout to stdout, stderr and a
 non-zero status to stderr), `images pull|list|remove`, `computer <vm> <action>` (`--at x,y`, `--out` writes the image), `debug <vm> <action>`, `introspect`, `memory-dump`, `serve`, `--version`. It bootstraps logging and hands off to Core and `VMLabMCP`.
+`destroy`, `exec`, `job` and `file` (`Sources/vmlab/ExecCommands.swift`: stdout to stdout, stderr and a
+non-zero status to stderr), `images pull|list|remove`, `computer <vm> <action>` (`--at x,y`, `--out` writes the image), `introspect`, `memory-dump`, `serve`, `--version`. It bootstraps logging and hands off to Core and `VMLabMCP`.
 
 **`VMLabEngines`** (library). The engine wiring, and the only module that imports both Core and the
 backends for that purpose: `Engines.registerAll(store:into:displays:debug:)` registers `QEMUBackend` for `qemu-hvf`

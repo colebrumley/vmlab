@@ -163,7 +163,8 @@ public protocol ToolHandler: Sendable {
 public enum ToolHandlers {
   public static let all: [any ToolHandler] = [
     HostFactsHandler(), HostDoctorHandler(), VMPlanHandler(), VMCreateHandler(), VMListHandler(),
-    VMInspectHandler(), VMLifecycleHandler(), VMExecHandler(), VMJobHandler(), VMLogsHandler(),
+    VMInspectHandler(), VMLifecycleHandler(), VMExecHandler(), VMJobHandler(), VMFileHandler(),
+    VMLogsHandler(),
     ImagesHandler(), VMComputerHandler(), VMDebugHandler(), VMIntrospectHandler(),
     VMMemoryDumpHandler(), VMCheckpointHandler(), VMManifestHandler(),
   ]
