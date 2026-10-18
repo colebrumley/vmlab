@@ -12,6 +12,11 @@ public final class QEMUBackend: Backend {
   public let images: ImageStore
   private let locate: @Sendable () throws(VMLabError) -> QEMUInstallation
   private let machines = Mutex<[String: QEMUMachine]>([:])
+  /// CX-25: the attach in flight per VM, which every concurrent `machine(for:)` shares, so one
+  /// monitor connection is made and watched.
+  private let attaching = Mutex<[String: Task<QEMUMachine, any Error>]>([:])
+  /// Replaces `QEMUMachine.attach` in tests.
+  let attachHook = Mutex<(@Sendable (QEMULayout) async throws -> QEMUMachine)?>(nil)
 
   public init(
     profile: Profile, store: Store, images: ImageStore? = nil,
@@ -178,16 +183,30 @@ public final class QEMUBackend: Backend {
     {
       return machine
     }
-    let layout = layout(of: record.id)
-    let gdbPort = record.runtime?.gdbEndpoint.flatMap(GDBEndpoint.init(runtime:))?.port
-    let machine = try await Self.lift {
-      try await QEMUMachine.attach(
-        layout: layout, gdbPort: gdbPort, sshPort: record.runtime?.sshPort,
-        forwards: record.runtime?.forwards)
+    let id = record.id
+    let task = attaching.withLock { inFlight -> Task<QEMUMachine, any Error> in
+      if let running = inFlight[id] { return running }
+      let task = Task { [self] () async throws -> QEMUMachine in
+        let layout = layout(of: id)
+        let machine: QEMUMachine
+        if let hook = attachHook.withLock({ $0 }) {
+          machine = try await hook(layout)
+        } else {
+          let gdbPort = record.runtime?.gdbEndpoint.flatMap(GDBEndpoint.init(runtime:))?.port
+          machine = try await QEMUMachine.attach(
+            layout: layout, gdbPort: gdbPort, sshPort: record.runtime?.sshPort,
+            forwards: record.runtime?.forwards)
+        }
+        machines.withLock { $0[id] = machine }
+        await watch(machine, of: id)
+        return machine
+      }
+      inFlight[id] = task
+      return task
     }
-    machines.withLock { $0[record.id] = machine }
-    await watch(machine, of: record.id)
-    return machine
+    let result = await task.result
+    attaching.withLock { if $0[id] == task { $0[id] = nil } }
+    return try await Self.lift { try result.get() }
   }
 
   /// Dead-peer detection on the machine's QMP connection (R-1101): a QEMU that stops answering

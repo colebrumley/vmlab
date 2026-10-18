@@ -63,4 +63,36 @@ import VMLabCore
     #expect(broken.state == .broken)
     #expect(broken.brokenReason?.contains("closed its monitor") == true)
   }
+
+  /// CX-25: two concurrent `machine(for:)` both attached, and the loser's monitor stayed
+  /// connected (and watched) beside the cached one. They share one attach now.
+  @Test func concurrentMachineLookupsShareOneAttach() async throws {
+    let home = FileManager.default.temporaryDirectory.appending(path: "vmlab-qa-\(UUID())")
+    defer { try? FileManager.default.removeItem(at: home) }
+    let backend = QEMUBackend(
+      profile: .qemuHVF, store: Store(home: home),
+      installation: QEMUInstallation(
+        binDirectory: home.appending(path: "bin"), shareDirectory: home.appending(path: "share")))
+    let attaches = Counter()
+    backend.attachHook.withLock {
+      $0 = { layout in
+        await attaches.bump()
+        try await Task.sleep(for: .milliseconds(200))
+        let qmp = try await QMPClient.handshake(
+          over: MutableQMPTransport(), timeout: .seconds(2))
+        return QEMUMachine(
+          layout: layout, pid: 0, qmp: qmp,
+          serial: SerialChannel(
+            socketPath: "/nonexistent", logURL: layout.directory.appending(path: "serial.log")),
+          runtime: VMRuntime(pid: 0, controlSocket: layout.qmpSocket.path))
+      }
+    }
+    let record = Self.record(state: .running)
+    async let one = backend.machine(for: record)
+    async let two = backend.machine(for: record)
+    let (a, b) = try await (one, two)
+    #expect(a === b)
+    #expect(await attaches.value == 1)
+    await a.disconnect()
+  }
 }
