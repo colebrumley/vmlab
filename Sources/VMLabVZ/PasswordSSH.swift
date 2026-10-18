@@ -35,17 +35,29 @@ public struct PasswordSSH: Sendable {
     ]
   }
 
+  /// Writes the askpass script unless an executable regular file only its owner can change
+  /// already holds exactly it. Every new file costs a macOS executable assessment on its first
+  /// exec (0.25 s alone, seconds on a busy host, inside ssh's prompt), so it is not rewritten on
+  /// every run.
+  func installAskpass() throws {
+    let wanted = Data(Self.askpassScript.utf8)
+    if let attributes = try? FileManager.default.attributesOfItem(atPath: askpass.path),
+      attributes[.type] as? FileAttributeType == .typeRegular,
+      let mode = attributes[.posixPermissions] as? Int, mode & 0o100 != 0, mode & 0o022 == 0,
+      (try? Data(contentsOf: askpass)) == wanted
+    {
+      return
+    }
+    try wanted.write(to: askpass, options: .atomic)
+    try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: askpass.path)
+  }
+
   /// Runs `command` in the guest with `input` on its stdin; nil when `ssh` cannot launch or does
   /// not finish within `timeout` (it is then killed).
   public func run(_ command: String, input: Data = Data(), timeout: Duration = .seconds(60))
     async -> CommandOutput?
   {
-    do {
-      try Data(Self.askpassScript.utf8).write(to: askpass, options: .atomic)
-      try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: askpass.path)
-    } catch {
-      return nil
-    }
+    do { try installAskpass() } catch { return nil }
     var environment = ProcessInfo.processInfo.environment
     environment["SSH_ASKPASS"] = askpass.path
     environment["SSH_ASKPASS_REQUIRE"] = "force"

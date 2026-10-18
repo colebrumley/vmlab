@@ -63,7 +63,7 @@ import VMLabCore
   @Test func aChildInheritsOnlyTheStandardDescriptors() async throws {
     var fds: [Int32] = [-1, -1]
     #expect(pipe(&fds) == 0)
-    defer { fds.forEach { close($0) } }
+    defer { for fd in fds { close(fd) } }
     #expect(fcntl(fds[0], F_GETFD) & FD_CLOEXEC == 0)
     let url = FileManager.default.temporaryDirectory.appending(path: "vmlab-hp-\(UUID())")
     FileManager.default.createFile(atPath: url.path, contents: nil)
