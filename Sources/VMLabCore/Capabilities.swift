@@ -84,6 +84,9 @@ extension SlowProbe {
     case .qemuHVFGDB:
       "GDB under HVF unsupported by this QEMU (probe qemu_hvf_gdb answered no); use arch x86_64, "
         + "or run the arm64 guest under qemu-tcg (emulated, slow)"
+    case .qemuVmnet:
+      "QEMU cannot create a vmnet interface without root or Apple's com.apple.vm.networking "
+        + "entitlement (probe qemu_vmnet answered no)"
     default: nil
     }
   }
@@ -112,7 +115,7 @@ public enum Availability: Sendable, Hashable {
 /// appendix disagrees with it, the appendix is fixed.
 public enum Capabilities {
   /// One cell: its availability, a short note for the generated table, and for a cell gated on a
-  /// slow probe that was `unknown` when the matrix was written, the backlog item that runs it.
+  /// slow probe (a `[VERIFY]` row of Appendix B), the backlog item that runs it.
   public struct Entry: Sendable, Hashable {
     public var availability: Availability
     public var note: String?
