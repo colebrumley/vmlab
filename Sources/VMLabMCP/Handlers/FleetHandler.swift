@@ -335,6 +335,8 @@ struct FleetHandler: ToolHandler {
             guard let record = try? context.store.load(id: id) else { return (id, nil, nil) }
             do throws(VMLabError) {
               _ = try await manager.perform(.destroy, on: id)
+              await context.debug.drop(id)
+              await context.displays.forget(vm: id)
               return (id, record.name, nil)
             } catch {
               return (id, record.name, error)
