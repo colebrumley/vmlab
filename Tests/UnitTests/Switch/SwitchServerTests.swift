@@ -166,11 +166,13 @@ import VMLabSwitch
     #expect(Self.receive(pa) != nil)
     h.close(pb)
     unlink(h.paths.portsDirectory.appending(path: "b.sock").path)
-    Self.send(pa, SwitchCoreTests.frame(to: b, from: a))
+    // Sent until the port goes: a send that races the peer's teardown may still succeed, and
+    // every later one fails.
     let deadline = Date().addingTimeInterval(30)
     var stats = try h.stats()
     while stats.ports != 1, Date() < deadline {
-      usleep(5_000)
+      Self.send(pa, SwitchCoreTests.frame(to: b, from: a))
+      usleep(20_000)
       stats = try h.stats()
     }
     #expect(stats.ports == 1)

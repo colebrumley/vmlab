@@ -134,12 +134,27 @@ public actor ExecJobs {
     let key = paths.log.path
     guard readers[key] == nil else { return }
     readers[key] = Task.detached { [self] in
-      await Self.follow(job, channel: channel, paths: paths)
-      await self.readerEnded(key)
+      let ending = await Self.follow(job, channel: channel, paths: paths)
+      await self.readerEnded(key, ending, paths)
     }
   }
 
-  private func readerEnded(_ key: String) { readers[key] = nil }
+  /// Records how the job ended on the actor, so a `read` (which loads, then saves the record)
+  /// can never write its older copy over the status.
+  private func readerEnded(_ key: String, _ ending: Ending?, _ paths: Paths) {
+    readers[key] = nil
+    guard let ending, var current = try? Self.loadRecord(paths) else { return }
+    current.exitCode = ending.exitCode
+    current.lost = ending.lost
+    current.finishedAt = Date()
+    try? Self.saveRecord(current, paths)
+  }
+
+  /// How a reader saw the job end: its status, or that the guest lost its files.
+  struct Ending: Sendable {
+    var exitCode: Int32?
+    var lost: Bool
+  }
 
   /// Ends this process's readers (their ssh connections); the jobs keep running in the guest and
   /// the next read starts new readers. What a server does on the way out.
@@ -150,24 +165,24 @@ public actor ExecJobs {
   }
 
   /// One reader run: `tail -f` from the log's size until `rc` exists, then the catch-up and the
-  /// status. A reader that loses the connection just ends; the next read starts another.
-  static func follow(_ job: ExecJob, channel: SSHExecChannel, paths: Paths) async {
+  /// status. A reader that loses the connection just ends (nil); the next read starts another.
+  static func follow(_ job: ExecJob, channel: SSHExecChannel, paths: Paths) async -> Ending? {
     let offset = paths.logSize()
     // O_APPEND: a reader of an earlier server that is still winding down cannot overwrite.
     let fd = open(paths.log.path, O_WRONLY | O_APPEND | O_CLOEXEC)
-    guard fd >= 0 else { return }
+    guard fd >= 0 else { return nil }
     let log = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
     let errors = paths.scratch("reader")
     defer { try? FileManager.default.removeItem(at: errors) }
     FileManager.default.createFile(atPath: errors.path, contents: nil)
-    guard let errorHandle = try? FileHandle(forWritingTo: errors) else { return }
+    guard let errorHandle = try? FileHandle(forWritingTo: errors) else { return nil }
     let remote = RemoteShell.follow(
       job: job.id, offset: offset, user: job.user, loginUser: channel.target.user)
     _ = try? await HostProcess.run(
       channel.ssh, channel.target.arguments(remote: remote), stdout: log, stderr: errorHandle)
     try? errorHandle.close()
     let text = String(decoding: (try? Data(contentsOf: errors)) ?? Data(), as: UTF8.self)
-    var finished = job
+    let ending: Ending
     if let code = Self.exitCode(in: text) {
       // Everything the reader did not pass on yet, then the job's files go.
       let remote = RemoteShell.collect(
@@ -175,20 +190,15 @@ public actor ExecJobs {
       _ = try? await HostProcess.run(
         channel.ssh, channel.target.arguments(remote: remote), stdout: log,
         timeout: .seconds(60))
-      finished.exitCode = code
+      ending = Ending(exitCode: code, lost: false)
     } else if text.contains(RemoteShell.missingMarker) {
-      finished.lost = true
+      ending = Ending(exitCode: nil, lost: true)
     } else {
       try? log.close()
-      return
+      return nil
     }
     try? log.close()
-    finished.finishedAt = Date()
-    guard var current = try? Self.loadRecord(paths) else { return }
-    current.exitCode = finished.exitCode
-    current.lost = finished.lost
-    current.finishedAt = finished.finishedAt
-    try? Self.saveRecord(current, paths)
+    return ending
   }
 
   static func exitCode(in readerErrors: String) -> Int32? {
