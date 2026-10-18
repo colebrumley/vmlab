@@ -371,20 +371,27 @@ struct Computer {
     return point
   }
 
-  /// A point in a scaled screenshot's pixels, in guest pixels.
+  /// A point in a scaled screenshot's pixels, in guest pixels. Each coordinate is clamped to
+  /// `0...DisplayRect.coordinateLimit` (the screen check then refuses it), so no input traps.
   static func unscale(_ point: (x: Int, y: Int), frame: DisplaySessions.Frame) -> (x: Int, y: Int) {
-    (
-      frame.originX + Int((Double(point.x) / frame.scale).rounded(.down)),
-      frame.originY + Int((Double(point.y) / frame.scale).rounded(.down))
-    )
+    func guest(_ value: Int, _ origin: Int) -> Int {
+      let limit = Double(DisplayRect.coordinateLimit)
+      let unscaled = Double(origin) + (Double(value) / frame.scale).rounded(.down)
+      guard unscaled.isFinite else { return DisplayRect.coordinateLimit }
+      return Int(min(max(unscaled, 0), limit))
+    }
+    return (guest(point.x, frame.originX), guest(point.y, frame.originY))
   }
 
   private func integers(_ value: JSONValue, field: String, count: Int) throws(VMLabError) -> [Int] {
     let items = value.arrayValue ?? []
     let numbers = items.compactMap { $0.numberValue.flatMap { Int(exactly: $0) } }
-    guard items.count == count, numbers.count == count, numbers.allSatisfy({ $0 >= 0 }) else {
+    let limit = DisplayRect.coordinateLimit
+    guard items.count == count, numbers.count == count,
+      numbers.allSatisfy({ (0...limit).contains($0) })
+    else {
       throw VMLabError.invalidRequest(
-        field: field, reason: "\(field) must be \(count) non-negative integers",
+        field: field, reason: "\(field) must be \(count) integers from 0 to \(limit)",
         hint: count == 2 ? "Pass \(field): [x, y]." : "Pass \(field): [x0, y0, x1, y1].")
     }
     return numbers

@@ -128,3 +128,20 @@ import Testing
     #expect(old.features == [.gui])
   }
 }
+
+/// `DisplayRect(corners:)` takes model-supplied corners; it saturates instead of trapping.
+@Suite struct DisplayRectOverflowTests {
+  @Test func extremeCornersDoNotTrap() async {
+    await #expect(processExitsWith: .success) {
+      _ = DisplayRect(corners: -9_000_000_000_000_000_000, 0, 9_000_000_000_000_000_000, 10)
+      _ = DisplayRect(corners: Int.min, Int.max, Int.max, Int.min)
+    }
+  }
+
+  @Test func extremeCornersSaturate() {
+    let rect = DisplayRect(corners: Int.min, 0, Int.max, 10)
+    #expect(rect.x == Int.min && rect.width == Int.max && rect.height == 10)
+    #expect(
+      DisplayRect(corners: 30, 40, 10, 20) == DisplayRect(x: 10, y: 20, width: 20, height: 20))
+  }
+}

@@ -131,6 +131,101 @@ func sha256(_ bytes: [UInt8]) -> String {
   }
 }
 
+/// An in-guest VNC server is untrusted: its sizes and updates must not let it exhaust the host's
+/// memory (a 16384² ServerInit was 1 GiB; every Raw rectangle of an update was buffered).
+@Suite struct RFBClientLimitsTests {
+  static func be16(_ v: Int) -> [UInt8] { [UInt8(v >> 8 & 0xff), UInt8(v & 0xff)] }
+  static func serverInit(_ w: Int, _ h: Int) -> [UInt8] {
+    Array("RFB 003.008\n".utf8) + [1, 1, 0, 0, 0, 0] + be16(w) + be16(h)
+      + PixelFormat.bgrx.bytes + [0, 0, 0, 0]
+  }
+  static func update(_ count: Int) -> [UInt8] { [0, 0] + be16(count) }
+  static func rect(_ x: Int, _ y: Int, _ w: Int, _ h: Int, _ encoding: Int32) -> [UInt8] {
+    let e = UInt32(bitPattern: encoding)
+    return be16(x) + be16(y) + be16(w) + be16(h)
+      + [UInt8(e >> 24 & 0xff), UInt8(e >> 16 & 0xff), UInt8(e >> 8 & 0xff), UInt8(e & 0xff)]
+  }
+
+  static func isProtocolViolation(_ error: any Error) -> Bool {
+    if case .protocolViolation = error as? RFBError { true } else { false }
+  }
+
+  @Test(arguments: [(16384, 16384), (8193, 1), (8192, 8192), (1, 65535)])
+  func absurdServerInitIsRefused(_ size: (Int, Int)) async {
+    let transport = ReplayTransport(serverBytes: Self.serverInit(size.0, size.1))
+    await #expect {
+      _ = try await RFBClient.handshake(over: transport)
+    } throws: { Self.isProtocolViolation($0) }
+  }
+
+  @Test func eightKUltraHDIsAccepted() async throws {
+    #expect(Framebuffer.accepts(width: 7680, height: 4320))
+    #expect(Framebuffer.accepts(width: 8192, height: 4096))
+    #expect(!Framebuffer.accepts(width: 8192, height: 4097))
+    #expect(Framebuffer.accepts(width: 0, height: 0))
+  }
+
+  @Test(arguments: [(16384, 16384), (8192, 8192), (9000, 10), (0, 10)])
+  func absurdDesktopSizeIsRefused(_ size: (Int, Int)) async throws {
+    let bytes =
+      Self.serverInit(2, 2) + Self.update(1) + Self.rect(0, 0, size.0, size.1, -223)
+    let client = try await RFBClient.handshake(over: ReplayTransport(serverBytes: bytes))
+    await #expect {
+      try await client.processNextMessage()
+    } throws: { Self.isProtocolViolation($0) }
+    #expect(await client.framebuffer.width == 2)
+  }
+
+  /// A Raw rectangle larger than the read chunk is applied in pieces and lands intact.
+  @Test func largeRawRectangleIsAppliedInPieces() async throws {
+    let (w, h) = (700, 600)
+    let pixels = (0..<(w * h * 4)).map { UInt8(truncatingIfNeeded: $0 &* 31 >> 3) }
+    let bytes = Self.serverInit(w, h) + Self.update(1) + Self.rect(0, 0, w, h, 0) + pixels
+    let transport = ReplayTransport(serverBytes: bytes)
+    let client = try await RFBClient.handshake(over: transport)
+    #expect(try await client.processNextMessage() == .framebufferUpdate(rectangles: 1))
+    #expect(await client.framebuffer.pixels == pixels)
+    #expect(await transport.atEnd)
+  }
+
+  /// Rectangles are applied to a working copy as they arrive; an update that fails part way
+  /// leaves the screen as it was.
+  @Test func aFailedUpdateLeavesTheScreenUnchanged() async throws {
+    let bytes =
+      Self.serverInit(2, 2) + Self.update(2) + Self.rect(0, 0, 2, 2, 0)
+      + [UInt8](repeating: 0xaa, count: 16) + Self.rect(1, 1, 2, 2, 0)
+    let client = try await RFBClient.handshake(over: ReplayTransport(serverBytes: bytes))
+    await #expect(throws: RFBError.self) { try await client.processNextMessage() }
+    #expect(await client.framebuffer.pixels == [UInt8](repeating: 0, count: 16))
+    #expect(await client.updateCount == 0)
+  }
+
+  /// Rectangles after a DesktopSize in the same update are checked against the new size and
+  /// applied to the new screen.
+  @Test func resizeThenRawInOneUpdate() async throws {
+    let bytes =
+      Self.serverInit(2, 2) + Self.update(2) + Self.rect(0, 0, 3, 1, -223)
+      + Self.rect(0, 0, 3, 1, 0) + [UInt8](repeating: 7, count: 12)
+    let client = try await RFBClient.handshake(over: ReplayTransport(serverBytes: bytes))
+    #expect(try await client.processNextMessage() == .framebufferUpdate(rectangles: 2))
+    let fb = await client.framebuffer
+    #expect(fb.width == 3 && fb.height == 1 && fb.pixels == [UInt8](repeating: 7, count: 12))
+  }
+
+  /// One update's Raw data may cover the screen a bounded number of times; past that it is a
+  /// protocol violation, refused before the rectangle's bytes are read.
+  @Test func rawBytesPerUpdateAreBounded() async throws {
+    let cover = RFBClient.maxScreenCoveragePerUpdate
+    var bytes = Self.serverInit(2, 2) + Self.update(cover + 1)
+    for _ in 0..<cover { bytes += Self.rect(0, 0, 2, 2, 0) + [UInt8](repeating: 1, count: 16) }
+    bytes += Self.rect(0, 0, 2, 2, 0)
+    let client = try await RFBClient.handshake(over: ReplayTransport(serverBytes: bytes))
+    await #expect {
+      try await client.processNextMessage()
+    } throws: { Self.isProtocolViolation($0) }
+  }
+}
+
 func hex(_ s: String) -> [UInt8] {
   stride(from: 0, to: s.count, by: 2).map {
     let i = s.index(s.startIndex, offsetBy: $0)

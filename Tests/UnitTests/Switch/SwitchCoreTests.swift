@@ -97,4 +97,52 @@ import VMLabSwitch
     #expect(MACAddress(Self.mac(10))?.description == "52:54:00:00:00:0a")
     #expect(MACAddress([1, 2, 3]) == nil)
   }
+
+  static func spoofed(_ n: Int) -> [UInt8] {
+    [
+      0x02, 0x00, UInt8(n >> 24 & 0xff), UInt8(n >> 16 & 0xff), UInt8(n >> 8 & 0xff),
+      UInt8(n & 0xff),
+    ]
+  }
+
+  /// A guest controls the source MAC of every frame it sends; the table must not grow without
+  /// bound (aging alone was only checked on lookup).
+  @Test func spoofedSourceMACsDoNotGrowTheTableWithoutBound() {
+    var core = Self.core(ports: [1, 2])
+    for n in 0..<100_000 {
+      _ = core.forward(Self.frame(to: Self.broadcast, from: Self.spoofed(n)), from: 1, now: 0)
+    }
+    #expect(core.stats.macs <= SwitchCore.maxMACs)
+    #expect(core.stats.macs == SwitchCore.maxMACs)
+    #expect(core.stats.unlearned == 100_000 - SwitchCore.maxMACs)
+  }
+
+  @Test func aFullTableStillRefreshesKnownAddressesAndFloodsUnknownOnes() {
+    var core = Self.core(ports: [1, 2, 3])
+    for n in 0..<SwitchCore.maxMACs {
+      _ = core.forward(Self.frame(to: Self.broadcast, from: Self.spoofed(n)), from: 1, now: 0)
+    }
+    // A known address moving port is still re-learned while the table is full.
+    _ = core.forward(Self.frame(to: Self.broadcast, from: Self.spoofed(0)), from: 2, now: 1)
+    #expect(core.port(for: MACAddress(Self.spoofed(0))!, now: 1) == 2)
+    // A new one is not learned, and traffic to it floods.
+    _ = core.forward(Self.frame(to: Self.broadcast, from: Self.mac(9)), from: 3, now: 1)
+    #expect(core.port(for: MACAddress(Self.mac(9))!, now: 1) == nil)
+    #expect(core.stats.unlearned == 1)
+    let decision = core.forward(Self.frame(to: Self.mac(9), from: Self.spoofed(0)), from: 2, now: 1)
+    #expect(decision == .deliver([1, 3]))
+  }
+
+  @Test func aFullTableSweepsAgedEntriesBeforeRefusing() {
+    var core = SwitchCore(agingSeconds: 10)
+    core.addPort(1)
+    core.addPort(2)
+    for n in 0..<SwitchCore.maxMACs {
+      _ = core.forward(Self.frame(to: Self.broadcast, from: Self.spoofed(n)), from: 1, now: 0)
+    }
+    _ = core.forward(Self.frame(to: Self.broadcast, from: Self.mac(9)), from: 2, now: 11)
+    #expect(core.port(for: MACAddress(Self.mac(9))!, now: 11) == 2)
+    #expect(core.stats.macs == 1)
+    #expect(core.stats.unlearned == 0)
+  }
 }
