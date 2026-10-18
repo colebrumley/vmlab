@@ -48,6 +48,14 @@ import VMLabVZ
     // or the end of its terminal session does not take the guest down.
     #expect(getpgid(pid) == pid)
     #expect(getpgid(pid) != getpgrp())
+    // What the launcher's exit does to it: the end of its terminal session (SIGHUP) and this
+    // process group's signals pass it by; it keeps serving.
+    #expect(kill(pid, SIGHUP) == 0)
+    try await Task.sleep(for: .milliseconds(300))
+    #expect(LivenessProbe.processExists(pid))
+    #expect(
+      try await VZControlClient(socketPath: VZRunnerPaths(vmDirectory: dir).controlSocket.path)
+        .status().state == .running)
     try store.update(id: record.id) {
       $0.state = .running
       $0.runtime = handle?.runtime
