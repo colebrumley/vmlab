@@ -256,3 +256,26 @@ import VMLabCore
     func add(_ item: String) { items.append(item) }
   }
 }
+
+/// R-402: a server on its way out ends its background-job readers (the jobs keep running).
+@Suite struct ServeShutdownTests {
+  @Test func serveStopsJobReadersWhenStdinCloses() async throws {
+    let f = try SSHExecTests.Fixture()
+    let jobs = ExecJobs()
+    let job = try await jobs.start(ExecRequest(command: "echo up; sleep 300"), on: f.channel)
+    _ = try await jobs.read(job.id, on: f.channel)  // starts this process's reader
+    #expect(await jobs.readerCount == 1)
+    let toServer = Pipe()
+    let fromServer = Pipe()
+    let context = try ToolHandlerTests.context()
+    let input = toServer.fileHandleForReading.fileDescriptor
+    let output = fromServer.fileHandleForWriting.fileDescriptor
+    let server = Task {
+      try await VMLabServer.run(context: context, input: input, output: output, jobs: jobs)
+    }
+    try toServer.fileHandleForWriting.close()  // end of input: the server shuts down
+    try await server.value
+    #expect(await jobs.readerCount == 0)
+    _ = try? await jobs.kill(job.id, on: f.channel)
+  }
+}

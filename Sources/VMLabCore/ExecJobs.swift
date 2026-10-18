@@ -158,6 +158,9 @@ public actor ExecJobs {
 
   /// Ends this process's readers (their ssh connections); the jobs keep running in the guest and
   /// the next read starts new readers. What a server does on the way out.
+  /// Readers running in this process.
+  public var readerCount: Int { readers.count }
+
   public func stopReaders() async {
     let running = Array(readers.values)
     for reader in running { reader.cancel() }

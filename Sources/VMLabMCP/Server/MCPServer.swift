@@ -24,8 +24,11 @@ public enum VMLabServer {
   /// Runs the server on the file descriptors `input` and `output` (stdin and stdout by default)
   /// until `input` reaches end of file. Reconciles the store first (Lifecycle.swift), so records
   /// match their engine processes before the first call.
+  /// On the way out it ends this process's background-job readers (`jobs`); the jobs keep
+  /// running in their guests.
   public static func run(
-    context: ToolContext, input: Int32 = STDIN_FILENO, output: Int32 = STDOUT_FILENO
+    context: ToolContext, input: Int32 = STDIN_FILENO, output: Int32 = STDOUT_FILENO,
+    jobs: ExecJobs = .shared
   ) async throws {
     do {
       for change in try await context.store.reconcile() {
@@ -48,6 +51,7 @@ public enum VMLabServer {
     try await server.start(transport: transport)
     await server.waitUntilCompleted()
     await server.stop()
+    await jobs.stopReaders()
     logger.info("stdin closed; server stopped")
   }
 
