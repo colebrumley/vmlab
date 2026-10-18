@@ -187,6 +187,12 @@ public enum CloudInit {
   /// The GRUB drop-in that puts the kernel console on `hvc0` (Debian sources
   /// `/etc/default/grub.d/*.cfg` in order).
   public static let hvc0GrubDropIn = "/etc/default/grub.d/99-vmlab-console.cfg"
+  /// Its one line.
+  public static let hvc0GrubLine = "GRUB_CMDLINE_LINUX=\"$GRUB_CMDLINE_LINUX console=hvc0\""
+  /// The `bootcmd` that writes the drop-in and runs `update-grub`, once (static text, no input).
+  public static let hvc0BootCommand =
+    "test -e \(hvc0GrubDropIn) || { mkdir -p /etc/default/grub.d && "
+    + "printf '%s\\n' '\(hvc0GrubLine)' > \(hvc0GrubDropIn) && update-grub; }"
 
   /// Our `#cloud-config` document, before any user part.
   public static func cloudConfig(_ config: CloudInitConfig) -> String {
@@ -252,17 +258,11 @@ public enum CloudInit {
         .list(["systemctl", "restart", "systemd-binfmt.service"]),
       ]
     }
-    if config.console == .hvc0 {
-      // The image's kernel command line names consoles VZ does not have; the last console= wins,
-      // so kernel messages reach the virtio console from the next boot on (R-602).
-      writeFiles.append(
-        .map([
-          ("path", .string(hvc0GrubDropIn)),
-          ("permissions", "0644"),
-          ("content", .string("GRUB_CMDLINE_LINUX=\"$GRUB_CMDLINE_LINUX console=hvc0\"\n")),
-        ]))
-      runcmd.append(.list(["update-grub"]))
-    }
+    // The image's kernel command line names consoles VZ does not have; the last console= wins,
+    // so kernel messages reach the virtio console from the next boot on (R-602). bootcmd runs
+    // early in the first boot, before the package install, so a slow first boot cannot delay it.
+    let bootcmd: [YAML] =
+      config.console == .hvc0 ? [.list(["sh", "-c", .string(hvc0BootCommand)])] : []
 
     var entries: [(String, YAML)] = [
       ("hostname", .string(config.hostname)),
@@ -299,6 +299,7 @@ public enum CloudInit {
             })
         ))
     }
+    if !bootcmd.isEmpty { entries.append(("bootcmd", .list(bootcmd))) }
     if !writeFiles.isEmpty { entries.append(("write_files", .list(writeFiles))) }
     entries.append(("runcmd", .list(runcmd)))
     return "#cloud-config\n" + YAML.map(entries).render()

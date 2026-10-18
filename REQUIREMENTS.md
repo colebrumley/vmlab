@@ -572,7 +572,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   **Verify:** integration: a host file appears in the guest; an `x86_64` static `hello` binary
   (fixture) runs in the arm64 guest and prints its greeting.
 
-- [ ] **R-604 Direct kernel boot on VZ Linux**
+- [x] **R-604 Direct kernel boot on VZ Linux**
   `.kernel(kernel, initrd?, cmdline)` → `VZLinuxBootLoader` (uncompressed arm64 `Image`; a gzip
   kernel is decompressed on registration). `custom_firmware` and `custom_devices` stay `.no` with
   the reason "Virtualization.framework boots only Apple EFI or a Linux kernel".

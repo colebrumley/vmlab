@@ -280,4 +280,16 @@ import VMLabCore
       }
     }
   }
+
+  /// R-604: firmware and device customisation stay `no` under VZ, with one reason.
+  @Test func vzRefusesCustomFirmwareAndDevices() {
+    for profile in [Profile.vzLinux, .vzMacOS] {
+      for feature in [Feature.customFirmware, .customDevices] {
+        #expect(
+          Capabilities.entry(feature, on: profile).availability
+            == .no("Virtualization.framework boots only Apple EFI or a Linux kernel"))
+      }
+    }
+    #expect(Capabilities.entry(.directKernelBoot, on: .vzLinux).availability == .yes)
+  }
 }

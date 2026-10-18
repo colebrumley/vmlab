@@ -71,19 +71,22 @@ import VMLabVZ
     // own messages are on the serial channel, captured from the first byte.
     let dir = store.directory(of: created.id)
     let ip = try #require(started.runtime?.ip, "no DHCP lease for the guest's MAC")
-    // runcmd (update-grub) runs after cloud-init's package install, which is slow on a busy
-    // host; poll with a hard limit per ssh so a stalled session cannot hang the test.
+    // bootcmd runs update-grub early in the first boot; poll with a hard limit per ssh so a
+    // stalled session (the guest busy installing packages) cannot hang the test.
     var updated = false
     let deadline = ContinuousClock.now + .seconds(420)
     while ContinuousClock.now < deadline, !updated {
       updated =
         await VZGuestSSH.run(
           key: dir.appending(path: "id_ed25519"), host: ip,
-          command: "grep -q console=hvc0 /boot/grub/grub.cfg", limit: .seconds(20))?.status == 0
+          command: "grep -q console=hvc0 /boot/grub/grub.cfg && sync", limit: .seconds(20))?
+        .status == 0
       if !updated { try await Task.sleep(for: .seconds(3)) }
     }
     #expect(updated, "cloud-init did not put console=hvc0 in grub.cfg")
-    _ = try await context.manager.perform(.stop, on: created.id)
+    // Synced above; kill rather than stop, since a guest still busy with cloud-init can take
+    // minutes to honour a shutdown request on a loaded host.
+    _ = try await context.manager.perform(.kill, on: created.id)
     started = try #require(try await context.manager.perform(.start, on: created.id))
     _ = try await serial([
       "action": .string("wait"), "pattern": .string("login: "), "timeoutSeconds": .number(90),

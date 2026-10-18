@@ -46,7 +46,7 @@ enum RubyYAML {
     let runcmd = try #require(doc["runcmd"] as? [[String]])
     #expect(runcmd.contains(["systemctl", "enable", "--now", "qemu-guest-agent"]))
     #expect(runcmd.contains(["systemctl", "enable", "--now", "serial-getty@ttyAMA0.service"]))
-    #expect(!runcmd.contains(["update-grub"]))
+    #expect(doc["bootcmd"] == nil)
     #expect(doc["mounts"] == nil)
     #expect(doc["write_files"] == nil)
     #expect(CloudInit.networkConfig(Self.base()) == nil)
@@ -78,12 +78,15 @@ enum RubyYAML {
       ])
     let runcmd = try #require(doc["runcmd"] as? [[String]])
     #expect(runcmd.contains(["systemctl", "enable", "--now", "serial-getty@hvc0.service"]))
-    #expect(runcmd.contains(["update-grub"]))
+    #expect(doc["bootcmd"] as? [[String]] == [["sh", "-c", CloudInit.hvc0BootCommand]])
+    #expect(
+      CloudInit.hvc0BootCommand
+        == "test -e /etc/default/grub.d/99-vmlab-console.cfg || { mkdir -p /etc/default/grub.d && "
+        + "printf '%s\\n' 'GRUB_CMDLINE_LINUX=\"$GRUB_CMDLINE_LINUX console=hvc0\"' "
+        + "> /etc/default/grub.d/99-vmlab-console.cfg && update-grub; }")
     #expect(runcmd.contains(["x11vnc", "-storepasswd", "s3cret\"x", "/etc/x11vnc.pass"]))
     let files = try #require(doc["write_files"] as? [[String: String]])
     #expect(files.map { $0["path"] }.contains("/etc/systemd/system/vmlab-vnc.service"))
-    let grub = try #require(files.first { $0["path"] == CloudInit.hvc0GrubDropIn })
-    #expect(grub["content"] == "GRUB_CMDLINE_LINUX=\"$GRUB_CMDLINE_LINUX console=hvc0\"\n")
     let autologin = try #require(files.first { $0["path"]?.contains("lightdm") == true })
     #expect(autologin["content"]?.contains("autologin-user=debian") == true)
   }

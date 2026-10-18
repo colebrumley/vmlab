@@ -123,10 +123,11 @@ public enum Capabilities {
 
   private static let vzNoQEMU = "Virtualization.framework has no public API for it"
   private static let noVZGDB = "Virtualization.framework exposes no public GDB stub"
-  private static let vzNoFirmware =
-    "Virtualization.framework boots its own firmware; no public API replaces it"
-  private static let vzFixedDevices =
-    "Virtualization.framework offers a fixed set of public device types"
+  /// R-604: the reason for both `custom_firmware` and `custom_devices` under VZ.
+  private static let vzBootsOnlyEFIOrKernel =
+    "Virtualization.framework boots only Apple EFI or a Linux kernel"
+  private static let vzNoFirmware = vzBootsOnlyEFIOrKernel
+  private static let vzFixedDevices = vzBootsOnlyEFIOrKernel
 
   /// The unresolved matrix entry for `feature` on `profile`.
   public static func entry(_ feature: Feature, on profile: Profile) -> Entry {

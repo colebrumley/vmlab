@@ -58,10 +58,10 @@ column is what the development host recorded (`docs/dev-host-facts.json`, refres
 - `memory_dump` on `vz-macos`: Virtualization.framework has no public API for it.
 - `memory_dump` on `vz-linux`: Virtualization.framework has no public API for it.
 - `direct_kernel_boot` on `vz-macos`: macOS guests boot only from their own disk.
-- `custom_firmware` on `vz-macos`: Virtualization.framework boots its own firmware; no public API replaces it.
-- `custom_firmware` on `vz-linux`: Virtualization.framework boots its own firmware; no public API replaces it.
-- `custom_devices` on `vz-macos`: Virtualization.framework offers a fixed set of public device types.
-- `custom_devices` on `vz-linux`: Virtualization.framework offers a fixed set of public device types.
+- `custom_firmware` on `vz-macos`: Virtualization.framework boots only Apple EFI or a Linux kernel.
+- `custom_firmware` on `vz-linux`: Virtualization.framework boots only Apple EFI or a Linux kernel.
+- `custom_devices` on `vz-macos`: Virtualization.framework boots only Apple EFI or a Linux kernel.
+- `custom_devices` on `vz-linux`: Virtualization.framework boots only Apple EFI or a Linux kernel.
 - `halt_at_start` on `vz-macos`: Virtualization.framework exposes no public GDB stub.
 - `halt_at_start` on `vz-linux`: Virtualization.framework exposes no public GDB stub.
 - `rosetta` on `vz-macos`: Rosetta for Linux is offered only to Linux guests under VZ.

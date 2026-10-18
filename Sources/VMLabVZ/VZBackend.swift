@@ -133,8 +133,12 @@ public struct VZBackend: Backend {
   /// it as `runtime.ip` (nil when none appeared; the guest still runs).
   public func start(_ record: VMRecord) async throws(VMLabError) -> VMRuntime {
     let dir = store.directory(of: record.id)
+    // R-604: a kernel boot takes the image's (extracted, uncompressed) kernel when none was given.
+    let boot =
+      record.boot == nil
+      ? nil : try await ImageStore(home: store.home).resolvingBoot(record.boot, image: record.image)
     let config = try VZRunnerConfig.linux(
-      record: record, vmDirectory: dir,
+      record: record, vmDirectory: dir, boot: boot,
       seed: FileManager.default.fileExists(atPath: dir.appending(path: "seed.iso").path))
     await serialChannels.drop(record.id)
     let handle = try await launcher.launch(vmDirectory: dir, config: config)
