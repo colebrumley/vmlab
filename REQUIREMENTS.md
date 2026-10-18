@@ -170,7 +170,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   **Verify:** snapshot test of the catalogue; a table-driven test of every contradiction above and
   of ten valid requests that decode.
 
-- [ ] **R-101 Profiles and host facts**
+- [x] **R-101 Profiles and host facts**
   `enum Profile: String { vzMacOS = "vz-macos", vzLinux = "vz-linux", qemuHVF = "qemu-hvf",
   qemuTCG = "qemu-tcg" }` with `performanceTier`, `energyTier`, `startupTier` (Appendix B).
   `HostFacts` (Appendix E) as a Codable struct, gathered by `HostProbe` (fast, every server start:
