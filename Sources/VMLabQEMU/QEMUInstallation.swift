@@ -34,7 +34,8 @@ public struct QEMUInstallation: Sendable, Hashable {
     throw missingTool("qemu-system-aarch64")
   }
 
-  /// `qemu-system-aarch64` for arm64 guests, `qemu-system-x86_64` for x86_64.
+  /// `qemu-system-<target>` for `arch`: aarch64 for arm64, x86_64, riscv64, or the architecture's
+  /// own QEMU name (R-310).
   public func systemBinary(for arch: GuestSpec.Arch) -> URL {
     binDirectory.appending(path: "qemu-system-\(QEMUCommandLine.target(for: arch) ?? "aarch64")")
   }
@@ -47,7 +48,11 @@ public struct QEMUInstallation: Sendable, Hashable {
     switch arch {
     case .arm64: names = ("edk2-aarch64-code.fd", "edk2-arm-vars.fd")
     case .x86_64: names = ("edk2-x86_64-code.fd", "edk2-i386-vars.fd")
-    default: throw QEMUCommandLine.unsupportedArch(arch)
+    case .riscv64: names = ("edk2-riscv-code.fd", "edk2-riscv-vars.fd")
+    case .other(let name):
+      throw VMLabError.invalidRequest(
+        field: "boot.mode", reason: "vmlab has no UEFI firmware for \(name)",
+        hint: "Boot with boot.mode kernel, firmware or binary.")
     }
     let code = shareDirectory.appending(path: names.code)
     let vars = shareDirectory.appending(path: names.vars)

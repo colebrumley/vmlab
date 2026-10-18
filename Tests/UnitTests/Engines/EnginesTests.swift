@@ -8,7 +8,10 @@ import VMLabCore
   @Test func registerAllFillsEveryEngineProfile() throws {
     let registry = BackendRegistry()
     let store = Store(home: FileManager.default.temporaryDirectory.appending(path: "vmlab-engines"))
-    Engines.registerAll(store: store, into: registry)
+    let displays = DisplayConnectorRegistry()
+    #expect(throws: VMLabError.self) { try displays.connector() }
+    Engines.registerAll(store: store, into: registry, displays: displays)
+    #expect(try displays.connector() is RFBDisplayConnector)
     #expect(Set(registry.profiles) == [.qemuHVF, .qemuTCG, .vzLinux])
     #expect(Set(registry.profiles) == Set(Engines.profiles))
     for profile in Engines.profiles {
@@ -17,13 +20,11 @@ import VMLabCore
     #expect(throws: VMLabError.self) { try registry.backend(for: .vzMacOS) }
   }
 
-  /// R-702: the engines register the qemu_hvf_gdb probe for doctor --probe.
-  @Test func registerAllRegistersTheEngineProbes() {
-    let probes = SlowProbeRegistry()
-    Engines.registerAll(
-      store: Store(home: FileManager.default.temporaryDirectory.appending(path: "vmlab-engines")),
-      into: BackendRegistry(), debug: DebugSessions(), probes: probes)
-    #expect(probes.runner(for: .qemuHVFGDB) is HVFGDBProbe)
+  @Test func registerProbesFillsTheEngineProbes() {
+    let registry = SlowProbeRegistry()
+    Engines.registerProbes(into: registry)
+    #expect(registry.probes == [.qemuHVFGDB, .qemuHVFLiveSnapshot, .qemuVmnet])
+    #expect(registry.runner(for: .qemuHVFGDB) is HVFGDBProbe)
   }
 
   @Test func hvfGDBProbeBootsAHaltedDisklessMachine() {

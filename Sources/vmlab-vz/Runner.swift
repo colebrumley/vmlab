@@ -15,12 +15,18 @@ final class Runner: NSObject {
   private var hasRun = false
   private var exiting = false
 
-  init(paths: VZRunnerPaths, configuration: VZVirtualMachineConfiguration) {
+  /// The virtio console's pipes, kept alive for the life of the guest.
+  let console: ConsolePipes?
+
+  init(paths: VZRunnerPaths, machine built: BuiltMachine) {
     self.paths = paths
-    self.machine = VZVirtualMachine(configuration: configuration)
+    self.machine = VZVirtualMachine(configuration: built.configuration)
+    self.console = built.console
     self.events = EventLog(vmDirectory: paths.vmDirectory)
     super.init()
     machine.delegate = self
+    // Drain the console from the start, so a restored (--hold) guest never blocks on a full pipe.
+    console?.start()
   }
 
   var state: RunnerState {

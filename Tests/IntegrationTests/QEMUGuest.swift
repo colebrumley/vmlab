@@ -16,11 +16,20 @@ struct QEMUGuest {
   let backends: BackendRegistry
   let record: VMRecord
   let machine: QEMUMachine
+  /// The warnings of the start (R-400: `ssh_unreachable` when exec_ssh was granted and the guest
+  /// never answered).
+  var startWarnings: [String] = []
 
+  /// `requested` becomes the plan's `requested` features (R-504 installs a desktop for
+  /// `gui_desktop`). `VMManager.create` generates `<vm>/id_ed25519` (R-400), so the guest boots
+  /// with a cloud-init seed that authorizes it. `prepare` runs on the VM directory after create
+  /// and before the first start (to drop an `id_ed25519.pub` there, say).
   static func boot(
-    features: [Feature] = [.serial, .gui, .netNAT], memoryGB: Int = 2,
-    profile: Profile = .qemuHVF, image: String = "debian-13-arm64",
-    arch: GuestSpec.Arch = .arm64
+    features: [Feature] = [.serial, .gui, .netNAT], requested: [Feature] = [], memoryGB: Int = 2,
+    diskGB: Int = 8, prepare: ((URL) throws -> Void)? = nil,
+    boot: BootSpec? = nil, network: NetworkSpec = NetworkSpec(), profile: Profile = .qemuHVF,
+    guest: GuestSpec = GuestSpec(os: .linux, arch: .arm64), image: String = "debian-13-arm64",
+    cpus: Int = 2
   ) async throws -> QEMUGuest {
     let n = counterLock.withLock {
       counter += 1
@@ -38,23 +47,24 @@ struct QEMUGuest {
     let registry = BackendRegistry()
     registry.register(backend)
     let manager = VMManager(store: store, backends: registry)
-    let guest = GuestSpec(os: .linux, arch: arch)
     let plan = Plan(
       profile: profile, guest: guest,
-      resources: ResourceSpec(cpus: 2, memoryGB: memoryGB, diskGB: 8), features: features,
-      estimatedStartupSeconds: 15)
+      resources: ResourceSpec(cpus: cpus, memoryGB: memoryGB, diskGB: diskGB), features: features,
+      requested: requested, estimatedStartupSeconds: 15)
     let created = try await manager.create(
       VMRecord(
         id: "", name: "it-\(n)", profile: profile, guest: guest, features: features,
-        image: image), plan: plan)
+        image: image, network: network, boot: boot), plan: plan)
     do {
-      guard let running = try await manager.perform(.start, on: created.id) else {
+      try prepare?(store.directory(of: created.id))
+      let outcome = try await manager.run(.start, on: created.id)
+      guard let running = outcome.record else {
         throw VMLabError(code: .internal, message: "start returned no record", hint: "")
       }
       let machine = try await backend.machine(for: running)
       return QEMUGuest(
         home: home, manager: manager, backend: backend, backends: registry, record: running,
-        machine: machine)
+        machine: machine, startWarnings: outcome.warnings)
     } catch {
       try? await backend.kill(created)
       try? FileManager.default.removeItem(at: home)

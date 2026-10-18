@@ -25,7 +25,7 @@ if=none,id=seed,format=raw,readonly=on,file=/Users/someone/.vmlab/vms/vm-hvf234/
 -device
 virtio-blk-pci,drive=seed
 -netdev
-user,id=net0,hostfwd=tcp:127.0.0.1:52222-:22,hostfwd=tcp:127.0.0.1:8080-:80
+user,id=net0,hostfwd=tcp:127.0.0.1:52222-:22,hostfwd=tcp:127.0.0.1:8080-:80,hostfwd=tcp:127.0.0.1:8443-:443
 -device
 virtio-net-pci,netdev=net0,mac=52:54:00:7f:9c:e6
 -device

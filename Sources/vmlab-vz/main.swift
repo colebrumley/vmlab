@@ -49,14 +49,14 @@ struct VZRunnerCommand: ParsableCommand {
       }
       let hold = hold
       MainActor.assumeIsolated {
-        let configuration: VZVirtualMachineConfiguration
+        let built: BuiltMachine
         do throws(VMLabError) {
-          configuration = try ConfigurationBuilder.build(
+          built = try ConfigurationBuilder.build(
             try VZRunnerConfig.read(from: paths.config))
         } catch {
           Runner.fatal(error, paths: paths)
         }
-        let runner = Runner(paths: paths, configuration: configuration)
+        let runner = Runner(paths: paths, machine: built)
         let server: ControlServer
         do {
           server = try ControlServer(path: socket) { request, reply in

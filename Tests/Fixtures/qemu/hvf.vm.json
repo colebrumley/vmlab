@@ -7,7 +7,7 @@
   "features": ["exec_ssh", "serial", "gui", "gdb", "net_nat"],
   "resources": { "cpus": 4, "memoryGB": 8, "diskGB": 40 },
   "image": "debian-13-arm64",
-  "network": { "mode": "nat", "forwards": [{ "guest": 80, "host": 8080 }, { "guest": 443 }] },
+  "network": { "mode": "nat", "forwards": [{ "guest": 80, "host": 8080 }, { "guest": 443, "host": 8443 }] },
   "createdAt": "2026-10-01T12:00:00Z",
   "state": "created"
 }

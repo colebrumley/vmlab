@@ -1,6 +1,7 @@
 import Foundation
 import Testing
-import VMLabCore
+
+@testable import VMLabCore
 
 @Suite struct FeaturesTests {
   static func fixture(_ name: String) throws -> String {
@@ -101,8 +102,20 @@ import VMLabCore
       json: #"{"guest":{"os":"linux","arch":"arm64"},"network":{"forwards":[{"guest":70000}]}}"#,
       field: "network.forwards[0].guest"),
     .init(
-      json: #"{"guest":{"os":"linux","arch":"arm64"},"boot":{"mode":"kernel"}}"#,
-      field: "boot.kernel"),
+      json:
+        #"{"guest":{"os":"linux","arch":"arm64"},"boot":{"mode":"binary","loadAddress":"0x0"}}"#,
+      field: "boot.binary"),
+    .init(
+      json: #"{"guest":{"os":"linux","arch":"arm64"},"boot":{"mode":"binary","binary":"/b"}}"#,
+      field: "boot.loadAddress"),
+    .init(
+      json:
+        #"{"guest":{"os":"linux","arch":"arm64"},"boot":{"mode":"binary","binary":"/b","loadAddress":"0xZZ"}}"#,
+      field: "boot.loadAddress"),
+    .init(
+      json:
+        #"{"guest":{"os":"linux","arch":"arm64"},"boot":{"mode":"firmware","firmware":"/f","firmwareFormat":"rom"}}"#,
+      field: "boot.firmwareFormat"),
   ]
 
   @Test(arguments: malformed)
@@ -126,6 +139,9 @@ import VMLabCore
     #"{"guest":{"os":"linux","arch":"loongarch64"},"require":["custom_devices"]}"#,
     #"{"guest":{"os":"macos","arch":"arm64"},"require":["net_none"],"network":{"mode":"none"}}"#,
     #"{"guest":{"os":"linux","arch":"arm64"},"require":["many_guests","net_segment"],"network":{"segment":"lab"},"provision":{"packages":["jq"]}}"#,
+    #"{"guest":{"os":"linux","arch":"arm64"},"boot":{"mode":"kernel","cmdline":"console=ttyAMA0"}}"#,
+    #"{"guest":{"os":"linux","arch":"x86_64"},"boot":{"mode":"firmware","firmware":"/b","firmwareFormat":"bios"}}"#,
+    #"{"guest":{"os":"linux","arch":"arm64"},"boot":{"mode":"binary","binary":"/b","loadAddress":"0x40080000","dtb":"/d"}}"#,
   ]
 
   @Test(arguments: valid)
@@ -148,6 +164,47 @@ import VMLabCore
     #expect(bare.require.isEmpty && bare.prefer.isEmpty && bare.image == nil && bare.boot == nil)
     #expect(bare.network == NetworkSpec())
     #expect(try Self.decode(Self.valid[7]).guest.arch == .other("loongarch64"))
+  }
+
+  @Test func bootImpliesItsFeatures() throws {
+    let binary = try Self.decode(
+      #"{"guest":{"os":"linux","arch":"arm64"},"boot":{"mode":"binary","binary":"/b","loadAddress":"0x1000"}}"#
+    )
+    #expect(binary.boot?.parsedLoadAddress == 0x1000)
+    #expect(binary.boot?.firmwareFormat == .pflash)
+    #expect(BootSpec(loadAddress: "4096").parsedLoadAddress == 4096)
+    let mac =
+      #"{"guest":{"os":"macos","arch":"arm64"},"boot":{"mode":"binary","binary":"/b","loadAddress":"0x1000"}}"#
+    #expect(throws: VMLabError.self) { try Self.decode(mac) }
+  }
+
+  /// R-306: extra.qemuArgs decodes, implies custom_devices, and the denylist is invalid_request.
+  @Test func qemuArgsPassThroughAndDenylist() throws {
+    let ok = try Self.decode(
+      #"{"guest":{"os":"linux","arch":"arm64"},"extra":{"qemuArgs":["-device","virtio-rng-pci"]}}"#)
+    #expect(ok.extra?.qemuArgs == ["-device", "virtio-rng-pci"])
+    #expect(ok.impliedFeatures.map(\.feature) == [.customDevices])
+    let empty = try Self.decode(#"{"guest":{"os":"linux","arch":"arm64"},"extra":{}}"#)
+    #expect(empty.extra?.qemuArgs == [] && empty.impliedFeatures.isEmpty)
+    for denied in [
+      "-qmp", "-serial", "-vnc", "-gdb", "-pidfile", "-daemonize", "-monitor", "--monitor",
+      "-gdb=tcp::1", "-s", "-mon", "-qmp-pretty", "-readconfig",
+    ] {
+      let json =
+        #"{"guest":{"os":"linux","arch":"arm64"},"extra":{"qemuArgs":["-device","x",""#
+        + denied + #"","y"]}}"#
+      #expect {
+        _ = try Self.decode(json)
+      } throws: { error in
+        guard let error = error as? VMLabError else { return false }
+        return error.code == .invalidRequest && error.data["field"] == .string("extra.qemuArgs[2]")
+      }
+    }
+    // A value that merely looks like a denied name is an argument, not an option.
+    #expect(ExtraSpec.optionName("serial") == nil)
+    #expect(ExtraSpec.optionName("--gdb=tcp::1") == "gdb")
+    let mac = #"{"guest":{"os":"macos","arch":"arm64"},"extra":{"qemuArgs":["-device","x"]}}"#
+    #expect(throws: Never.self) { _ = try Self.decode(mac) }
   }
 
   @Test func memberwiseInitValidates() {

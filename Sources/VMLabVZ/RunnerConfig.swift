@@ -26,11 +26,12 @@ public struct VZRunnerPaths: Sendable, Hashable {
 }
 
 /// The machine a runner builds, as plain data so the server writes it and the runner (the only
-/// process that loads Virtualization.framework) reads it. R-601 owns turning a `VMRecord` into the
-/// complete configuration; this is the subset R-600 needs to boot an EFI Linux disk image.
+/// process that loads Virtualization.framework) reads it. `VZRunnerConfig.linux(record:...)` turns a
+/// `VMRecord` into it (R-601); `decisions(limits:)` resolves it into `VZMachineDecisions`, the
+/// device list the runner's `ConfigurationBuilder` materialises one to one.
 public struct VZRunnerConfig: Codable, Sendable, Hashable {
   public struct Disk: Codable, Sendable, Hashable {
-    /// Absolute path of a raw disk image.
+    /// Absolute path of a raw disk image (or the cloud-init ISO, which VZ attaches as raw bytes).
     public var path: String
     public var readOnly: Bool
 
@@ -45,41 +46,111 @@ public struct VZRunnerConfig: Codable, Sendable, Hashable {
     case nat(macAddress: String?)
   }
 
+  public enum Boot: Codable, Sendable, Hashable {
+    /// `VZEFIBootLoader` with the variable store at `variableStore`, created when absent.
+    case efi(variableStore: String)
+    /// `VZLinuxBootLoader` (R-604): an uncompressed arm64 `Image`, optional initrd, command line.
+    case linuxKernel(kernel: String, initrd: String?, commandLine: String)
+  }
+
+  /// The guest display (`VZVirtioGraphicsDeviceConfiguration`), present only when `gui` was
+  /// granted.
+  public struct Graphics: Codable, Sendable, Hashable {
+    public var width: Int
+    public var height: Int
+
+    public init(width: Int = 1280, height: Int = 800) {
+      self.width = width
+      self.height = height
+    }
+  }
+
   public var cpus: Int
   public var memoryBytes: UInt64
-  /// Path of the EFI variable store; created when absent.
-  public var efiVariableStore: String
-  /// Boot disk first.
+  public var boot: Boot
+  /// Boot disk first, then the cloud-init seed.
   public var disks: [Disk]
   public var network: [Network]
-  /// Where the guest's virtio console output is appended; nil attaches no console. R-602 replaces
-  /// this with the serial socket bridge.
+  /// Where the runner appends the guest's virtio console output, which it reads from the console
+  /// pipe; nil attaches no console. R-602 adds the `serial.sock` bridge on the same pipes.
   public var consoleLog: String?
+  public var memoryBalloon: Bool
+  public var graphics: Graphics?
 
   public init(
-    cpus: Int, memoryBytes: UInt64, efiVariableStore: String, disks: [Disk],
-    network: [Network] = [.nat(macAddress: nil)], consoleLog: String? = nil
+    cpus: Int, memoryBytes: UInt64, boot: Boot, disks: [Disk],
+    network: [Network] = [.nat(macAddress: nil)], consoleLog: String? = nil,
+    memoryBalloon: Bool = true, graphics: Graphics? = nil
   ) {
     self.cpus = cpus
     self.memoryBytes = memoryBytes
-    self.efiVariableStore = efiVariableStore
+    self.boot = boot
     self.disks = disks
     self.network = network
     self.consoleLog = consoleLog
+    self.memoryBalloon = memoryBalloon
+    self.graphics = graphics
   }
 
-  /// The minimal EFI Linux machine for `record`: its resources (Appendix G defaults for the rest),
-  /// `<vm>/disk.raw` as the boot disk, `<vm>/efi-vars.bin`, one NAT NIC and the console appended to
-  /// `<vm>/console.log`.
-  public static func linuxEFI(record: VMRecord, vmDirectory: URL) -> VZRunnerConfig {
+  /// The guest command line for `.kernel` boot without one: the root on the first virtio disk and
+  /// the console on the virtio console.
+  public static let defaultCommandLine = "console=hvc0 root=/dev/vda1 rw"
+
+  /// The complete Linux machine for `record` in `vmDirectory`: its resources (Appendix G defaults
+  /// for the rest), `.disk` boot (default) through EFI with `<vm>/efi-vars.bin` or `.kernel` boot
+  /// through `VZLinuxBootLoader`, `<vm>/disk.raw`, `<vm>/seed.iso` read-only when `seed`, one NAT
+  /// NIC with `stableMAC(for:)` unless the network is `none`, the console appended to
+  /// `<vm>/console.log`, the balloon, and graphics only when `gui` was granted.
+  public static func linux(
+    record: VMRecord, vmDirectory: URL, boot: BootSpec? = nil, seed: Bool = true
+  ) throws(VMLabError) -> VZRunnerConfig {
     let resources = ResourceLimits.resolve(record.resources, for: .linux)
+    let loader: Boot
+    switch boot?.mode ?? .disk {
+    case .disk:
+      loader = .efi(variableStore: vmDirectory.appending(path: "efi-vars.bin").path)
+    case .kernel:
+      guard let kernel = boot?.kernel else {
+        throw VMLabError.invalidRequest(
+          field: "boot.kernel", reason: "kernel boot needs a kernel",
+          hint: "Give boot.kernel the path of an uncompressed arm64 Image.")
+      }
+      loader = .linuxKernel(
+        kernel: kernel, initrd: boot?.initrd,
+        commandLine: boot?.cmdline ?? defaultCommandLine)
+    case .firmware, .binary:
+      throw VMLabError.invalidRequest(
+        field: "boot.mode",
+        reason: "Virtualization.framework boots only Apple EFI or a Linux kernel",
+        hint: "Use boot.mode disk or kernel, or require custom_firmware to get a QEMU profile.")
+    }
+    var disks = [Disk(path: vmDirectory.appending(path: "disk.raw").path)]
+    if seed {
+      disks.append(Disk(path: vmDirectory.appending(path: "seed.iso").path, readOnly: true))
+    }
     return VZRunnerConfig(
       cpus: resources.cpus ?? 2,
       memoryBytes: UInt64(resources.memoryGB ?? 4) << 30,
-      efiVariableStore: vmDirectory.appending(path: "efi-vars.bin").path,
-      disks: [Disk(path: vmDirectory.appending(path: "disk.raw").path)],
-      network: [.nat(macAddress: nil)],
-      consoleLog: vmDirectory.appending(path: "console.log").path)
+      boot: loader,
+      disks: disks,
+      network: record.network.mode == .disabled
+        ? [] : [.nat(macAddress: stableMAC(for: record.id))],
+      consoleLog: vmDirectory.appending(path: "console.log").path,
+      memoryBalloon: true,
+      graphics: record.features.contains(.gui) ? Graphics() : nil)
+  }
+
+  /// A locally administered unicast MAC derived from the VM's id, so the guest keeps its NIC (and
+  /// its DHCP lease) across restarts without storing anything.
+  public static func stableMAC(for id: String) -> String {
+    var hash: UInt64 = 0xcbf2_9ce4_8422_2325  // FNV-1a
+    for byte in id.utf8 {
+      hash ^= UInt64(byte)
+      hash &*= 0x100_0000_01b3
+    }
+    var octets = (0..<6).map { UInt8(truncatingIfNeeded: hash >> (8 * UInt64($0))) }
+    octets[0] = (octets[0] & 0xFC) | 0x02
+    return octets.map { String(format: "%02x", $0) }.joined(separator: ":")
   }
 
   /// Writes the config as JSON at `url`, replacing it atomically.

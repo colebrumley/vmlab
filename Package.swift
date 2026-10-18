@@ -26,7 +26,9 @@ let package = Package(
     .target(name: "VMLabGDB", dependencies: ["VMLabCore"]),
     .target(name: "VMLabSwitch"),
     // Names the engines so `vmlab` can register them without importing a backend module (C3).
-    .target(name: "VMLabEngines", dependencies: ["VMLabCore", "VMLabQEMU", "VMLabVZ", "VMLabGDB"]),
+    .target(
+      name: "VMLabEngines",
+      dependencies: ["VMLabCore", "VMLabQEMU", "VMLabVZ", "VMLabRFB", "VMLabGDB"]),
     .target(
       name: "VMLabMCP",
       dependencies: [

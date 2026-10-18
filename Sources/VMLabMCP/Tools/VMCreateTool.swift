@@ -20,7 +20,8 @@ extension ToolSpec {
       ], required: ["requirements"]),
     outputShape: """
       { plan: Plan, vm: { id, name }, state,
-        endpoints: { ssh?: "host:port", ip?, serial?, display?, gdb? } }
+        endpoints: { ssh?: "host:port", ip?, serial?, display?, gdb?,
+          forwards?: [ { guest, host: "127.0.0.1:port" } ] } }
       """,
     errors: [
       .invalidRequest, .unsatisfiable, .unverifiedCapability, .limitMacOSGuests, .limitMemory,

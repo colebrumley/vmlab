@@ -117,6 +117,8 @@ public struct ToolContext: Sendable {
   /// The debug sessions `vm_debug` keeps per VM: process-wide, so the GDB connection outlives
   /// the call that opened it (R-705).
   public var debug: DebugSessions = .shared
+  /// The display sessions `vm_computer` keeps per VM, shared by every call on this context.
+  public var displays: DisplaySessions
   /// This call's progress reporter; the MCP server sets it per `tools/call`.
   public var progress: ToolProgress = .none
   /// How often a long call reports while it waits (R-205: at least every 5 s).
@@ -126,7 +128,7 @@ public struct ToolContext: Sendable {
   public init(
     home: URL, probe: HostProbe? = nil, limits: ResourceLimits = .defaults,
     backends: BackendRegistry = Backends.shared, images: ImageStore? = nil,
-    startGate: any StartGating = StartGate.shared
+    startGate: any StartGating = StartGate.shared, displays: DisplaySessions? = nil
   ) {
     let store = Store(home: home)
     self.home = home
@@ -137,6 +139,7 @@ public struct ToolContext: Sendable {
     self.manager = VMManager(store: store, backends: backends)
     self.images = images ?? ImageStore(home: home)
     self.startGate = startGate
+    self.displays = displays ?? DisplaySessions()
   }
 
   /// The context of this process: `VMLAB_HOME`, or `~/.vmlab`.
@@ -158,7 +161,9 @@ public protocol ToolHandler: Sendable {
 public enum ToolHandlers {
   public static let all: [any ToolHandler] = [
     HostFactsHandler(), HostDoctorHandler(), VMPlanHandler(), VMCreateHandler(), VMListHandler(),
-    VMInspectHandler(), VMLifecycleHandler(), VMLogsHandler(), VMDebugHandler(), ImagesHandler(),
+    VMInspectHandler(), VMLifecycleHandler(), VMExecHandler(), VMJobHandler(), VMLogsHandler(),
+    ImagesHandler(), VMComputerHandler(), VMDebugHandler(), VMIntrospectHandler(),
+    VMMemoryDumpHandler(),
   ]
 
   private static let byName: [String: any ToolHandler] = Dictionary(
@@ -295,27 +300,5 @@ extension JSONValue {
   /// The JSON text of this value, for decoding into a Core type.
   public var data: Data {
     (try? JSONEncoder().encode(self)) ?? Data("null".utf8)
-  }
-
-  public subscript(key: String) -> JSONValue? { objectValue?[key] }
-
-  public var objectValue: [String: JSONValue]? {
-    if case .object(let object) = self { object } else { nil }
-  }
-
-  public var arrayValue: [JSONValue]? {
-    if case .array(let array) = self { array } else { nil }
-  }
-
-  public var stringValue: String? {
-    if case .string(let string) = self { string } else { nil }
-  }
-
-  public var numberValue: Double? {
-    if case .number(let number) = self { number } else { nil }
-  }
-
-  public var boolValue: Bool? {
-    if case .bool(let bool) = self { bool } else { nil }
   }
 }

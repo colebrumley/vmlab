@@ -1,6 +1,7 @@
 import VMLabCore
 import VMLabGDB
 import VMLabQEMU
+import VMLabRFB
 import VMLabVZ
 
 /// The one place that names the engines: `vmlab` calls `registerAll` at startup so `VMManager`
@@ -10,17 +11,24 @@ public enum Engines {
   /// The profiles `registerAll` fills. `vz-macos` joins when `VZBackend` runs macOS guests.
   public static let profiles: [Profile] = [.qemuHVF, .qemuTCG, .vzLinux]
 
-  /// Registers QEMU for `qemu-hvf` and `qemu-tcg` and VZ for `vz-linux`, all on `store`, and the
-  /// GDB client as the connector of `vm_debug`'s sessions, plus the slow probes the engines own
-  /// (`qemu_hvf_gdb`, R-702).
+  /// Registers QEMU for `qemu-hvf` and `qemu-tcg` and VZ for `vz-linux`, all on `store`, the RFB
+  /// display connector every profile's display speaks (R-502), and the GDB client as the
+  /// connector of `vm_debug`'s sessions (R-701).
   public static func registerAll(
     store: Store, into registry: BackendRegistry = Backends.shared,
-    debug: DebugSessions = .shared, probes: SlowProbeRegistry = SlowProbeRunners.shared
+    displays: DisplayConnectorRegistry = Displays.shared, debug: DebugSessions = .shared
   ) {
-    debug.register(GDBDebugConnector())
-    probes.register(HVFGDBProbe())
     registry.register(QEMUBackend(profile: .qemuHVF, store: store))
     registry.register(QEMUBackend(profile: .qemuTCG, store: store))
     registry.register(VZBackend(store: store))
+    displays.register(RFBDisplayConnector())
+    debug.register(GDBDebugConnector())
+  }
+
+  /// Registers the slow probes the engine modules own (`vmlab doctor --probe` runs them): QEMU's,
+  /// and `qemu_hvf_gdb` (R-702), which needs both QEMU and the GDB client.
+  public static func registerProbes(into registry: SlowProbeRegistry = SlowProbeRunners.shared) {
+    for runner in VMLabQEMU.probeRunners { registry.register(runner) }
+    registry.register(HVFGDBProbe())
   }
 }

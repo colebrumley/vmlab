@@ -67,8 +67,8 @@ enum RubyYAML {
     ]
     let doc = try #require(try RubyYAML.parse(CloudInit.userData(config)) as? [String: Any])
     #expect(
-      doc["packages"] as? [String] == [
-        "qemu-guest-agent", "xfce4", "lightdm", "x11vnc", "build-essential",
+      doc["packages"] as? [String] == ["qemu-guest-agent"] + GUIStack.desktopPackages + [
+        "x11vnc", "build-essential",
       ])
     #expect(
       doc["mounts"] as? [[String]] == [
@@ -84,6 +84,38 @@ enum RubyYAML {
     #expect(autologin["content"]?.contains("autologin-user=debian") == true)
   }
 
+  /// R-504 on QEMU: the desktop without a VNC server, which QEMU's own VNC replaces.
+  @Test(.enabled(if: RubyYAML.available)) func desktopWithoutVNCServer() throws {
+    var config = Self.base()
+    config.gui = GUIStack(vncPassword: nil)
+    let doc = try #require(try RubyYAML.parse(CloudInit.userData(config)) as? [String: Any])
+    let packages = try #require(doc["packages"] as? [String])
+    #expect(packages.contains("xfce4") && packages.contains("xserver-xorg-video-fbdev"))
+    #expect(!packages.contains("x11vnc"))
+    let runcmd = try #require(doc["runcmd"] as? [[String]])
+    #expect(runcmd.contains(["systemctl", "enable", "--now", "lightdm"]))
+    #expect(runcmd.contains(["systemctl", "set-default", "graphical.target"]))
+    #expect(!runcmd.contains { $0.first == "x11vnc" })
+    let files = try #require(doc["write_files"] as? [[String: String]])
+    #expect(!files.contains { $0["path"]?.contains("vmlab-vnc") == true })
+    #expect(files.contains { $0["content"]?.contains("autologin-session=xfce") == true })
+    #expect(files.contains { $0["content"]?.contains("logind-check-graphical=false") == true })
+  }
+
+  @Test func inGuestVNCWritesAndReusesThePasswordFile() throws {
+    let dir = FileManager.default.temporaryDirectory.appending(path: "vmlab-gui-\(UUID())")
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let stack = try GUIStack.inGuestVNC(vmDirectory: dir)
+    let password = try #require(stack.vncPassword)
+    #expect(password.count == 8)
+    let file = dir.appending(path: "vnc.pass")
+    #expect(try String(contentsOf: file, encoding: .utf8) == password + "\n")
+    let mode = try FileManager.default.attributesOfItem(atPath: file.path)[.posixPermissions]
+    #expect(mode as? Int == 0o600)
+    #expect(try GUIStack.inGuestVNC(vmDirectory: dir) == stack)
+    #expect(stack.packages.last == "x11vnc")
+  }
+
   @Test(.enabled(if: RubyYAML.available)) func segmentNICGetsStaticNetworkConfig() throws {
     var config = Self.base()
     config.segment = SegmentNIC(
@@ -97,6 +129,20 @@ enum RubyYAML {
     #expect(ethernets["nat0"]?["dhcp4"] as? Bool == true)
     #expect(ethernets["seg0"]?["addresses"] as? [String] == ["10.1.0.10/24"])
     #expect(ethernets["seg0"]?["dhcp4"] as? Bool == false)
+  }
+
+  /// VZ finds the guest by MAC in vmnet's lease file, so the NAT NIC identifies itself by MAC.
+  @Test(.enabled(if: RubyYAML.available)) func dhcpIdentifierMACGetsNetworkConfig() throws {
+    var config = Self.base()
+    config.dhcpIdentifierMAC = "02:AB:00:00:00:01"
+    let text = try #require(CloudInit.networkConfig(config))
+    let doc = try #require(try RubyYAML.parse(text) as? [String: Any])
+    let ethernets = try #require(doc["ethernets"] as? [String: [String: Any]])
+    #expect(ethernets.keys.sorted() == ["nat0"])
+    #expect(
+      (ethernets["nat0"]?["match"] as? [String: String])?["macaddress"] == "02:ab:00:00:00:01")
+    #expect(ethernets["nat0"]?["dhcp4"] as? Bool == true)
+    #expect(ethernets["nat0"]?["dhcp-identifier"] as? String == "mac")
   }
 
   @Test(.enabled(if: RubyYAML.available)) func hostileStringsRoundTrip() throws {
