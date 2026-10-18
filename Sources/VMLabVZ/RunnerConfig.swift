@@ -54,6 +54,10 @@ public struct VZRunnerConfig: Codable, Sendable, Hashable {
     case efi(variableStore: String)
     /// `VZLinuxBootLoader` (R-604): an uncompressed arm64 `Image`, optional initrd, command line.
     case linuxKernel(kernel: String, initrd: String?, commandLine: String)
+    /// `VZMacOSBootLoader` on a `VZMacPlatformConfiguration` (R-605): the base64
+    /// `dataRepresentation`s of the hardware model and machine identifier, and the auxiliary
+    /// storage (`nvram.bin`) path, all from the guest's Tart clone.
+    case macOS(hardwareModel: String, machineIdentifier: String, auxiliaryStorage: String)
   }
 
   /// The guest display (`VZVirtioGraphicsDeviceConfiguration`), present only when `gui` was
@@ -61,10 +65,13 @@ public struct VZRunnerConfig: Codable, Sendable, Hashable {
   public struct Graphics: Codable, Sendable, Hashable {
     public var width: Int
     public var height: Int
+    /// Set for a macOS guest's `VZMacGraphicsDisplayConfiguration`; nil for virtio graphics.
+    public var pixelsPerInch: Int?
 
-    public init(width: Int = 1280, height: Int = 800) {
+    public init(width: Int = 1280, height: Int = 800, pixelsPerInch: Int? = nil) {
       self.width = width
       self.height = height
+      self.pixelsPerInch = pixelsPerInch
     }
   }
 

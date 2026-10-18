@@ -1,0 +1,34 @@
+import Foundation
+import Testing
+import VMLabCore
+
+@testable import VMLabVZ
+
+@Suite struct PasswordSSHTests {
+  /// The password reaches ssh only through the askpass script's environment, never an argument.
+  @Test func passwordIsNeverAnArgument() async throws {
+    let dir = TartTests.temporary()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    var ssh = PasswordSSH(user: "admin", host: "192.168.64.9", password: "s3cret", scratch: dir)
+    #expect(!ssh.arguments("true").contains { $0.contains("s3cret") })
+    #expect(ssh.arguments("sw_vers").suffix(2) == ["admin@192.168.64.9", "sw_vers"])
+
+    // Stand-in ssh: run the askpass script the way ssh would and echo stdin.
+    let fake = dir.appending(path: "fake-ssh")
+    try Data("#!/bin/sh\n\"$SSH_ASKPASS\" prompt\ncat\n".utf8).write(to: fake)
+    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fake.path)
+    ssh.ssh = fake.path
+    let output = await ssh.run("ignored", input: Data("key\n".utf8), timeout: .seconds(10))
+    #expect(output?.status == 0)
+    #expect(output?.output == "s3cret\nkey\n")
+  }
+
+  @Test func timeoutKillsTheCommand() async {
+    let clock = ContinuousClock()
+    let begun = clock.now
+    let output = await HostCommand.run("/bin/sleep", ["30"], timeout: .milliseconds(300))
+    #expect(output == nil)
+    #expect(clock.now - begun < .seconds(10))
+  }
+}
