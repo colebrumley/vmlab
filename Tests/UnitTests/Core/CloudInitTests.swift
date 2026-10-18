@@ -78,7 +78,7 @@ enum RubyYAML {
       ])
     let runcmd = try #require(doc["runcmd"] as? [[String]])
     #expect(runcmd.contains(["systemctl", "enable", "--now", "serial-getty@hvc0.service"]))
-    #expect(doc["bootcmd"] as? [[String]] == [["sh", "-c", CloudInit.hvc0BootCommand]])
+    #expect(doc["bootcmd"] as? [String] == [CloudInit.hvc0BootCommand])
     #expect(
       CloudInit.hvc0BootCommand
         == "test -e /etc/default/grub.d/99-vmlab-console.cfg || { mkdir -p /etc/default/grub.d && "

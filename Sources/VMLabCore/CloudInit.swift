@@ -279,7 +279,7 @@ public enum CloudInit {
     // so kernel messages reach the virtio console from the next boot on (R-602). bootcmd runs
     // early in the first boot, before the package install, so a slow first boot cannot delay it.
     let bootcmd: [YAML] =
-      config.console == .hvc0 ? [.list(["sh", "-c", .string(hvc0BootCommand)])] : []
+      config.console == .hvc0 ? [.string(hvc0BootCommand)] : []
 
     var entries: [(String, YAML)] = [
       ("hostname", .string(config.hostname)),
