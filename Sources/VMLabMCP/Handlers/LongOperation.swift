@@ -75,7 +75,7 @@ enum LongOperation {
     ) { () throws(VMLabError) -> VMManager.Outcome in
       try await typed("start", vm: record.id) {
         try await gate.withStart(
-          Inventory.Guest(record: record), running: { store.inventory() }, host: host
+          store.startingGuest(record), running: { store.inventory() }, host: host
         ) { try await manager.run(.start, on: record.id, sshTimeout: sshTimeout) }
       }
     }

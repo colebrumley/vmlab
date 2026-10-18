@@ -117,8 +117,11 @@ public enum FleetPlanning {
   /// Refuses a fleet whose members together would break the macOS limit or the memory budget,
   /// with the same codes and data as a single start (`limit_macos_guests`, `limit_memory` with
   /// `requestedGB` the whole fleet's memory).
+  /// With `hostMemory`, the guests of other homes and servers count too, and the whole fleet must
+  /// fit the host's available memory under normal pressure (unless the owner ignores pressure).
   public static func checkBudget(
-    plan: Plan, count: Int, running: Inventory, host: HostFacts, limits: ResourceLimits
+    plan: Plan, count: Int, running: Inventory, host: HostFacts, limits: ResourceLimits,
+    hostMemory: HostMemoryGuard? = nil
   ) throws(VMLabError) {
     guard count >= 1, count <= maxMembers else {
       throw VMLabError.invalidRequest(
@@ -127,6 +130,8 @@ public enum FleetPlanning {
     }
     let memoryGB =
       ResourceLimits.resolve(plan.resources, for: plan.guest.os).memoryGB ?? 4
+    let snapshot = hostMemory?.reader.snapshot()
+    let running = snapshot.map { running.addingHostGuests($0.guests) } ?? running
     if Capabilities.guestOS(of: plan.profile) == .macos {
       var inventory = running
       for _ in 0..<count {
@@ -141,6 +146,17 @@ public enum FleetPlanning {
       throw VMLabError(
         code: error.code,
         message: "A fleet of \(count) × \(memoryGB) GB does not fit: " + error.message,
+        hint: "Ask for fewer members or less memory each, or stop running guests.",
+        data: error.data.merging(["count": .number(Double(count))]) { $1 })
+    }
+    guard let snapshot, hostMemory?.ignorePressure == false else { return }
+    do {
+      try limits.checkHostMemory(
+        requestedGB: memoryGB * count, snapshot: snapshot, hostGuests: running.guests.count)
+    } catch {
+      throw VMLabError(
+        code: error.code,
+        message: "A fleet of \(count) × \(memoryGB) GB cannot start: " + error.message,
         hint: "Ask for fewer members or less memory each, or stop running guests.",
         data: error.data.merging(["count": .number(Double(count))]) { $1 })
     }

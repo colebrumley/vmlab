@@ -251,6 +251,11 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   default 4) free of physical memory, else `limit_memory` with the numbers. Running macOS guests
   must stay under 2, else `limit_macos_guests`. A global `StartGate` limits concurrent starts to
   `parallelStarts` (default 4).
+  *Note (code wins, C7; see `mem-pressure-gate` in Phase 12):* the budget counts every guest engine
+  process on the host (any `VMLAB_HOME`, any server), not only this home's records, and a start is
+  also refused with `limit_memory` while the kernel reports memory pressure `warn` or `critical`,
+  or when the host's available memory, less the starts in flight, is below the guest's memory plus
+  `reserveGB`.
   **Verify:** unit tests with fixture inventories for both limits and the gate.
 
 ---
@@ -885,7 +890,12 @@ planned by `/plan` into a spec under `docs/specs/` and built by workers from tha
 in [CLAUDE.md](CLAUDE.md)). Each work item gets one line here, written by the planner; the worker
 that builds it ticks the line in its own pull request and nobody else edits it.
 
-(none yet)
+- [x] **mem-pressure-gate Refuse a guest start under host memory pressure** (owner request, no
+  spec). Every start (`vm_create`, `vm_lifecycle start`, `fleet create` for all members at once,
+  the cross-process gate) reads the kernel pressure level and available memory and counts guests
+  host-wide; `limit_memory` at pressure ≥ warn or when available < memory + `reserveGB`. Owner-only
+  escape hatch: `VMLAB_IGNORE_MEMORY_PRESSURE=1` or `ignoreMemoryPressure` in `config.json`.
+  Integration tests run serially (`--no-parallel`).
 
 ---
 
@@ -1036,7 +1046,7 @@ Every error is `{ code, message, hint, data }`.
 | `vm_not_found` | | `vm` |
 | `wrong_state` | the action is illegal in the VM's current state | `state`, `legalActions` |
 | `limit_macos_guests` | two macOS guests already run | `running` |
-| `limit_memory` | the memory budget would be exceeded | `requestedGB`, `freeGB`, `reserveGB` |
+| `limit_memory` | the memory budget would be exceeded (guests host-wide), the host is under memory pressure, or its available memory is short | `requestedGB`, `reserveGB`; budget: `freeGB` (+ `hostGuests` at start); pressure or available memory: `pressureLevel`, `availableGB`, `hostGuests` |
 | `host_missing_tool` | QEMU, Tart, Rosetta or the signed runner is missing | `tool`, `fix` |
 | `image_not_found` | | `name`, `available` |
 | `confirm_required` | a large pull or dump needs `confirm: true` | `bytes` |
@@ -1073,7 +1083,7 @@ six 4 GB guests with the default reserve; macOS 26.6 → VZ save/restore APIs pr
 
 ```
 ~/.vmlab/                      (VMLAB_HOME)
-  config.json                  reserveGB, parallelStarts, allowAnyPath, defaults
+  config.json                  reserveGB, parallelStarts, allowAnyPath, ignoreMemoryPressure, defaults
   host-facts.json              slow probe results
   board.json                   session board (R-002; never committed)
   images/<name>/               image.json, disk.(raw|qcow2), kernel/, checksums
@@ -1100,7 +1110,8 @@ six 4 GB guests with the default reserve; macOS 26.6 → VZ save/restore APIs pr
 | Setting | Default |
 |---|---|
 | CPUs / memory / disk | 2 / 4 GB / 32 GB (macOS: 4 / 8 GB / image size) |
-| Memory reserve kept free on the host | 4 GB |
+| Memory reserve kept free on the host | 4 GB (after every guest on the host, from any `VMLAB_HOME`; also against the host's available memory) |
+| Host memory pressure at which a start is refused | `warn` (`kern.memorystatus_vm_pressure_level` ≥ 2); off with `VMLAB_IGNORE_MEMORY_PRESSURE=1` or `ignoreMemoryPressure: true` in `config.json` (owner only) |
 | Concurrent starts | 4 |
 | macOS guests running | 2 (Apple's limit) |
 | Boot timeout until SSH (Linux / macOS / TCG) | 180 s / 300 s / 900 s |

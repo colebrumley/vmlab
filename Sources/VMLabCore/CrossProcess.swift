@@ -105,14 +105,17 @@ public final class FileLock: Sendable {
 public final class FileStartGate: StartGating {
   public let directory: URL
   public let limits: ResourceLimits
+  public let hostMemory: HostMemoryGuard?
   public let pollInterval: Duration
   private let held = Mutex<[UUID: FileLock]>([:])
 
   public init(
-    home: URL, limits: ResourceLimits = .defaults, pollInterval: Duration = .milliseconds(50)
+    home: URL, limits: ResourceLimits = .defaults, hostMemory: HostMemoryGuard? = nil,
+    pollInterval: Duration = .milliseconds(50)
   ) {
     self.directory = home.appending(path: "locks/starts")
     self.limits = limits
+    self.hostMemory = hostMemory
     self.pollInterval = pollInterval
   }
 
@@ -137,9 +140,18 @@ public final class FileStartGate: StartGating {
     do {
       try Task.checkCancellation()
       let pending = pendingGuests(excludingSlot: index)
-      try limits.check(
-        profile: guest.profile, memoryGB: guest.memoryGB,
-        running: Self.budgeted(running(), pending: pending, excluding: guest), host: host)
+      let live = running()
+      let budget = Self.budgeted(live, pending: pending, excluding: guest)
+      if let hostMemory {
+        let liveIDs = Set(live.guests.compactMap(\.id))
+        try hostMemory.check(
+          guest, budget: budget,
+          pending: pending.filter { $0.id.map { !liveIDs.contains($0) && $0 != guest.id } ?? true },
+          limits: limits, host: host)
+      } else {
+        try limits.check(
+          profile: guest.profile, memoryGB: guest.memoryGB, running: budget, host: host)
+      }
     } catch {
       slot.unlock()
       throw error
@@ -194,6 +206,7 @@ public final class FileStartGate: StartGating {
     var os: GuestSpec.OS
     var memoryGB: Int
     var pid: Int32
+    var directory: String?
 
     init(_ guest: Inventory.Guest) {
       id = guest.id
@@ -201,10 +214,11 @@ public final class FileStartGate: StartGating {
       os = guest.os
       memoryGB = guest.memoryGB
       pid = getpid()
+      directory = guest.directory
     }
 
     var guest: Inventory.Guest {
-      Inventory.Guest(id: id, profile: profile, os: os, memoryGB: memoryGB)
+      Inventory.Guest(id: id, profile: profile, os: os, memoryGB: memoryGB, directory: directory)
     }
   }
 

@@ -6,14 +6,20 @@ public struct VMLabConfig: Codable, Sendable, Hashable {
   /// Lets host paths given to tools lie anywhere, not only under the user's home or `/tmp`
   /// (R-1102).
   public var allowAnyPath: Bool
+  /// Lets a guest start although the host is under memory pressure or short of available memory
+  /// (the owner's escape hatch; `VMLAB_IGNORE_MEMORY_PRESSURE=1` does the same).
+  public var ignoreMemoryPressure: Bool
 
-  public init(allowAnyPath: Bool = false) {
+  public init(allowAnyPath: Bool = false, ignoreMemoryPressure: Bool = false) {
     self.allowAnyPath = allowAnyPath
+    self.ignoreMemoryPressure = ignoreMemoryPressure
   }
 
   public init(from decoder: any Decoder) throws {
     let c = try decoder.container(keyedBy: CodingKeys.self)
     allowAnyPath = (try? c.decodeIfPresent(Bool.self, forKey: .allowAnyPath)) ?? false
+    ignoreMemoryPressure =
+      (try? c.decodeIfPresent(Bool.self, forKey: .ignoreMemoryPressure)) ?? false
   }
 
   public static func url(home: URL) -> URL { home.appending(path: "config.json") }

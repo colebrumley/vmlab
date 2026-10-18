@@ -13,12 +13,16 @@ public enum Engines {
 
   /// Registers QEMU for `qemu-hvf` and `qemu-tcg` and VZ for `vz-linux` and
   /// `vz-macos`, all on `store`, the RFB
-  /// display connector every profile's display speaks (R-502), and the GDB client as the
-  /// connector of `vm_debug`'s sessions (R-701).
+  /// display connector every profile's display speaks (R-502), the GDB client as the
+  /// connector of `vm_debug`'s sessions (R-701), and how each engine's guest processes look, so
+  /// the start gate counts guests host-wide (`HostMemoryGuard`).
   public static func registerAll(
     store: Store, into registry: BackendRegistry = Backends.shared,
-    displays: DisplayConnectorRegistry = Displays.shared, debug: DebugSessions = .shared
+    displays: DisplayConnectorRegistry = Displays.shared, debug: DebugSessions = .shared,
+    guestProcesses: GuestProcessRecognizers = .shared
   ) {
+    guestProcesses.register(VMLabQEMU.guestProcessRecognizer)
+    guestProcesses.register(VMLabVZ.guestProcessRecognizer)
     registry.register(QEMUBackend(profile: .qemuHVF, store: store))
     registry.register(QEMUBackend(profile: .qemuTCG, store: store))
     registry.register(VZBackend(store: store))
