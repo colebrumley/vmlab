@@ -230,7 +230,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   **Verify:** a `FakeBackend` in `Tests/UnitTests/Support` drives a full lifecycle through Core;
   requesting a channel absent from the plan throws `capability_missing` with the right feature.
 
-- [ ] **R-106 Lifecycle state machine and reattach**
+- [x] **R-106 Lifecycle state machine and reattach**
   Transitions: created→running (start), running→paused→running, running→stopped (stop: ACPI or
   guest shutdown with a 60 s grace, then kill), any→destroyed, running→suspended (live checkpoint
   with stop). Illegal transitions throw `wrong_state` naming the current state and the legal
