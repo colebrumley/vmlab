@@ -35,13 +35,14 @@ extension DisplayEndpoint {
     }
   }
 
-  /// Whether `record`'s profile serves a display for it at all: always on QEMU; on VZ only when
-  /// the plan requested one of the display features.
+  /// Whether `record`'s profile serves a display for it at all: always on QEMU; on VZ Linux when
+  /// the plan provisions the desktop and its VNC server (`Plan.provisionsDesktop`, R-504); on VZ
+  /// macOS when the plan requested one of the display features.
   public static func isProvisioned(_ record: VMRecord) -> Bool {
     switch record.profile {
     case .qemuHVF, .qemuTCG: true
-    case .vzLinux, .vzMacOS:
-      displayFeatures.contains { record.plan?.requests($0) ?? false }
+    case .vzLinux: record.plan?.provisionsDesktop ?? false
+    case .vzMacOS: displayFeatures.contains { record.plan?.requests($0) ?? false }
     }
   }
 

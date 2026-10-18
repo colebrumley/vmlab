@@ -19,12 +19,16 @@ public struct Plan: Codable, Sendable, Hashable {
   /// Whether `unknown` probes were treated as `yes`.
   public var allowUnverified: Bool
   public var estimatedStartupSeconds: Int
+  /// The profile's Appendix B startup tier (1 best), one worse when the plan installs a desktop on
+  /// first boot (R-504).
+  public var startupTier: Int
   public var notes: [String]
 
   public init(
     profile: Profile, guest: GuestSpec, resources: ResourceSpec, features: [Feature],
     requested: [Feature] = [], preferredDenied: [Feature] = [], unverified: [Feature] = [],
-    allowUnverified: Bool = false, estimatedStartupSeconds: Int, notes: [String] = []
+    allowUnverified: Bool = false, estimatedStartupSeconds: Int, startupTier: Int? = nil,
+    notes: [String] = []
   ) {
     self.profile = profile
     self.guest = guest
@@ -36,6 +40,8 @@ public struct Plan: Codable, Sendable, Hashable {
     self.allowUnverified = allowUnverified
     self.estimatedStartupSeconds = estimatedStartupSeconds
     self.notes = notes
+    self.startupTier = 0
+    self.startupTier = startupTier ?? profile.startupTier + (provisionsDesktop ? 1 : 0)
   }
 
   public func grants(_ feature: Feature) -> Bool { features.contains(feature) }
@@ -43,9 +49,20 @@ public struct Plan: Codable, Sendable, Hashable {
   /// Whether the request asked for `feature` and the profile grants it.
   public func requests(_ feature: Feature) -> Bool { requested.contains(feature) }
 
+  /// Whether cloud-init installs a desktop in the guest on first boot (R-504): a Linux guest that
+  /// asked for `gui_desktop`, or for `gui` on VZ, whose display is an in-guest VNC server. QEMU's
+  /// own VNC shows the console without any desktop, so `gui` alone installs nothing there.
+  public var provisionsDesktop: Bool {
+    guard guest.os == .linux else { return false }
+    return requests(.guiDesktop) || (profile.isVZ && requests(.gui))
+  }
+
+  /// The minutes-scale cost of installing the desktop, added to `estimatedStartupSeconds`.
+  public static let desktopInstallSeconds = 300
+
   enum CodingKeys: String, CodingKey {
     case profile, guest, resources, features, requested, preferredDenied, unverified
-    case allowUnverified, estimatedStartupSeconds, notes
+    case allowUnverified, estimatedStartupSeconds, startupTier, notes
   }
 
   public init(from decoder: any Decoder) throws {
@@ -60,6 +77,10 @@ public struct Plan: Codable, Sendable, Hashable {
     allowUnverified = try c.decodeIfPresent(Bool.self, forKey: .allowUnverified) ?? false
     estimatedStartupSeconds = try c.decode(Int.self, forKey: .estimatedStartupSeconds)
     notes = try c.decodeIfPresent([String].self, forKey: .notes) ?? []
+    startupTier = 0
+    startupTier =
+      try c.decodeIfPresent(Int.self, forKey: .startupTier)
+      ?? profile.startupTier + (provisionsDesktop ? 1 : 0)
   }
 }
 
@@ -270,15 +291,15 @@ public enum ProfileSelector {
       }
       if onChosen || onEliminated { unverified.append(feature) }
     }
-    return .success(
-      Plan(
-        profile: profile, guest: r.guest, resources: resources, features: features,
-        requested: requested, preferredDenied: preferredDenied, unverified: unverified,
-        allowUnverified: allowUnverified,
-        estimatedStartupSeconds: estimatedStartupSeconds(profile, features: features, r: r),
-        notes: notes(
-          profile, r: r, required: required, granted: features, unverified: unverified,
-          allowUnverified: allowUnverified, matrix: matrix)))
+    var plan = Plan(
+      profile: profile, guest: r.guest, resources: resources, features: features,
+      requested: requested, preferredDenied: preferredDenied, unverified: unverified,
+      allowUnverified: allowUnverified, estimatedStartupSeconds: 0)
+    plan.estimatedStartupSeconds = estimatedStartupSeconds(plan)
+    plan.notes = notes(
+      profile, r: r, required: required, granted: features, unverified: unverified,
+      allowUnverified: allowUnverified, matrix: matrix, desktop: plan.provisionsDesktop)
+    return .success(plan)
   }
 
   /// Subsets of `required` of size 1, then 2, then 3, whose removal leaves a survivor. A subset
@@ -325,23 +346,21 @@ public enum ProfileSelector {
   }
 
   /// A rough figure for the model: time from start to a reachable guest.
-  static func estimatedStartupSeconds(_ profile: Profile, features: [Feature], r: Requirements)
-    -> Int
-  {
+  static func estimatedStartupSeconds(_ plan: Plan) -> Int {
     let base =
-      switch profile {
+      switch plan.profile {
       case .vzLinux: 15
       case .qemuHVF: 20
       case .vzMacOS: 60
       case .qemuTCG: 120
       }
-    let desktop = r.guest.os == .linux && (r.require + r.prefer).contains(.guiDesktop)
-    return base + (desktop ? 300 : 0)
+    return base + (plan.provisionsDesktop ? Plan.desktopInstallSeconds : 0)
   }
 
   static func notes(
     _ profile: Profile, r: Requirements, required: [Feature], granted: [Feature],
-    unverified: [Feature], allowUnverified: Bool, matrix: [Profile: [Feature: Availability]]
+    unverified: [Feature], allowUnverified: Bool, matrix: [Profile: [Feature: Availability]],
+    desktop: Bool = false
   ) -> [String] {
     var notes: [String] = []
     let asked = Set(required + r.prefer).intersection(granted)
@@ -357,8 +376,10 @@ public enum ProfileSelector {
       }
       notes.append(note)
     }
-    if r.guest.os == .linux, asked.contains(.guiDesktop) {
-      notes.append("the desktop is installed on first boot, which adds several minutes")
+    if desktop {
+      notes.append(
+        "a desktop (xfce4, lightdm) is installed on first boot, which adds about "
+          + "\(Plan.desktopInstallSeconds / 60) minutes to the first start")
     }
     if profile.isVZ, asked.contains(.netPortForward) {
       notes.append(

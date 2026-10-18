@@ -69,4 +69,21 @@ import VMLabCore
     #expect(VZBackend.hostname(for: record("---")) == "vm-abc234")
     #expect(VZBackend.hostname(for: record(String(repeating: "a", count: 80))).count == 63)
   }
+
+  /// R-504: a plan that requested gui gets the desktop with an in-guest VNC server whose password
+  /// is in `<vm>/vnc.pass`; one that did not gets nothing.
+  @Test func guiStackFollowsThePlan() throws {
+    let dir = FileManager.default.temporaryDirectory.appending(path: "vmlab-vzgui-\(UUID())")
+    defer { try? FileManager.default.removeItem(at: dir) }
+    func plan(_ requested: [Feature]) -> Plan {
+      Plan(
+        profile: .vzLinux, guest: GuestSpec(os: .linux, arch: .arm64), resources: ResourceSpec(),
+        features: [.gui, .serial], requested: requested, estimatedStartupSeconds: 0)
+    }
+    #expect(try VZBackend.guiStack(plan: plan([.serial]), vmDirectory: dir) == nil)
+    let stack = try #require(try VZBackend.guiStack(plan: plan([.gui]), vmDirectory: dir))
+    let password = try String(contentsOf: dir.appending(path: "vnc.pass"), encoding: .utf8)
+    #expect(stack.vncPassword.map { $0 + "\n" } == password)
+    #expect(stack.vncPort == 5900)
+  }
 }

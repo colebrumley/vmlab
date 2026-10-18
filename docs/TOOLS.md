@@ -118,8 +118,8 @@ Dry-run the selector: given requirements (the guest plus the features you need a
 **Result**
 
 ```
-Plan { satisfiable: true, profile, guest, resources, features, unverified,
-       preferredDenied, allowUnverified, estimatedStartupSeconds, notes }
+Plan { satisfiable: true, profile, guest, resources, features, requested, unverified,
+       preferredDenied, allowUnverified, estimatedStartupSeconds, startupTier, notes }
 or Unsatisfiable { satisfiable: false, code, message, hint, guest,
                    eliminated: { <feature>: [profile] }, reasons: { <feature>: { <profile>: why } },
                    suggestions: [ { drop: [feature], profile } ],

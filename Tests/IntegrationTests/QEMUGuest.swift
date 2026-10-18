@@ -16,8 +16,12 @@ struct QEMUGuest {
   let record: VMRecord
   let machine: QEMUMachine
 
+  /// `requested` becomes the plan's `requested` features (R-504 installs a desktop for
+  /// `gui_desktop`); with `sshKey`, `<vm>/id_ed25519` is generated first, so the guest boots
+  /// with a cloud-init seed that authorizes it.
   static func boot(
-    features: [Feature] = [.serial, .gui, .netNAT], memoryGB: Int = 2
+    features: [Feature] = [.serial, .gui, .netNAT], requested: [Feature] = [], memoryGB: Int = 2,
+    diskGB: Int = 8, sshKey: Bool = false
   ) async throws -> QEMUGuest {
     let n = counterLock.withLock {
       counter += 1
@@ -38,13 +42,14 @@ struct QEMUGuest {
     let guest = GuestSpec(os: .linux, arch: .arm64)
     let plan = Plan(
       profile: .qemuHVF, guest: guest,
-      resources: ResourceSpec(cpus: 2, memoryGB: memoryGB, diskGB: 8), features: features,
-      estimatedStartupSeconds: 15)
+      resources: ResourceSpec(cpus: 2, memoryGB: memoryGB, diskGB: diskGB), features: features,
+      requested: requested, estimatedStartupSeconds: 15)
     let created = try await manager.create(
       VMRecord(
         id: "", name: "it-\(n)", profile: .qemuHVF, guest: guest, features: features,
         image: "debian-13-arm64"), plan: plan)
     do {
+      if sshKey { try generateKey(in: store.directory(of: created.id)) }
       guard let running = try await manager.perform(.start, on: created.id) else {
         throw VMLabError(code: .internal, message: "start returned no record", hint: "")
       }
@@ -55,6 +60,21 @@ struct QEMUGuest {
       try? await backend.kill(created)
       try? FileManager.default.removeItem(at: home)
       throw error
+    }
+  }
+
+  /// `ssh-keygen -t ed25519` into `<dir>/id_ed25519` (and `.pub`).
+  static func generateKey(in dir: URL) throws {
+    let process = Process()
+    process.executableURL = URL(filePath: "/usr/bin/ssh-keygen")
+    process.arguments = [
+      "-q", "-t", "ed25519", "-N", "", "-C", "vmlab-test", "-f",
+      dir.appending(path: "id_ed25519").path,
+    ]
+    try process.run()
+    process.waitUntilExit()
+    guard process.terminationStatus == 0 else {
+      throw VMLabError(code: .internal, message: "ssh-keygen failed", hint: "")
     }
   }
 

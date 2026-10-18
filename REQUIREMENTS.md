@@ -514,7 +514,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   **Verify:** unit test that the endpoint is absent when `gui` was not required; integration for
   each profile in its own phase (R-502, R-607, R-608).
 
-- [ ] **R-504 GUI-enabled Linux provisioning**
+- [x] **R-504 GUI-enabled Linux provisioning**
   When `gui` is required for a Linux guest, cloud-init installs a minimal desktop (Debian:
   `xfce4`, `lightdm` with autologin, `tigervnc-scraping-server` or `x11vnc` bound to the NIC with
   the password file) and enables it; the Plan's `startupTier` worsens by one and `vm_plan` reports
