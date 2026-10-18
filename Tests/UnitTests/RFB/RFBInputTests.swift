@@ -37,6 +37,21 @@ private func connectedClient() async throws -> (RFBClient, ReplayTransport, Int)
     #expect(Array(await transport.written[start...]) == expected)
   }
 
+  /// R-607: with a hold, a chord's events go out one at a time (macOS Screen Sharing drops a
+  /// stroke whose press and release arrive together); the bytes are unchanged.
+  @Test func heldChordSpacesItsEvents() async throws {
+    let (client, transport, start) = try await connectedClient()
+    #expect(client.serverVersion.hasPrefix("RFB 003."))
+    let clock = ContinuousClock()
+    let elapsed = try await clock.measure {
+      try await client.press("cmd+space", hold: .milliseconds(20))
+    }
+    #expect(elapsed >= .milliseconds(60))
+    #expect(
+      Array(await transport.written[start...])
+        == ev(0xffeb, true) + ev(0x20, true) + ev(0x20, false) + ev(0xffeb, false))
+  }
+
   @Test func chordCtrlAltDelete() throws {
     let chord = try KeyChord(parsing: "ctrl+alt+Delete")
     #expect(chord == KeyChord(modifiers: [0xffe3, 0xffe9], key: 0xffff))

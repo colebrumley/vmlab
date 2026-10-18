@@ -459,8 +459,11 @@ public actor ImageStore {
     try FileManager.default.moveItem(at: partial, to: output)
   }
 
+  /// `tart pull <ref>` into Tart's cache; the record names the ref as the Tart VM to clone.
   func pullTart(_ entry: CatalogImage) throws -> PullResult {
-    if let existing = pulled(entry.name) { return PullResult(image: existing, changed: false) }
+    if let existing = pulled(entry.name), existing.tartVM != nil {
+      return PullResult(image: existing, changed: false)
+    }
     let tool = try locate("tart", fix: "brew install cirruslabs/cli/tart")
     let output = runner.run(tool, ["pull", entry.url])
     guard let output, output.status == 0 else {
@@ -473,7 +476,7 @@ public actor ImageStore {
       at: imageDirectory(entry.name), withIntermediateDirectories: true)
     let record = PulledImage(
       name: entry.name, guest: entry.guest, source: entry.url, format: .tart, checksum: nil,
-      files: [:], login: entry.login, pulledAt: now())
+      files: [:], login: entry.login, pulledAt: now(), tartVM: entry.url)
     try write(record)
     return PullResult(image: record, changed: true)
   }

@@ -31,6 +31,34 @@ import VMLabVZ
     #expect(probe.gather().probe(.vzLinuxLiveSnapshot).isUnverified == false)
   }
 
+  /// The macOS probe on a throwaway Tart clone; needs `macos-base` pulled and tart installed.
+  @Test(
+    .enabled(
+      if: ready && pulled("macos-base")
+        && FileManager.default.isExecutableFile(
+          atPath: "/opt/homebrew/bin/tart")
+    ), .timeLimit(.minutes(5)))
+  func macOSLiveSnapshotProbeAnswers() async throws {
+    let home = URL(filePath: "/tmp/vmlab-test-\(getpid())-m")
+    try? FileManager.default.removeItem(at: home)
+    defer { try? FileManager.default.removeItem(at: home) }
+    try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+    try FileManager.default.createSymbolicLink(
+      at: home.appending(path: "images"),
+      withDestinationURL: VZRunnerIntegrationTests.image.deletingLastPathComponent()
+        .deletingLastPathComponent())
+    VZRunnerIntegrationTests.signRunner()
+    let registry = SlowProbeRegistry()
+    registry.register(
+      VZMacLiveSnapshotProbe(
+        launcher: VZRunnerLauncher(runnerPath: VZRunnerIntegrationTests.runner)))
+    let facts = HostProbe(home: home).gather()
+    let outcome = await registry.runAll(SlowProbeContext(home: home, facts: facts))
+      .first { $0.probe == .vzMacOSLiveSnapshot }
+    print("vz_macos_live_snapshot: \(String(describing: outcome))")
+    #expect(outcome?.status == .ran)
+  }
+
   @Test(.enabled(if: ready), .timeLimit(.minutes(8)))
   func liveCheckpointKeepsARunningProcess() async throws {
     let guest = try await VZGuest.boot(

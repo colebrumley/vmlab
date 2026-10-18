@@ -26,6 +26,9 @@ public struct VZMachineDecisions: Codable, Sendable, Hashable {
     case efi(variableStore: String)
     /// `VZLinuxBootLoader`.
     case linux(kernel: String, initrd: String?, commandLine: String)
+    /// `VZMacOSBootLoader`; the platform is then a `VZMacPlatformConfiguration` built from these
+    /// (base64 `dataRepresentation`s and the auxiliary storage path).
+    case macOS(hardwareModel: String, machineIdentifier: String, auxiliaryStorage: String)
   }
 
   /// A `VZVirtioBlockDeviceConfiguration` over a `VZDiskImageStorageDeviceAttachment`.
@@ -60,15 +63,18 @@ public struct VZMachineDecisions: Codable, Sendable, Hashable {
     }
   }
 
-  /// A `VZVirtioGraphicsDeviceConfiguration` with one scanout, plus a USB keyboard and a USB
+  /// A `VZVirtioGraphicsDeviceConfiguration` with one scanout (a `VZMacGraphicsDeviceConfiguration`
+  /// with one display of `pixelsPerInch` for a macOS guest), plus a USB keyboard and a USB
   /// absolute pointing device so the desktop takes input.
   public struct Graphics: Codable, Sendable, Hashable {
     public var width: Int
     public var height: Int
+    public var pixelsPerInch: Int?
 
-    public init(width: Int, height: Int) {
+    public init(width: Int, height: Int, pixelsPerInch: Int? = nil) {
       self.width = width
       self.height = height
+      self.pixelsPerInch = pixelsPerInch
     }
   }
 
@@ -91,7 +97,7 @@ public struct VZMachineDecisions: Codable, Sendable, Hashable {
   public var cpus: Int
   /// Rounded down to a whole MiB, then clamped.
   public var memoryBytes: UInt64
-  /// Always `VZGenericPlatformConfiguration`.
+  /// `generic` (`VZGenericPlatformConfiguration`) for Linux, `mac` for `.macOS` boot.
   public var platform: String
   /// The file holding the platform's `VZGenericMachineIdentifier`, created when absent; nil is a
   /// fresh identifier per machine.
@@ -121,7 +127,11 @@ extension VZRunnerConfig {
       case .efi(let store): .efi(variableStore: store)
       case .linuxKernel(let kernel, let initrd, let line):
         .linux(kernel: kernel, initrd: initrd, commandLine: line)
+      case .macOS(let model, let identifier, let auxiliary):
+        .macOS(hardwareModel: model, machineIdentifier: identifier, auxiliaryStorage: auxiliary)
       }
+    var platform = "generic"
+    if case .macOS = loader { platform = "mac" }
     let nics = try network.map { network throws(VMLabError) in
       switch network {
       case .nat(let mac):
@@ -137,7 +147,7 @@ extension VZRunnerConfig {
     return VZMachineDecisions(
       cpus: min(max(cpus, limits.minCPUs), limits.maxCPUs),
       memoryBytes: min(max(memoryBytes / mib * mib, limits.minMemoryBytes), limits.maxMemoryBytes),
-      platform: "generic",
+      platform: platform,
       machineIdentifier: machineIdentifier,
       nestedVirtualization: nestedVirtualization,
       bootLoader: loader,
@@ -146,7 +156,9 @@ extension VZRunnerConfig {
       console: consoleLog.map { .init(log: $0, socket: serialSocket) },
       entropy: true,
       memoryBalloon: memoryBalloon,
-      graphics: graphics.map { .init(width: $0.width, height: $0.height) },
+      graphics: graphics.map {
+        .init(width: $0.width, height: $0.height, pixelsPerInch: $0.pixelsPerInch)
+      },
       fileSystems: directoryShares.map {
         .init(tag: $0.tag, path: $0.path, readOnly: $0.readOnly)
       }

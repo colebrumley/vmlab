@@ -58,25 +58,40 @@ extension RFBClient {
     try await transport.write(RFBInput.keyEvent(keysym, down: down))
   }
 
-  /// Strikes a chord: modifiers down in order, key down and up, modifiers up in reverse.
-  public func press(_ chord: KeyChord) async throws {
-    try await transport.write(RFBInput.chordEvents(chord))
+  /// Strikes a chord: modifiers down in order, key down and up, modifiers up in reverse. With a
+  /// `hold`, each event is its own write `hold` apart: macOS Screen Sharing drops key strokes whose
+  /// press and release arrive together.
+  public func press(_ chord: KeyChord, hold: Duration = .zero) async throws {
+    try await send(RFBInput.chordEvents(chord), hold: hold)
   }
 
   /// Parses and strikes a chord such as `Return`, `cmd+shift+4` or `ctrl+alt+Delete`.
-  public func press(_ chord: String) async throws {
-    try await press(try KeyChord(parsing: chord))
+  public func press(_ chord: String, hold: Duration = .zero) async throws {
+    try await press(try KeyChord(parsing: chord), hold: hold)
+  }
+
+  /// Writes 8-byte key events, all at once or one per `hold`.
+  func send(_ events: [UInt8], hold: Duration) async throws {
+    guard hold > .zero else { return try await transport.write(events) }
+    var offset = 0
+    while offset < events.count {
+      if offset > 0 { try await Task.sleep(for: hold) }
+      try await transport.write(Array(events[offset..<min(offset + 8, events.count)]))
+      offset += 8
+    }
   }
 
   /// Types `text` one character at a time, press then release, with Shift where a US layout
   /// needs it and `gap` between characters. Characters with no keysym are skipped.
-  public func type(_ text: String, gap: Duration = .milliseconds(10)) async throws {
+  public func type(_ text: String, gap: Duration = .milliseconds(10), hold: Duration = .zero)
+    async throws
+  {
     var first = true
     for character in text {
       guard let events = RFBInput.characterEvents(character) else { continue }
       if !first && gap > .zero { try await Task.sleep(for: gap) }
       first = false
-      try await transport.write(events)
+      try await send(events, hold: hold)
     }
   }
 }

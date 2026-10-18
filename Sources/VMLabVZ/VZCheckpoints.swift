@@ -4,7 +4,7 @@ import VMLabCore
 
 /// Checkpoints of a `vz-linux` guest (R-608), each in `<vm>/checkpoints/<id>/` (Appendix F):
 /// APFS clones (`clonefile(2)`) of the disk and the auxiliary storage beside it (`disk.raw`,
-/// `efi-vars.bin`, `machine-id.bin`), plus for a live checkpoint the runner's `saveMachineStateTo` file and the
+/// `efi-vars.bin`, `machine-id.bin`; for `vz-macos` the Tart clone's `disk.img` and `nvram.bin`), plus for a live checkpoint the runner's `saveMachineStateTo` file and the
 /// `vz-config.json` the saved machine was built from.
 ///
 /// `disk` mode works on a guest that is not running: create clones the files out, restore clones
@@ -33,6 +33,9 @@ public struct VZCheckpoints: CheckpointProvider {
   }
 
   var vmDirectory: URL { backend.store.directory(of: record.id) }
+  var files: [(live: URL, name: String)] {
+    Self.stateFiles(of: record, vmDirectory: vmDirectory)
+  }
 
   public static func directory(of id: String, vmDirectory: URL) -> URL {
     vmDirectory.appending(path: "\(directoryName)/\(id)", directoryHint: .isDirectory)
@@ -56,7 +59,7 @@ public struct VZCheckpoints: CheckpointProvider {
       switch mode {
       case .disk:
         try await refuseIfRunning("take a disk checkpoint")
-        try Self.cloneFiles(from: vmDirectory, to: folder)
+        try Self.save(files, into: folder)
       case .live:
         try await saveLive(into: folder)
       }
@@ -71,7 +74,7 @@ public struct VZCheckpoints: CheckpointProvider {
     switch mode {
     case .disk:
       try await refuseIfRunning("restore a disk checkpoint")
-      try Self.cloneFiles(from: folder, to: vmDirectory)
+      try Self.load(files, from: folder)
     case .live:
       try await restoreLive(id: id, from: folder)
     }
@@ -95,7 +98,7 @@ public struct VZCheckpoints: CheckpointProvider {
     if state == .running { try await client.pause() }
     do {
       try await client.save(to: folder.appending(path: Self.stateFile).path)
-      try Self.cloneFiles(from: vmDirectory, to: folder)
+      try Self.save(files, into: folder)
       try Self.clone(
         VZRunnerPaths(vmDirectory: vmDirectory).config,
         to: folder.appending(path: Self.configFile))
@@ -186,12 +189,30 @@ public struct VZCheckpoints: CheckpointProvider {
       ])
   }
 
-  /// Clones each of `clonedFiles` present in `source` into `target`, replacing what is there.
-  static func cloneFiles(from source: URL, to target: URL) throws(VMLabError) {
-    for name in clonedFiles {
-      let from = source.appending(path: name)
-      guard FileManager.default.fileExists(atPath: from.path) else { continue }
-      try clone(from, to: target.appending(path: name))
+  /// The files a checkpoint of `record` clones: each live file and its name in the checkpoint.
+  /// A `vz-linux` guest's are `clonedFiles` in its VM directory; a `vz-macos` guest's are its
+  /// Tart clone's `disk.img` and `nvram.bin` (the auxiliary storage).
+  static func stateFiles(of record: VMRecord, vmDirectory: URL) -> [(live: URL, name: String)] {
+    if record.profile == .vzMacOS, let path = record.tartClone {
+      let clone = TartVMFiles(directory: URL(filePath: path))
+      return [(clone.disk, "disk.img"), (clone.nvram, "nvram.bin")]
+    }
+    return clonedFiles.map { (vmDirectory.appending(path: $0), $0) }
+  }
+
+  /// Clones the record's live files into checkpoint `folder`.
+  static func save(_ files: [(live: URL, name: String)], into folder: URL) throws(VMLabError) {
+    for file in files where FileManager.default.fileExists(atPath: file.live.path) {
+      try clone(file.live, to: folder.appending(path: file.name))
+    }
+  }
+
+  /// Clones checkpoint `folder`'s files back over the record's live files.
+  static func load(_ files: [(live: URL, name: String)], from folder: URL) throws(VMLabError) {
+    for file in files {
+      let saved = folder.appending(path: file.name)
+      guard FileManager.default.fileExists(atPath: saved.path) else { continue }
+      try clone(saved, to: file.live)
     }
   }
 
@@ -224,7 +245,7 @@ extension VZBackend {
   {
     let dir = store.directory(of: record.id)
     let folder = VZCheckpoints.directory(of: id, vmDirectory: dir)
-    try VZCheckpoints.cloneFiles(from: folder, to: dir)
+    try VZCheckpoints.load(VZCheckpoints.stateFiles(of: record, vmDirectory: dir), from: folder)
     let config = try VZRunnerConfig.read(from: folder.appending(path: VZCheckpoints.configFile))
     await serialChannels.drop(record.id)
     let handle = try await launcher.launch(vmDirectory: dir, config: config, hold: true)

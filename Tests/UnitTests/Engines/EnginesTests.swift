@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 import VMLabCore
+import VMLabVZ
 
 @testable import VMLabEngines
 
@@ -12,20 +13,18 @@ import VMLabCore
     #expect(throws: VMLabError.self) { try displays.connector() }
     Engines.registerAll(store: store, into: registry, displays: displays)
     #expect(try displays.connector() is RFBDisplayConnector)
-    #expect(Set(registry.profiles) == [.qemuHVF, .qemuTCG, .vzLinux])
+    #expect(Set(registry.profiles) == [.qemuHVF, .qemuTCG, .vzLinux, .vzMacOS])
     #expect(Set(registry.profiles) == Set(Engines.profiles))
     for profile in Engines.profiles {
       #expect(try registry.backend(for: profile).profile == profile)
     }
-    #expect(throws: VMLabError.self) { try registry.backend(for: .vzMacOS) }
   }
 
   @Test func registerProbesFillsTheEngineProbes() {
     let registry = SlowProbeRegistry()
     Engines.registerProbes(into: registry)
-    #expect(
-      registry.probes == [.qemuHVFGDB, .qemuHVFLiveSnapshot, .qemuVmnet, .vzLinuxLiveSnapshot])
-    #expect(registry.runner(for: .vzMacOSLiveSnapshot) == nil)
+    #expect(registry.probes == SlowProbe.allCases.sorted())
+    #expect(registry.runner(for: .vzMacOSLiveSnapshot) is VZMacLiveSnapshotProbe)
     #expect(registry.runner(for: .qemuHVFGDB) is HVFGDBProbe)
   }
 

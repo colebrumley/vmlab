@@ -578,7 +578,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   the reason "Virtualization.framework boots only Apple EFI or a Linux kernel".
   **Verify:** integration: the extracted Debian kernel boots to `login:` on serial.
 
-- [ ] **R-605 Tart images for macOS**
+- [x] **R-605 Tart images for macOS**
   `images pull macos-base` runs `tart pull <ref>` for the catalogue ref (Appendix H) and records the
   Tart VM name. `vm_create` for `vz-macos` runs `tart clone <base> <vm-id>` (an APFS clone, seconds)
   and reads the clone's directory (`~/.tart/vms/<id>/`: `config.json`, `disk.img`, `nvram.bin`) to
@@ -590,7 +590,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   **Verify:** unit test parses a fixture `config.json`; integration: a cloned macOS guest boots,
   `tart ip`-equivalent lease lookup finds it, and `ssh admin@<ip>` with the image password works.
 
-- [ ] **R-606 macOS guest provisioning**
+- [x] **R-606 macOS guest provisioning**
   First boot of a macOS guest runs over SSH with the image's password: install the VM's public key
   in `~/.ssh/authorized_keys`, set the hostname, confirm Screen Sharing is on and set the legacy VNC
   password (`/System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart
@@ -599,7 +599,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   **Verify:** integration: after create, `vm_exec "sw_vers"` works with the key and a screenshot
   through the guest's VNC is non-blank.
 
-- [ ] **R-607 GUI on macOS guests**
+- [x] **R-607 GUI on macOS guests**
   `DisplayEndpoint` for `vz-macos` is the guest's Screen Sharing (`hostSide: false`), RFB security
   type VNC with the password from R-606. `vm_computer` works end to end; `key` maps `cmd` to
   `Super_L` and the result notes that.

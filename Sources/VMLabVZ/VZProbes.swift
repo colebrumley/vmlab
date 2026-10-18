@@ -39,18 +39,29 @@ public struct VZLiveSnapshotProbe: SlowProbeRunner {
       id: "probe-vz-live", profile: .vzLinux, guest: guest, features: [.serial],
       resources: ResourceSpec(cpus: 1, memoryGB: 1), network: NetworkSpec(mode: .disabled))
     let config = try VZRunnerConfig.linux(record: record, vmDirectory: dir, seed: false)
+    return try await Self.saveAndRestore(
+      launcher: launcher, vmDirectory: dir, config: config, settle: .seconds(5))
+  }
+
+  /// Starts `config` in `vmDirectory`, lets it run for `settle`, pauses and saves it, ends the
+  /// runner, restores the state into a held machine built from the same configuration and
+  /// resumes it: `yes` when it then runs, `no` when the framework refuses a step. Throws only
+  /// when the first machine cannot start.
+  static func saveAndRestore(
+    launcher: VZRunnerLauncher, vmDirectory dir: URL, config: VZRunnerConfig, settle: Duration
+  ) async throws(VMLabError) -> ProbeResult {
     let first = try await launcher.launch(vmDirectory: dir, config: config)
     let state = dir.appending(path: VZCheckpoints.stateFile).path
     var current = first
-    defer { _ = Self.end(current) }
+    defer { end(current) }
     do {
-      try await Task.sleep(for: .seconds(5))
+      try await Task.sleep(for: settle)
       try await first.client.pause()
       try await first.client.save(to: state)
     } catch {
       return .no
     }
-    await Self.endAndWait(first)
+    await endAndWait(first)
     let held: VZRunnerHandle
     do {
       held = try await launcher.launch(vmDirectory: dir, config: config, hold: true)
@@ -82,8 +93,7 @@ public struct VZLiveSnapshotProbe: SlowProbeRunner {
   }
 
   /// Under `home/probes/`, or under /tmp when that would make socket paths too long.
-  static func directory(home: URL) -> URL {
-    let name = "vz-live-snapshot-\(getpid())"
+  static func directory(home: URL, name: String = "vz-live-snapshot-\(getpid())") -> URL {
     let preferred = home.appending(path: "probes/\(name)")
     if preferred.appending(path: "control.sock").path.utf8.count <= UnixStream.maxPathBytes {
       return preferred
@@ -108,9 +118,62 @@ public struct VZLiveSnapshotProbe: SlowProbeRunner {
   }
 }
 
+/// The slow probe `vz_macos_live_snapshot` (R-608): a throwaway `tart clone` of the pulled
+/// `macos-base` image (an APFS clone, seconds), run by our runner without network
+/// (`VZRunnerConfig.macOS`), saved and restored as `VZLiveSnapshotProbe` does; the clone is
+/// deleted after. `unknown` when tart or the image is missing, or two macOS guests already run
+/// (the host's limit).
+public struct VZMacLiveSnapshotProbe: SlowProbeRunner {
+  public var probe: SlowProbe { .vzMacOSLiveSnapshot }
+  public var launcher: VZRunnerLauncher
+  public var image: String
+  /// How long the guest boots before it is saved.
+  public var settle: Duration
+
+  public init(
+    launcher: VZRunnerLauncher = VZRunnerLauncher(), image: String = "macos-base",
+    settle: Duration = .seconds(20)
+  ) {
+    self.launcher = launcher
+    self.image = image
+    self.settle = settle
+  }
+
+  public func run(_ context: SlowProbeContext) async throws(VMLabError) -> ProbeResult {
+    _ = try launcher.checkedRunner()
+    guard context.facts.runningMacOSGuests < ResourceLimits.defaults.maxMacOSGuests,
+      let pulled = ImageStore(home: context.home).pulled(image), pulled.format == .tart,
+      let tart = try? Tart.locate()
+    else { return .unknown }
+    let name = "vmlab-probe-mac-\(getpid())"
+    let dir = VZLiveSnapshotProbe.directory(home: context.home, name: name)
+    let files = FileManager.default
+    try? files.removeItem(at: dir)
+    try? tart.delete(name)
+    defer {
+      try? tart.delete(name)
+      try? files.removeItem(at: dir)
+      rmdir(dir.deletingLastPathComponent().path)
+    }
+    do {
+      try files.createDirectory(at: dir, withIntermediateDirectories: true)
+    } catch {
+      throw VZCheckpoints.ioError("prepare \(dir.path)", error)
+    }
+    let clone = try tart.clone(pulled.tartVM ?? pulled.source, to: name)
+    let tartConfig = try TartVMConfig.read(from: clone.directory)
+    let record = VMRecord(
+      id: name, profile: .vzMacOS, guest: GuestSpec(os: .macos, arch: .arm64), features: [],
+      network: NetworkSpec(mode: .disabled))
+    let config = VZRunnerConfig.macOS(record: record, clone: clone, config: tartConfig)
+    return try await VZLiveSnapshotProbe.saveAndRestore(
+      launcher: launcher, vmDirectory: dir, config: config, settle: settle)
+  }
+}
+
 extension VMLabVZ {
-  /// The slow probes this module owns, for `Engines` to register. `vz_macos_live_snapshot` needs
-  /// a `vz-macos` guest, which this build cannot boot yet (R-605), so it stays unregistered and
-  /// `unknown`.
-  public static var probeRunners: [any SlowProbeRunner] { [VZLiveSnapshotProbe()] }
+  /// The slow probes this module owns, for `Engines` to register.
+  public static var probeRunners: [any SlowProbeRunner] {
+    [VZLiveSnapshotProbe(), VZMacLiveSnapshotProbe()]
+  }
 }

@@ -89,4 +89,18 @@ import VMLabCore
     defer { f.cleanUp() }
     #expect(try await f.backend.checkpoints(f.record) is VZCheckpoints)
   }
+
+  /// A vz-macos guest's checkpoint clones its Tart clone's disk and auxiliary storage.
+  @Test func macOSGuestsCloneTheirTartFiles() {
+    var record = VMRecord(
+      id: "vm-mac001", profile: .vzMacOS, guest: GuestSpec(os: .macos, arch: .arm64),
+      features: [.checkpointLive])
+    record.tartClone = "/Users/me/.tart/vms/vm-mac001"
+    let files = VZCheckpoints.stateFiles(of: record, vmDirectory: URL(filePath: "/vm"))
+    #expect(files.map(\.name) == ["disk.img", "nvram.bin"])
+    #expect(
+      files.map(\.live.path) == [
+        "/Users/me/.tart/vms/vm-mac001/disk.img", "/Users/me/.tart/vms/vm-mac001/nvram.bin",
+      ])
+  }
 }

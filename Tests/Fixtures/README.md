@@ -15,3 +15,4 @@ Read by unit tests through `#filePath`; never written at test time.
   remote-protocol sessions (`->` client packet, `<-` stub reply)
 - `images/` — a two-entry image catalogue, a tiny disk file and the `SHA512SUMS`/`SHA256SUMS`
   that list it
+- `tart/` — `config.json` of a Tart 2.32.1 macOS VM (`macos-tahoe-base`)

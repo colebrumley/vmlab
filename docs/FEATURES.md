@@ -24,7 +24,7 @@ column is what the development host recorded (`docs/dev-host-facts.json`, refres
 | `custom_devices` | N | N | Y | Y |  |
 | `halt_at_start` | N | N | Y | Y |  |
 | `checkpoint_disk` | Y | Y | Y | Y |  |
-| `checkpoint_live` | ? `vz_macos_live_snapshot` (R-608) | ? `vz_linux_live_snapshot` (R-608) | ? `qemu_hvf_live_snapshot` (R-307) | Y | `vz_macos_live_snapshot`: unknown; `vz_linux_live_snapshot`: yes, 2026-10-18; `qemu_hvf_live_snapshot`: yes, 2026-10-18 |
+| `checkpoint_live` | ? `vz_macos_live_snapshot` (R-608) | ? `vz_linux_live_snapshot` (R-608) | ? `qemu_hvf_live_snapshot` (R-307) | Y | `vz_macos_live_snapshot`: yes, 2026-10-18; `vz_linux_live_snapshot`: yes, 2026-10-18; `qemu_hvf_live_snapshot`: yes, 2026-10-18 |
 | `pause` | Y | Y | Y | Y |  |
 | `net_nat` | Y | Y | Y | Y |  |
 | `net_fast` | Y | Y | C `root` or `qemu_vmnet` | C `root` or `qemu_vmnet` | `qemu_vmnet`: no, 2026-10-18 |
@@ -71,3 +71,7 @@ column is what the development host recorded (`docs/dev-host-facts.json`, refres
 - `nested_virt` on `qemu-hvf`: HVF does not expose nested virtualization to QEMU guests.
 - `cloud_init` on `vz-macos`: cloud-init is for Linux guests.
 - `many_guests` on `vz-macos`: macOS allows at most two macOS guests at once.
+
+## Engine notes
+
+- `vz-macos` boots `tart clone`s of `macos-base` (`ghcr.io/cirruslabs/macos-tahoe-base:latest`, which boots on the development host, R-605) in vmlab's own `vmlab-vz` runner, built from the clone's `config.json`, `nvram.bin` and `disk.img` (Tart 2.x layout); the `tart run --no-graphics` fallback is not used, so pause and checkpoints are the runner's, as on `vz-linux`.
