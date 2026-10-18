@@ -9,6 +9,10 @@ import Logging
 public actor VMManager {
   public nonisolated let store: Store
   public nonisolated let backends: BackendRegistry
+  /// Takes the guest manifests `vm_checkpoint create manifest: true` asks for (R-801,
+  /// `CheckpointManifests`; `ToolContext` passes one); without one the checkpoint is taken
+  /// without a manifest and a warning says so.
+  public nonisolated let manifests: (any GuestManifestTaker)?
 
   /// How a start waits for the guest to answer SSH (R-400).
   public nonisolated let readiness: any GuestReadiness
@@ -20,12 +24,14 @@ public actor VMManager {
 
   public init(
     store: Store, backends: BackendRegistry = Backends.shared,
-    readiness: any GuestReadiness = SSHReadiness(), keygen: any CommandRunning = ProcessRunner()
+    readiness: any GuestReadiness = SSHReadiness(), keygen: any CommandRunning = ProcessRunner(),
+    manifests: (any GuestManifestTaker)? = nil
   ) {
     self.store = store
     self.backends = backends
     self.readiness = readiness
     self.keygen = keygen
+    self.manifests = manifests
   }
 
   /// What a lifecycle action left: the record (nil once destroyed) and warnings for the result,
@@ -78,7 +84,8 @@ public actor VMManager {
   // MARK: Lifecycle
 
   /// Performs `action` on the VM named or identified by `vm`. Returns the updated record, or nil
-  /// once the VM is destroyed. `checkpoint_stop` belongs to `vm_checkpoint` (R-800) and is refused.
+  /// once the VM is destroyed. `checkpoint_stop` takes a temporary live checkpoint and ends the
+  /// engine, leaving the VM `suspended`; starting a suspended VM restores that checkpoint.
   @discardableResult
   public func perform(
     _ action: LifecycleAction, on vm: String
@@ -120,7 +127,11 @@ public actor VMManager {
   ) async throws(VMLabError) -> VMRecord? {
     var runtime = record.runtime
     switch action {
-    case .start: runtime = try await backend.start(record)
+    case .start:
+      runtime = try await backend.start(record)
+      if record.state == .suspended, let started = runtime {
+        try await resumeSuspended(record, runtime: started, with: backend)
+      }
     case .stop: try await backend.stop(record)
     case .kill: try await backend.kill(record)
     case .pause: try await backend.pause(record)
@@ -132,9 +143,7 @@ public actor VMManager {
       try store.remove(id: record.id)
       return nil
     case .checkpointStop:
-      throw VMLabError.invalidRequest(
-        field: "action", reason: "checkpoint_stop is not a vm_lifecycle action",
-        hint: "Use vm_checkpoint create with mode live to save and stop the guest.")
+      try await checkpointStop(record, with: backend)
     }
     guard case .state(let state) = target else { return nil }
     if !state.isLive { runtime = nil }
@@ -201,14 +210,14 @@ public actor VMManager {
 
   // MARK: Helpers
 
-  private func acquire(_ id: String) async {
+  func acquire(_ id: String) async {
     while busy.contains(id) {
       await withCheckedContinuation { waiters[id, default: []].append($0) }
     }
     busy.insert(id)
   }
 
-  private func release(_ id: String) {
+  func release(_ id: String) {
     busy.remove(id)
     if var queue = waiters[id], !queue.isEmpty {
       queue.removeFirst().resume()
@@ -216,7 +225,7 @@ public actor VMManager {
     }
   }
 
-  private func log(
+  func log(
     _ id: String, _ message: String, kind: VMEvent.Kind = .lifecycle, level: Logger.Level = .info
   ) async {
     let log = EventLog(vmDirectory: store.directory(of: id))

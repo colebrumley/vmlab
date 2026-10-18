@@ -63,8 +63,24 @@ it reports the status, `RemoteShell.collect` fetches what it had not passed on a
 guest's files. `read` returns up to 64 KB of log past the offset (on a UTF-8 boundary), starting a
 reader when this process has none, which is how a job survives a server restart; `wait` polls;
 `kill` runs `RemoteShell.kill` (status 143). `stopReaders()` drops this process's readers.
+`Manifest.swift` (R-801) holds guest manifests: `GuestManifest` (files keyed by path with kind,
+size, octal mode, mtime and sha256 up to 8 MB; packages, services, users and defaults as key →
+value maps; login items and configuration profiles as lists), stored by `Store.saveManifest` at
+`<vm>/manifests/<id>.json` (`m-` and twelve hex digits). `GuestManifests.take` runs
+`ManifestScript` (POSIX `sh`, passed as an argument with stdin closed, `sudo -n` for walks and
+system queries when allowed) over the VM's exec channel: each section is the raw output of one
+command (`stat`, `sha256sum`/`shasum`, `dpkg-query`/`rpm`, `systemctl`, `getent`, `defaults
+export`, `brew`, `launchctl`, `profiles`, `dscl`, LaunchAgents and `osascript` login items)
+between `@@vmlab section` markers, read back from the exec log when the output was cut, and
+`ManifestParser` turns it into the manifest (`custom` records only the roots).
+`ManifestDiff.swift` (R-802) compares two manifests key by key into sorted added/removed/changed
+entries per section (files name each attribute that changed: kind, mode, size except for
+directories, sha256, and mtime only when neither side has a hash), warns when the profiles or
+roots differ, and is saved whole by `Store.saveManifestDiff` at
+`<vm>/manifests/diff-<from>-<to>.json`.
 `HostProcess` runs one host subprocess asynchronously (stdin bytes, output to file handles, a
 deadline that sends `SIGTERM` then `SIGKILL`, cancellation likewise).
+`Checkpoints.swift` is the checkpoint tree (R-800): `CheckpointTree` (`<vm>/checkpoints.json`: `CheckpointNode`s in creation order with `id` (`cp-` plus six base32 characters, the engine snapshot tag), unique `name`, `parent`, `mode`, `createdAt`, the VM `state` at creation, `manifestPath?`, `note?`, `temporary`; the `current` node; the `resume` node of a suspended VM), read and written by `Store.checkpoints(of:)` and `Store.updateCheckpoints(of:_:)` under the VM's lock, which also rewrites `vm.json`'s `checkpoints` summary. `VMManager.createCheckpoint` (auto is live when `checkpoint_live` was granted and the guest is live, else disk; a running guest without it is `wrong_state`, never an implicit stop), `restoreCheckpoint` (the restored node becomes current), `deleteCheckpoint` (children only with `recursive`, deepest first; current passes to the nearest surviving ancestor) and `checkpoints(of:)` drive the engine through `Backend.checkpoints(_:)`; `@latest` names the newest node. `checkpoint_stop` (`VMManager.perform`) takes a temporary live checkpoint, kills the engine and leaves the VM `suspended` with `resume` set; starting it boots the engine and restores that checkpoint (an engine that restores natively should leave `resume` unset). `GuestManifestTaker` is the R-801 hook: `VMManager(manifests:)` (`ToolContext` passes `CheckpointManifests`); without one, or when the manifest fails (a stopped guest), `manifest: true` is a warning and no `manifestPath`.
 `Capabilities` is the Appendix B matrix: `Capabilities.entry(feature, on: profile)` gives the unresolved cell (`Availability.yes`, `.no(reason)` or `.conditional(Condition)`, where a `Condition` names a fast fact such as `root` or a `SlowProbe`, plus the note and the item that verifies a `?`), and `capabilities(of:host:allowUnverified:)` resolves every cell to yes or no against `HostFacts` (an `unknown` probe is no unless `allowUnverified`); `unverifiedProbes` says which probes a plan reports as unverified, and `supports(_:on:)` is the guest OS and arch filter.
 `Selector.swift` is Appendix I: `select(_:host:running:allowUnverified:)` (also `ProfileSelector.select`, which takes `ResourceLimits`) normalises a `Requirements` (features implied by `network` and `boot` become required, Appendix G resources filled in), filters the four profiles by guest and by every required feature, applies the dynamic limits to the survivors in rank order and returns a `Plan` (profile, resolved resources, `features` = required plus every `yes`, `requested` = the asked-for subset, `preferredDenied`, `unverified`, notes, a startup estimate and `startupTier`; `provisionsDesktop` (R-504) is true for a Linux guest that requested `gui_desktop`, or `gui` on VZ, and adds `Plan.desktopInstallSeconds` (300) to the estimate, one to the tier and a note) or an `Unsatisfiable` (per-feature `eliminated` with reasons, minimal drop `suggestions` up to size 3 and at most five, the `unverified` probes in the way, or the `limit` error) whose `error` is the Appendix D refusal. `Limits.swift` holds `ResourceLimits` (reserve 4 GB, two macOS guests, four parallel starts; `defaultResources(for:)`, `checkMacOSGuests`, `checkMemory`, which R-107 reuses before a start) and `Inventory`, the live guests (profile, OS, memory) built from `VMRecord`s or `Store.inventory()`. `StartGate.swift` (R-107) is admission to a start: the `StartGating` protocol (`admit(_:running:host:)` returns a `StartPermit`, `release(_:)`, `withStart`) and `StartGate`, the in-process actor (`StartGate.shared`) that holds a FIFO semaphore of `parallelStarts` slots and, once a slot is held, runs `ResourceLimits.check` against the running inventory plus the guests of starts already admitted (deduplicated by id), so concurrent starts cannot overrun the memory or macOS budget. R-1100 makes it cross-process by conforming another type to `StartGating`.
 `CloudInit` builds the NoCloud seed both engines attach: from a plain `CloudInitConfig` (hostname, user, SSH key, packages, optional `GUIStack`, `SegmentNIC`, `GuestMount`s, `ConsoleDevice`, `dhcpIdentifierMAC` (a `network-config` NIC with `dhcp-identifier: mac`, so vmnet's lease file is keyed by the MAC), extra user-data merged last as a MIME part) it emits `user-data`, `meta-data` and `network-config` with a small hand-written YAML emitter (every string double-quoted; no YAML library, C5) and runs `hdiutil makehybrid` to make the `cidata` ISO. `FeatureDocs` renders `docs/FEATURES.md` from the matrix, with a last column from the committed slow-probe snapshot `docs/dev-host-facts.json` (never `VMLAB_HOME`). It depends on swift-log only.
@@ -204,7 +220,12 @@ request into an `ExecRequest`, picks the channel by `via` (`Channel.execSSH`, `.
 `.exec`) on `VMManager.attach`, runs it under a heartbeat and returns `exitCode`, `stdout`,
 `stderr`, `durationMs`, `truncated`, `logPath`; `background: true` starts an `ExecJobs` job over
 the VM's `SSHExecChannel` and returns `{ job }`), `vm_job` (read/wait/kill: `output`, `finished`,
-`exitCode`, `more`, `logPath`), `images`
+`exitCode`, `more`, `logPath`), `vm_manifest` (R-801: `profile` defaults to the guest's OS,
+`custom` needs `paths`; a running VM only; returns `{ id, path, profile, counts }` with the
+manifest's warnings), `vm_checkpoint diff` (`Handlers/CheckpointDiff.swift`, R-802: each side
+is `@now`, taken with the other side's profile and roots, a manifest id, or a checkpoint whose node
+has a manifest; sections capped at 500 entries with the counts and `truncated`, the whole diff's
+`path`), `images`
 (list/pull/remove), `vm_computer` (`Handlers/VMComputerHandler.swift`, R-502: resolves the VM's
 `DisplayEndpoint`, gets its session from `ToolContext.displays`, and maps the computer-use actions
 onto pointer, key and type events; clicks move first, double and triple clicks repeat 60 ms apart,
