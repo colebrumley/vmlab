@@ -522,7 +522,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   screenshot within 10 minutes of first boot and within 90 s of a second boot. The VZ case is
   verified by R-601.
 
-- [ ] **R-505 Screenshot economy**
+- [x] **R-505 Screenshot economy**
   `screenshot` supports `format: png|jpeg` (default png), `quality`, `maxEdge`, `region`, and
   `diffFrom: <screenshotId>`: the server keeps the last 20 screenshots per VM and, with `diffFrom`,
   returns only the bounding box that changed plus its offset, or `unchanged: true`. Every

@@ -36,7 +36,13 @@ requests keeps a `Framebuffer` current; `snapshot()` returns a `CGImage` and `Fr
 encodes PNG with ImageIO. Input (`RFBInput.swift`, `Keysym.swift`): `pointer(x:y:buttons:)` with a
 `PointerButtons` mask, `key(_:down:)`, `press(_:)` for a `KeyChord` parsed from `cmd+shift+4`-style
 text (`cmd` is `Super_L`), and `type(_:gap:)`, which strikes each character with Shift where a US
-layout needs it, 10 ms apart. Failures are `RFBError`, which callers map to Appendix D codes.
+layout needs it, 10 ms apart. Screenshots (`ScreenshotEncoder.swift`, `ScreenshotCache.swift`):
+`ScreenshotEncoder` crops a `Framebuffer` to a `PixelRect` region, scales its long edge to `maxEdge`
+(default 1280, never upscaling) and encodes PNG or JPEG with a quality; `ScreenshotCache`, one per VM
+held by its owner, keeps the last 20 frames LZFSE-compressed under ids so a later capture with
+`diffFrom` returns only the changed bounding box (`Framebuffer.changedRect`) at the full frame's
+scale, or `unchanged: true`. Failures are `RFBError` (`invalidScreenshotRequest` is
+`invalid_request`), which callers map to Appendix D codes.
 
 **`VMLabGDB`** (library). A GDB remote serial protocol client: registers, memory, breakpoints,
 watchpoints and stepping over a guest's GDB stub. `GDBPacket`/`GDBPacketDecoder` frame packets

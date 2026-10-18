@@ -22,4 +22,6 @@ public enum RFBError: Error, Equatable, Sendable {
   case emptyFramebuffer
   /// A key name in a chord is neither a named key nor a single character.
   case unknownKey(String)
+  /// A screenshot option is malformed or names an unknown screenshot (maps to `invalid_request`).
+  case invalidScreenshotRequest(field: String, reason: String)
 }
