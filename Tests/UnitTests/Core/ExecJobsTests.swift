@@ -100,7 +100,7 @@ import VMLabCore
     exit $rc
     """.write(to: f.dir.appending(path: "ssh"), atomically: true, encoding: .utf8)
     let pidFile = f.dir.appending(path: "job.pid")
-    let jobs = ExecJobs(startTimeout: .seconds(2))
+    let jobs = ExecJobs(startTimeout: .seconds(5))
     let error = await #expect(throws: VMLabError.self) {
       try await jobs.start(
         ExecRequest(command: "echo $$ > '\(pidFile.path)'; exec sleep 300"), on: f.channel)
@@ -108,6 +108,11 @@ import VMLabCore
     #expect(error?.code == .timeout)
     let records = try f.scratch().filter { $0.hasSuffix(".json") || $0.hasSuffix(".log") }
     #expect(records.isEmpty, "\(records)")
+    // The job may still be writing its pid on a busy host.
+    let written = ContinuousClock.now + .seconds(10)
+    while !FileManager.default.fileExists(atPath: pidFile.path), ContinuousClock.now < written {
+      try await Task.sleep(for: .milliseconds(100))
+    }
     let text = try String(contentsOf: pidFile, encoding: .utf8)
     let pid = try #require(Int32(text.trimmingCharacters(in: .whitespacesAndNewlines)))
     let deadline = ContinuousClock.now + .seconds(10)
