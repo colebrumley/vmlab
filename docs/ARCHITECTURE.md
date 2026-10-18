@@ -320,7 +320,7 @@ go to stderr. Built: `facts`, `doctor`, `plan`, `create` (the `plan` flags plus 
 `destroy`, `exec` and `job` (`Sources/vmlab/ExecCommands.swift`: stdout to stdout, stderr and a
 non-zero status to stderr), `images pull|list|remove`, `computer <vm> <action>` (`--at x,y`, `--out` writes the image), `debug <vm> <action>`, `introspect`, `memory-dump`, `serve`, `--version`. It bootstraps logging and hands off to Core and `VMLabMCP`.
 `destroy`, `exec`, `job` and `file` (`Sources/vmlab/ExecCommands.swift`: stdout to stdout, stderr and a
-non-zero status to stderr), `images pull|list|remove`, `computer <vm> <action>` (`--at x,y`, `--out` writes the image), `introspect`, `memory-dump`, `serve`, `--version`. It bootstraps logging and hands off to Core and `VMLabMCP`.
+non-zero status to stderr), `images pull|list|remove`, `computer <vm> <action>` (`--at x,y`, `--out` writes the image), `introspect`, `memory-dump`, `serve`, `--version`, and `install-mcp --client claude-code|claude-desktop` (`Sources/vmlab/InstallMCP.swift`: prints the `mcpServers` entry that runs this `vmlab serve` with `VMLAB_HOME`, and for Claude Code the `claude mcp add` line; `--write` merges it into `~/.claude.json` or Claude Desktop's `claude_desktop_config.json`, keeping every other key; the entry and the merge are `MCPServerEntry`/`MCPClient` in `VMLabMCP/ClientInstall.swift`, which take the home directory as a parameter). It bootstraps logging and hands off to Core and `VMLabMCP`.
 
 **`VMLabEngines`** (library). The engine wiring, and the only module that imports both Core and the
 backends for that purpose: `Engines.registerAll(store:into:displays:debug:)` registers `QEMUBackend` for `qemu-hvf`
@@ -379,7 +379,7 @@ pulled images; each skips itself unless `VMLAB_INTEGRATION=1`.
 ## Scripts
 
 `scripts/check.sh` (format lint, build, unit tests, sign, generated docs current), `build.sh`,
-`sign.sh`, `bootstrap.sh` (Homebrew: qemu, tart), `gen-docs.sh` (`--check` for check.sh;
+`sign.sh`, `release.sh` (R-1106: `swift build -c release` with the version from `VMLAB_VERSION` or `git describe --tags` baked into `VMLabMCP.version`'s line for that build only, `sign.sh release`, `dist/vmlab-<version>-arm64.tar.gz` plus `.sha256`, then unpacks it to a temp directory and checks `vmlab --version` and that `vmlab doctor` finds the signed `vmlab-vz` next to `vmlab`), `bootstrap.sh` (Homebrew: qemu, tart), `gen-docs.sh` (`--check` for check.sh;
 `--refresh-host-facts` copies this host's slow probes into `docs/dev-host-facts.json`, the only
 input of FEATURES.md that is not code), and the process scripts
 `board.mjs`, `tidy.mjs`, `review.mjs`, `retro.mjs` and `guard.mjs` (the worktree-rule hook)
