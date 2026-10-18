@@ -184,6 +184,21 @@ import VMLabCore
     #expect(!result.stderr.contains("vmlab-"))
   }
 
+  /// CX-4: both markers come out of stderr even with ssh's own lines around them.
+  @Test func markersAreStrippedAroundSSHsOwnLines() throws {
+    let url = FileManager.default.temporaryDirectory.appending(path: "vmlab-mark-\(UUID())")
+    defer { try? FileManager.default.removeItem(at: url) }
+    let text =
+      "Warning: added\n" + "vmlab-run:j-1\n" + "guest err" + "vmlab-done:j-1\n"
+      + "Connection to x closed.\n"
+    try text.write(to: url, atomically: true, encoding: .utf8)
+    let marks = RemoteShell.stripMarkers(stderr: url, job: "j-1")
+    #expect(marks == (true, true))
+    #expect(
+      try String(contentsOf: url, encoding: .utf8)
+        == "Warning: added\nguest errConnection to x closed.\n")
+  }
+
   /// CX-4: a command that started and then lost its connection never falls back, whatever the
   /// stderr says, since it may have had its effect.
   @Test func aDroppedRunAfterTheStartNeverFallsBack() async throws {

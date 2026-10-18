@@ -69,28 +69,34 @@ public enum RemoteShell {
 
   /// Removes job `job`'s start and done markers from the stderr file at `url` and says which
   /// were there. The start marker is looked for in the first 64 KB (only ssh's own messages can
-  /// come before it); the done marker only as the file's last bytes.
+  /// come before it), the done marker in the last 4 KB (only ssh's can come after it).
   public static func stripMarkers(stderr url: URL, job: String) -> (started: Bool, finished: Bool) {
     guard let handle = try? FileHandle(forUpdating: url) else { return (false, false) }
     defer { try? handle.close() }
     let start = startMarker(job: job)
     let done = doneMarker(job: job)
     var size = (try? handle.seekToEnd()) ?? 0
+    let tailStart = size - min(size, UInt64(4096 + done.count))
+    try? handle.seek(toOffset: tailStart)
+    let tail = (try? handle.readToEnd()) ?? Data()
     var finished = false
-    if size >= UInt64(done.count) {
-      try? handle.seek(toOffset: size - UInt64(done.count))
-      if (try? handle.readToEnd()) == done {
-        finished = true
-        size -= UInt64(done.count)
-        try? handle.truncate(atOffset: size)
-      }
+    if let range = tail.range(of: done, options: .backwards) {
+      let at = tailStart + UInt64(range.lowerBound - tail.startIndex)
+      remove(at: at, count: UInt64(done.count), size: &size, in: handle)
+      finished = true
     }
     try? handle.seek(toOffset: 0)
     let head = (try? handle.read(upToCount: 64 * 1024 + start.count)) ?? Data()
     guard let range = head.range(of: start) else { return (false, finished) }
-    // Shift everything after the marker down over it, then cut the file to its new length.
-    var readAt = UInt64(range.upperBound)
-    var writeAt = UInt64(range.lowerBound)
+    let at = UInt64(range.lowerBound - head.startIndex)
+    remove(at: at, count: UInt64(start.count), size: &size, in: handle)
+    return (true, finished)
+  }
+
+  /// Cuts `count` bytes at `at` out of the file: what follows moves down, the file shortens.
+  private static func remove(at: UInt64, count: UInt64, size: inout UInt64, in handle: FileHandle) {
+    var readAt = at + count
+    var writeAt = at
     while readAt < size {
       try? handle.seek(toOffset: readAt)
       let chunk = (try? handle.read(upToCount: Int(min(1 << 20, size - readAt)))) ?? Data()
@@ -101,7 +107,7 @@ public enum RemoteShell {
       writeAt += UInt64(chunk.count)
     }
     try? handle.truncate(atOffset: writeAt)
-    return (true, finished)
+    size = writeAt
   }
 
   /// Ends the job's process group (`TERM`, then `KILL` a second later) and, for a background job,
