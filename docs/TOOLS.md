@@ -435,7 +435,10 @@ Named snapshots of a VM, kept as a tree. create saves one (mode live includes me
 ```
 create: { checkpoint: { id, name, parent?, mode, createdAt, state, manifestPath?, note? } }
 list: { current?, nodes: [ checkpoint ] }; restore: { checkpoint, state }; delete: { deleted }
-diff: { files, packages, services, defaults, users, loginItems, path }
+diff: { from, to, path, files, packages, services, defaults, users, loginItems, profiles },
+each section { added, removed, changed, truncated, entries (at most 500) }: files
+{ path, change, kind, changes: { size|mode|sha256|kind|mtime: { old, new } } }, defaults
+{ domain, key, change, old, new }, the others { name, change, old, new }
 ```
 
 ## `vm_manifest`

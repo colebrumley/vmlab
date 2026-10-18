@@ -207,6 +207,21 @@ public struct GuestManifests: Sendable {
     }
   }
 
+  /// `wrong_state` unless `record` is running: a manifest runs commands in the guest.
+  public static func requireRunning(_ record: VMRecord) throws(VMLabError) {
+    guard record.state != .running else { return }
+    let legal = Lifecycle.legalActions(in: record.state).map(\.rawValue)
+    throw VMLabError(
+      code: .wrongState,
+      message: "VM \(record.id) is \(record.state.rawValue); a manifest needs it running",
+      hint: record.state == .paused
+        ? "Resume it with vm_lifecycle resume." : "Start it with vm_lifecycle start.",
+      data: [
+        "vm": .string(record.id), "state": .string(record.state.rawValue),
+        "legalActions": .array(legal.map { .string($0) }),
+      ])
+  }
+
   /// The channel a manifest runs over: SSH when the plan granted it, else the plan's exec channel
   /// (`capability_missing` when it granted neither).
   public static func channel(of vm: any RunningVM) throws(VMLabError) -> any ExecChannel {
@@ -249,6 +264,28 @@ public struct GuestManifests: Sendable {
     manifest.checkpoint = checkpoint
     try store.saveManifest(manifest)
     return manifest
+  }
+}
+
+/// The manifests `vm_checkpoint create manifest: true` takes (R-800's hook): the guest's own
+/// profile, no extra roots, over the VM's exec channel. Returns the stored manifest's path.
+public struct CheckpointManifests: GuestManifestTaker {
+  public var store: Store
+  public var backends: BackendRegistry
+
+  public init(store: Store, backends: BackendRegistry) {
+    self.store = store
+    self.backends = backends
+  }
+
+  public func take(_ record: VMRecord, checkpoint: String) async throws(VMLabError) -> String {
+    try GuestManifests.requireRunning(record)
+    let vm = try await backends.backend(for: record.profile).attach(record)
+    let manifest = try await GuestManifests(store: store).take(
+      record, over: try GuestManifests.channel(of: vm),
+      profile: ManifestProfile(os: record.guest.os),
+      paths: [], checkpoint: checkpoint)
+    return store.manifestURL(of: record.id, id: manifest.id).path
   }
 }
 

@@ -1,8 +1,8 @@
 import Foundation
 import VMLabCore
 
-/// `vm_checkpoint`: the checkpoint tree through `VMManager` (R-800). `diff` belongs to R-802 and
-/// is refused until then.
+/// `vm_checkpoint`: the checkpoint tree through `VMManager` (R-800); `diff` compares manifests
+/// (R-802, `CheckpointDiff`).
 struct VMCheckpointHandler: ToolHandler {
   var spec: ToolSpec { .vmCheckpoint }
 
@@ -53,9 +53,14 @@ struct VMCheckpointHandler: ToolHandler {
       let deleted = try await manager.deleteCheckpoint(record.id, name: name, recursive: recursive)
       result["deleted"] = .array(deleted.map { .string($0.name) })
     case "diff":
-      throw VMLabError.invalidRequest(
-        field: "action", reason: "diff is not built yet (R-802)",
-        hint: "Use list to see the checkpoints; diff needs guest manifests.")
+      let store = context.store
+      return try await CheckpointDiff.run(arguments, record: record, context: context) {
+        name throws(VMLabError) in
+        let tree = try store.checkpoints(of: record.id)
+        let node =
+          name == CheckpointTree.latest ? tree.nodes.last : tree.nodes.first { $0.name == name }
+        return node.map { ($0.name, $0.manifestPath) }
+      }
     default:
       throw VMLabError.invalidRequest(
         field: "action", reason: "\(action) is not a vm_checkpoint action",

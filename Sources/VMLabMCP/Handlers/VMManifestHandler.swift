@@ -53,18 +53,7 @@ struct VMManifestHandler: ToolHandler {
   static func take(
     _ record: VMRecord, profile: ManifestProfile, paths: [String], context: ToolContext
   ) async throws(VMLabError) -> GuestManifest {
-    guard record.state == .running else {
-      let legal = Lifecycle.legalActions(in: record.state).map(\.rawValue)
-      throw VMLabError(
-        code: .wrongState,
-        message: "VM \(record.id) is \(record.state.rawValue); a manifest needs it running",
-        hint: record.state == .paused
-          ? "Resume it with vm_lifecycle resume." : "Start it with vm_lifecycle start.",
-        data: [
-          "vm": .string(record.id), "state": .string(record.state.rawValue),
-          "legalActions": .array(legal.map { .string($0) }),
-        ])
-    }
+    try GuestManifests.requireRunning(record)
     let vm = try await context.manager.attach(record.id)
     let channel = try GuestManifests.channel(of: vm)
     let manifests = GuestManifests(store: context.store)

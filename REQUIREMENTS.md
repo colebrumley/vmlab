@@ -699,7 +699,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   **Verify:** unit test parses fixture outputs for both profiles; integration: a Debian manifest
   lists `/etc/hostname` with the expected hash; a macOS manifest lists `com.apple.dock`.
 
-- [ ] **R-802 Checkpoint and manifest diff**
+- [x] **R-802 Checkpoint and manifest diff**
   `vm_checkpoint diff(from, to)` where each side is a checkpoint with a manifest, `@now` (take a
   manifest now), or a manifest id: returns added, removed and changed files (with what changed:
   size, mode, hash), packages, services, defaults keys (old and new values), users, login items.
