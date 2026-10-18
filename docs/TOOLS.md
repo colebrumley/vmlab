@@ -584,5 +584,5 @@ The `requirements` object of `vm_plan`, `vm_create` and `fleet` (`Requirements` 
 | `resources.diskGB` | integer, 1–65536 |  | Disk size in GB. |
 | `resources.memoryGB` | integer, 1–4096 |  | Guest memory in GB. |
 | `share` | object |  | A host directory mounted read-write in the guest (implies shared_dir): 9p under QEMU (the guest kernel needs 9p; Debian's cloud kernel has none), virtiofs under VZ. |
-| `share.guest` | string, default `/mnt/host` |  | Absolute guest path it is mounted at. |
+| `share.guest` | string, default `/mnt/host` |  | Absolute guest path it is mounted at. A macOS guest always mounts it at /Volumes/My Shared Files. |
 | `share.host` | string |  | Absolute host path of an existing directory under your home or /tmp. Omitted: the VM's own shared/ directory (vm_inspect endpoints.share). |

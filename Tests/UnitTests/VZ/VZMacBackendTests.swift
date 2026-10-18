@@ -159,6 +159,49 @@ import VMLabCore
     #expect(error?.code == .invalidRequest)
   }
 
+  /// CX-27: shared_dir on a macOS guest is a virtiofs device with the automount tag, which macOS
+  /// mounts at /Volumes/My Shared Files by itself; a share elsewhere in the guest is refused.
+  @Test func sharedDirUsesTheMacOSAutomountTag() async throws {
+    let clone = TartVMFiles(directory: URL(filePath: "/Users/x/.tart/vms/vm-test01"))
+    let tart = try TartVMConfig.read(from: TartTests.fixture.deletingLastPathComponent())
+    var record = VMRecord(
+      id: "vm-test01", profile: .vzMacOS, guest: GuestSpec(os: .macos, arch: .arm64),
+      features: [.execSSH, .sharedDir], image: "macos-base")
+    record.share = SharedDirSpec(host: "/Users/x/project")
+    let vm = URL(filePath: "/vm")
+    let config = VZRunnerConfig.macOS(record: record, clone: clone, config: tart, vmDirectory: vm)
+    #expect(
+      config.directoryShares == [
+        .init(tag: VZRunnerConfig.macOSAutomountTag, path: "/Users/x/project")
+      ])
+    #expect(VZRunnerConfig.macOSAutomountTag == "com.apple.virtio-fs.automount")
+    #expect(
+      try config.decisions(limits: MachineDecisionsTests.limits).fileSystems.map(\.tag) == [
+        "com.apple.virtio-fs.automount"
+      ])
+    #expect(SharedDirSpec.of(record)?.guestPath(for: .vzMacOS) == "/Volumes/My Shared Files")
+    // No share, no device.
+    record.share = nil
+    #expect(
+      VZRunnerConfig.macOS(record: record, clone: clone, config: tart, vmDirectory: vm)
+        .directoryShares.isEmpty)
+
+    // create refuses a guest path macOS will not mount the share at.
+    let (home, store, backend, _) = try Self.sandbox()
+    defer { try? FileManager.default.removeItem(at: home) }
+    let elsewhere = try store.update(id: try Self.create(store).id) {
+      $0.share = SharedDirSpec(guest: "/mnt/host")
+    }
+    let error = await #expect(throws: VMLabError.self) {
+      try await backend.create(elsewhere, plan: Self.plan)
+    }
+    #expect(error?.data["field"] == .string("share.guest"))
+    let automount = try store.update(id: try Self.create(store).id) {
+      $0.share = SharedDirSpec(guest: SharedDirSpec.macOSAutomountPath)
+    }
+    try await backend.create(automount, plan: Self.plan)
+  }
+
   /// CX-28: a guest with network none has no address to provision over; that is expected, so
   /// provisioning is skipped (no error, which would kill the runner) and nothing is marked done.
   @Test func networkNoneSkipsProvisioning() async throws {

@@ -235,7 +235,9 @@ enum Schema {
               "Absolute host path of an existing directory under your home or /tmp. Omitted: the VM's own shared/ "
                 + "directory (vm_inspect endpoints.share)."),
             "guest": string(
-              "Absolute guest path it is mounted at.", default: SharedDirSpec.defaultGuestPath),
+              "Absolute guest path it is mounted at. A macOS guest always mounts it at "
+                + "\(SharedDirSpec.macOSAutomountPath).",
+              default: SharedDirSpec.defaultGuestPath),
           ],
           description:
             "A host directory mounted read-write in the guest (implies shared_dir): 9p under "

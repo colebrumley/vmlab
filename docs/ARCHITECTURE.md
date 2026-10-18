@@ -254,7 +254,10 @@ the `tart` CLI (`Tart.locate`, `clone`, `setDiskSize`, `delete`, under `TART_HOM
 `tart clone <ref> <vm-id>` from the ref the image record names (`PulledImage.tartVM`) and records the
 clone's directory as `VMRecord.tartClone`, with `resources.cpus`/`memoryGB` raised to the clone's `cpuCountMin`/`memorySizeMin` where the request was below them so admission counts what the runner gives (CX-29) (a `resources.diskGB` larger than the clone's `disk.img` runs `tart set <vm-id> --disk-size`, decimal GB; smaller is `invalid_request`; the guest's APFS container is not grown); start builds `VZRunnerConfig.macOS` (boot `.macOS` with the
 base64 hardware model and machine identifier and `nvram.bin` as auxiliary storage, `disk.img`, the
-clone's MAC, no console, always a Mac display) and waits for that MAC's lease; stop, kill, pause and
+clone's MAC, no console, always a Mac display, and the record's share as a virtiofs device with the
+automount tag `com.apple.virtio-fs.automount` (`VZRunnerConfig.macOSAutomountTag`), which macOS
+mounts at `/Volumes/My Shared Files` by itself (`SharedDirSpec.macOSAutomountPath`, what
+`vm_inspect` reports; create refuses any other `share.guest`, CX-27)) and waits for that MAC's lease; stop, kill, pause and
 resume are `VZBackend`'s; destroy also `tart delete`s the clone. The runner turns boot `.macOS` into
 a `VZMacPlatformConfiguration`, `VZMacOSBootLoader` and `VZMacGraphicsDeviceConfiguration`.
 `PasswordSSH` runs `ssh` with the image password through an askpass script
