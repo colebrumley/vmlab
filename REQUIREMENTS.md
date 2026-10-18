@@ -533,7 +533,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
 
 ## Phase 6 — Virtualization.framework backend
 
-- [ ] **R-600 `vmlab-vz` runner process and control socket**
+- [x] **R-600 `vmlab-vz` runner process and control socket**
   One `vmlab-vz` process per VZ guest, started detached by `VMLabVZ`, with `<vm>/control.sock`
   speaking newline-delimited JSON: `status`, `pause`, `resume`, `stop` (ACPI/guest request via
   `requestStop`), `kill`, `save(path)`, `restore(path)`, `exit`. It writes `<vm>/vz.pid`, logs to
@@ -1063,7 +1063,8 @@ six 4 GB guests with the default reserve; macOS 26.6 → VZ save/restore APIs pr
     efi-vars.bin               VZ EFI variable store / QEMU pflash vars
     id_ed25519, id_ed25519.pub, known_hosts, vnc.pass
     qmp.sock, serial.sock, vnc.sock, control.sock, vz.pid, qemu.pid
-    serial.log, vz.log, qemu.log, provision.log, provision.json
+    vz-config.json             the machine the VZ runner builds (VZRunnerConfig)
+    serial.log, vz.log, console.log, qemu.log, provision.log, provision.json
     checkpoints.json, checkpoints/<id>/ (VZ state files and disk clones)
     manifests/<id>.json, exec/<job>.log, dumps/, pulled/, screenshots/
   segments/<name>/             switch.sock, stats.sock, switch.pid, ports/

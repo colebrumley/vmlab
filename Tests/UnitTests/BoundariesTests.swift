@@ -68,4 +68,13 @@ import Testing
         "\(file) imports \(modules.intersection(Self.backendModules))")
     }
   }
+
+  /// The server-side VZ module never loads the framework; only the signed runner does.
+  @Test func vzLibraryImportsNoVirtualization() throws {
+    let files = try Self.importsByFile(target: "VMLabVZ")
+    #expect(!files.isEmpty)
+    for (file, modules) in files {
+      #expect(!modules.contains("Virtualization"), "\(file) imports Virtualization")
+    }
+  }
 }
