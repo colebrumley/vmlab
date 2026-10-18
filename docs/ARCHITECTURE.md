@@ -212,7 +212,10 @@ M3-and-macOS-15 inference is the fallback when the runner is absent).
 `VZCheckpoints` (R-608) is the vz-linux `CheckpointProvider`, handed out by
 `VZBackend.checkpoints(_:)` in any state and by `VZRunningVM.checkpoints`: each checkpoint is
 `<vm>/checkpoints/<id>/` with `clonefile(2)` clones of `disk.raw`, `efi-vars.bin` and
-`machine-id.bin`; `disk` mode needs the guest not running; `live` pauses, has the runner
+`machine-id.bin`, plus the VM's first-boot record (`provisioned`, `provision.json`, `provision.log`)
+and `provisioning.json` naming which of those it holds, so a restore brings back or removes them with
+the disk they describe (CX-26: a pre-provisioning disk has no vmlab key, so the next start must
+provision again; a checkpoint without the manifest leaves them alone); `disk` mode needs the guest not running; `live` pauses, has the runner
 `saveMachineStateTo` `state.vzvmsave`, clones the files and the `vz-config.json` the machine was
 built from, and resumes; a live restore ends the runner, clones the files back, starts a held
 (`--hold`) runner from that configuration, restores and resumes (unless the VM was paused), then
