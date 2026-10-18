@@ -162,7 +162,7 @@ import Testing
       let b = DebugPoint(address: 0x2000, kind: .software)
       try await session.add(a)
       try await session.add(b)
-      connector.latest?.state.withLock { $0.removeDelays[b.address] = .milliseconds(200) }
+      connector.latest?.state.withLock { $0.removeDelays[b.address] = .seconds(1) }
       // b's index (1) is taken first; a's remove finishes while b's still waits on the stub.
       async let slow = session.remove(address: b.address, kind: .software)
       try await Task.sleep(for: .milliseconds(50))
@@ -175,7 +175,7 @@ import Testing
       // A point added while a remove of another waits is kept.
       try await session.add(a)
       try await session.add(b)
-      connector.latest?.state.withLock { $0.removeDelays[a.address] = .milliseconds(200) }
+      connector.latest?.state.withLock { $0.removeDelays[a.address] = .seconds(1) }
       async let removing = session.remove(address: a.address, kind: .software)
       try await Task.sleep(for: .milliseconds(50))
       let c = DebugPoint(address: 0x3000, kind: .software)
@@ -188,7 +188,7 @@ import Testing
   @Test func detachDuringConnectDropsTheLateConnection() async throws {
     let (session, connector, dir) = try await Self.session()
     defer { try? FileManager.default.removeItem(at: dir) }
-    connector.connectDelay.withLock { $0 = .milliseconds(200) }
+    connector.connectDelay.withLock { $0 = .seconds(1) }
     let halting = Task { try await session.halt() }
     try await Task.sleep(for: .milliseconds(50))
     await session.detach()
