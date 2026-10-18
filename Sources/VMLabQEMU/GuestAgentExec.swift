@@ -120,10 +120,14 @@ public struct GuestAgentExecChannel: ExecChannel {
     return arguments
   }
 
-  /// `exitcode`, or 128 plus `signal` for a command a signal ended.
+  /// `exitcode`, or 128 plus `signal` for a command a signal ended. The agent runs in the guest,
+  /// so a value that is not an integer in range (or a signal outside 0..<128) is -1.
   static func exitCode(_ status: [String: JSONValue]) -> Int32 {
-    if case .number(let code) = status["exitcode"] { return Int32(code) }
-    if case .number(let signal) = status["signal"] { return 128 + Int32(signal) }
+    if case .number(let code) = status["exitcode"] { return Int32(exactly: code) ?? -1 }
+    if case .number(let signal) = status["signal"] {
+      guard let signal = Int32(exactly: signal), (0..<128).contains(signal) else { return -1 }
+      return 128 + signal
+    }
     return -1
   }
 

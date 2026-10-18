@@ -183,6 +183,20 @@ final class FakeAgent: Sendable {
     #expect(GuestAgentExecChannel.exitCode(["exited": .bool(true), "exitcode": .number(3)]) == 3)
   }
 
+  /// BH-2: qemu-guest-agent runs in the guest; an `exitcode` or `signal` outside Int32 (or not a
+  /// number at all) trapped the server. It is -1 now.
+  @Test func guestAgentExitCodeOutOfRangeDoesNotTrap() async {
+    await #expect(processExitsWith: .success) {
+      _ = GuestAgentExecChannel.exitCode(["exitcode": .number(1e10)])
+      _ = GuestAgentExecChannel.exitCode(["signal": .number(Double(Int32.max))])
+      _ = GuestAgentExecChannel.exitCode(["exitcode": .number(.nan)])
+      _ = GuestAgentExecChannel.exitCode(["signal": .number(-.infinity)])
+    }
+    #expect(GuestAgentExecChannel.exitCode(["exitcode": .number(1e10)]) == -1)
+    #expect(GuestAgentExecChannel.exitCode(["signal": .number(Double(Int32.max))]) == -1)
+    #expect(GuestAgentExecChannel.exitCode(["signal": .number(-3)]) == -1)
+  }
+
   /// At the deadline the job's group is killed with a second `guest-exec`, and the refusal is
   /// `timeout` with the output the agent reports once the command has gone.
   @Test func timeoutKillsTheGroup() async throws {
