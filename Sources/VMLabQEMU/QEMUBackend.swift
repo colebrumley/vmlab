@@ -40,7 +40,10 @@ public final class QEMUBackend: Backend {
 
   public func start(_ record: VMRecord) async throws(VMLabError) -> VMRuntime {
     var request = try await request(record, plan: Self.plan(of: record), seed: true)
-    if record.network.mode != .disabled { request.sshHostPort = try QEMUMachine.freeLoopbackPort() }
+    if record.network.mode != .disabled {
+      request.sshHostPort = try QEMUMachine.freeLoopbackPort()
+      request.forwards = try Self.resolveForwards(record.network.forwards)
+    }
     let machine = try await Self.lift { try await QEMUMachine.launch(request) }
     machines.withLock { $0[record.id] = machine }
     return machine.runtime
@@ -112,10 +115,26 @@ public final class QEMUBackend: Backend {
     let gdbPort = record.runtime?.gdbEndpoint.flatMap(GDBEndpoint.init(runtime:))?.port
     let machine = try await Self.lift {
       try await QEMUMachine.attach(
-        layout: layout, gdbPort: gdbPort, sshPort: record.runtime?.sshPort)
+        layout: layout, gdbPort: gdbPort, sshPort: record.runtime?.sshPort,
+        forwards: record.runtime?.forwards)
     }
     machines.withLock { $0[record.id] = machine }
     return machine
+  }
+
+  /// `forwards` with every `host: nil` given a free loopback port (R-308). Ports are chosen by
+  /// binding port 0, so two in one call differ; an explicit host port is kept as asked.
+  static func resolveForwards(
+    _ forwards: [PortForward], freePort: () throws(VMLabError) -> Int = QEMUMachine.freeLoopbackPort
+  ) throws(VMLabError) -> [PortForward] {
+    var taken = Set(forwards.compactMap(\.host))
+    return try forwards.map { forward throws(VMLabError) in
+      if forward.host != nil { return forward }
+      var port = try freePort()
+      for _ in 0..<8 where taken.contains(port) { port = try freePort() }
+      taken.insert(port)
+      return PortForward(guest: forward.guest, host: port)
+    }
   }
 
   /// The plan a stored record was created from, as far as the launch needs it.

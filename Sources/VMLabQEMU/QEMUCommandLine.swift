@@ -14,10 +14,14 @@ public struct QEMULaunchOptions: Sendable, Hashable {
   public var gdbPort: Int?
   /// The loopback TCP port forwarded to the guest's port 22.
   public var sshHostPort: Int?
+  /// The request's forwards with every host port chosen (R-308); nil uses the record's, which
+  /// must then all name a host port.
+  public var forwards: [PortForward]?
 
   public init(
     boot: BootSpec = BootSpec(), firmware: QEMUFirmware? = nil, disk: Bool = true,
-    seed: Bool = false, gdbPort: Int? = nil, sshHostPort: Int? = nil
+    seed: Bool = false, gdbPort: Int? = nil, sshHostPort: Int? = nil,
+    forwards: [PortForward]? = nil
   ) {
     self.boot = boot
     self.firmware = firmware
@@ -25,6 +29,7 @@ public struct QEMULaunchOptions: Sendable, Hashable {
     self.seed = seed
     self.gdbPort = gdbPort
     self.sshHostPort = sshHostPort
+    self.forwards = forwards
   }
 }
 
@@ -102,8 +107,13 @@ public enum QEMUCommandLine {
     } else {
       var netdev = "user,id=net0"
       if let ssh = options.sshHostPort { netdev += ",hostfwd=tcp:127.0.0.1:\(ssh)-:22" }
-      for forward in record.network.forwards {
-        guard let host = forward.host else { continue }
+      for forward in options.forwards ?? record.network.forwards {
+        guard let host = forward.host else {
+          throw VMLabError(
+            code: .internal,
+            message: "The forward of guest port \(forward.guest) has no host port chosen.",
+            hint: "This is a vmlab bug; report it.")
+        }
         netdev += ",hostfwd=tcp:127.0.0.1:\(host)-:\(forward.guest)"
       }
       args += [

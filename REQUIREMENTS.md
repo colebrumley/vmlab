@@ -396,7 +396,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   probe runs and writes `host-facts.json`; if it says `yes`, a live checkpoint and restore keep an
   SSH session's shell history.
 
-- [ ] **R-308 User-mode networking and port forwarding**
+- [x] **R-308 User-mode networking and port forwarding**
   Default NIC `-netdev user` with `hostfwd` for SSH (an ephemeral localhost port recorded in
   `runtime.sshPort`) and for every `net_port_forward` entry in the request (`guest:host` pairs,
   host port 0 for ephemeral; the result records the chosen ports). `net_none` omits the NIC.

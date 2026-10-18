@@ -16,8 +16,12 @@ struct QEMUGuest {
   let record: VMRecord
   let machine: QEMUMachine
 
+  /// `prepare` runs on the VM directory after create and before the first start (to drop an
+  /// `id_ed25519.pub` there, say).
   static func boot(
-    features: [Feature] = [.serial, .gui, .netNAT], memoryGB: Int = 2, boot: BootSpec? = nil
+    features: [Feature] = [.serial, .gui, .netNAT], memoryGB: Int = 2,
+    prepare: ((URL) throws -> Void)? = nil, boot: BootSpec? = nil,
+    network: NetworkSpec = NetworkSpec()
   ) async throws -> QEMUGuest {
     let n = counterLock.withLock {
       counter += 1
@@ -43,8 +47,9 @@ struct QEMUGuest {
     let created = try await manager.create(
       VMRecord(
         id: "", name: "it-\(n)", profile: .qemuHVF, guest: guest, features: features,
-        image: "debian-13-arm64", boot: boot), plan: plan)
+        image: "debian-13-arm64", network: network, boot: boot), plan: plan)
     do {
+      try prepare?(store.directory(of: created.id))
       guard let running = try await manager.perform(.start, on: created.id) else {
         throw VMLabError(code: .internal, message: "start returned no record", hint: "")
       }

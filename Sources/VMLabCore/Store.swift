@@ -19,10 +19,14 @@ public struct VMRuntime: Codable, Sendable, Hashable {
   public var gdbEndpoint: String?
   public var sshPort: Int?
   public var ip: String?
+  /// The request's port forwards with the host ports actually bound on 127.0.0.1 (R-308; an
+  /// ephemeral `host: nil` is resolved here). Nil when the engine forwards nothing.
+  public var forwards: [PortForward]?
 
   public init(
     pid: Int32, controlSocket: String, qmpSocket: String? = nil, serialSocket: String? = nil,
-    vncSocket: String? = nil, gdbEndpoint: String? = nil, sshPort: Int? = nil, ip: String? = nil
+    vncSocket: String? = nil, gdbEndpoint: String? = nil, sshPort: Int? = nil, ip: String? = nil,
+    forwards: [PortForward]? = nil
   ) {
     self.pid = pid
     self.controlSocket = controlSocket
@@ -32,6 +36,7 @@ public struct VMRuntime: Codable, Sendable, Hashable {
     self.gdbEndpoint = gdbEndpoint
     self.sshPort = sshPort
     self.ip = ip
+    self.forwards = forwards
   }
 }
 

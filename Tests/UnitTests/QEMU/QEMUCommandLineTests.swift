@@ -144,6 +144,53 @@ import VMLabCore
     } throws: { ($0 as? VMLabError)?.data["field"] == .string("extra.qemuArgs[0]") }
   }
 
+  /// R-308: user-mode NIC with the SSH forward and every requested forward, ephemeral ones
+  /// resolved; net_none has no NIC at all.
+  @Test func userNetworkingSnapshot() throws {
+    var record = try Self.record("hvf")
+    record.network.forwards = [PortForward(guest: 80, host: 8080), PortForward(guest: 443)]
+    let forwards = try QEMUBackend.resolveForwards(record.network.forwards, freePort: { 49152 })
+    #expect(forwards == [PortForward(guest: 80, host: 8080), PortForward(guest: 443, host: 49152)])
+    let args = try QEMUCommandLine.arguments(
+      record: record, plan: Self.plan(for: record), layout: Self.layout(record),
+      options: QEMULaunchOptions(
+        firmware: Self.firmware, gdbPort: 41234, sshHostPort: 52222, forwards: forwards))
+    let text = args.joined(separator: "\n") + "\n"
+    let snapshot = Self.fixtures.appending(path: "net-forwards.args")
+    if ProcessInfo.processInfo.environment["VMLAB_UPDATE_SNAPSHOTS"] == "1" {
+      try Data(text.utf8).write(to: snapshot)
+    }
+    #expect(text == (try String(contentsOf: snapshot, encoding: .utf8)))
+    let netdev = try #require(args.firstIndex(of: "-netdev").map { args[$0 + 1] })
+    #expect(
+      netdev
+        == "user,id=net0,hostfwd=tcp:127.0.0.1:52222-:22,hostfwd=tcp:127.0.0.1:8080-:80,"
+        + "hostfwd=tcp:127.0.0.1:49152-:443")
+
+    // Unresolved ephemeral forwards are a bug, not a silently dropped forward.
+    #expect(throws: VMLabError.self) {
+      try QEMUCommandLine.arguments(
+        record: record, plan: Self.plan(for: record), layout: Self.layout(record),
+        options: QEMULaunchOptions(firmware: Self.firmware, gdbPort: 1))
+    }
+
+    var none = try Self.record("tcg-arm64")
+    none.network = NetworkSpec(mode: .disabled)
+    let offline = try QEMUCommandLine.arguments(
+      record: none, plan: Self.plan(for: none), layout: Self.layout(none),
+      options: QEMULaunchOptions(firmware: Self.firmware, sshHostPort: 2222))
+    #expect(offline.firstIndex(of: "-nic").map { offline[$0 + 1] } == "none")
+    #expect(!offline.contains("-netdev") && !offline.contains { $0.contains("hostfwd") })
+  }
+
+  @Test func ephemeralForwardsGetDistinctPorts() throws {
+    var ports = [5000, 5000, 8080, 5001]
+    let resolved = try QEMUBackend.resolveForwards(
+      [PortForward(guest: 1), PortForward(guest: 2, host: 8080), PortForward(guest: 3)],
+      freePort: { ports.removeFirst() })
+    #expect(resolved.map(\.host) == [5000, 8080, 5001])
+  }
+
   @Test func alwaysHaltedDaemonizedAndHeadless() throws {
     let record = try Self.record("hvf")
     let args = try QEMUCommandLine.arguments(

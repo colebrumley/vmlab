@@ -18,11 +18,13 @@ public struct QEMULaunchRequest: Sendable {
   public var gdbPort: Int?
   /// Forwarded to the guest's port 22 when set.
   public var sshHostPort: Int?
+  /// The request's forwards, every host port chosen (R-308); nil forwards the record's as given.
+  public var forwards: [PortForward]?
 
   public init(
     record: VMRecord, plan: Plan, layout: QEMULayout, baseImage: URL?,
     boot: BootSpec = BootSpec(), seed: CloudInitConfig? = nil, installation: QEMUInstallation,
-    gdbPort: Int? = nil, sshHostPort: Int? = nil
+    gdbPort: Int? = nil, sshHostPort: Int? = nil, forwards: [PortForward]? = nil
   ) {
     self.record = record
     self.plan = plan
@@ -33,6 +35,7 @@ public struct QEMULaunchRequest: Sendable {
     self.installation = installation
     self.gdbPort = gdbPort
     self.sshHostPort = sshHostPort
+    self.forwards = forwards
   }
 }
 
@@ -139,7 +142,7 @@ public actor QEMUMachine {
     try prepare(request)
     var options = QEMULaunchOptions(
       boot: request.boot, disk: request.baseImage != nil, seed: request.seed != nil,
-      gdbPort: request.gdbPort, sshHostPort: request.sshHostPort)
+      gdbPort: request.gdbPort, sshHostPort: request.sshHostPort, forwards: request.forwards)
     if request.boot.mode == .disk {
       options.firmware = try request.installation.firmware(for: request.plan.guest.arch)
     }
@@ -163,6 +166,8 @@ public actor QEMUMachine {
     do {
       machine = try await connect(
         layout: layout, pid: pid, gdbPort: options.gdbPort, sshPort: request.sshHostPort,
+        forwards: request.record.network.mode == .disabled
+          ? nil : request.forwards ?? request.record.network.forwards,
         timeout: connectTimeout)
     } catch {
       Darwin.kill(pid, SIGKILL)
@@ -180,7 +185,7 @@ public actor QEMUMachine {
   /// Reconnects to the QEMU process already running in `layout` (its pid file, QMP and serial
   /// sockets). `guest_unreachable` when no live process owns the directory.
   public static func attach(
-    layout: QEMULayout, gdbPort: Int? = nil, sshPort: Int? = nil,
+    layout: QEMULayout, gdbPort: Int? = nil, sshPort: Int? = nil, forwards: [PortForward]? = nil,
     connectTimeout: Duration = .seconds(5)
   ) async throws -> QEMUMachine {
     guard let pid = readPID(layout), isAlive(pid) else {
@@ -189,11 +194,13 @@ public actor QEMUMachine {
         hint: "Start the VM.", data: ["tried": .string(layout.pidFile.path)])
     }
     return try await connect(
-      layout: layout, pid: pid, gdbPort: gdbPort, sshPort: sshPort, timeout: connectTimeout)
+      layout: layout, pid: pid, gdbPort: gdbPort, sshPort: sshPort, forwards: forwards,
+      timeout: connectTimeout)
   }
 
   private static func connect(
-    layout: QEMULayout, pid: Int32, gdbPort: Int?, sshPort: Int?, timeout: Duration
+    layout: QEMULayout, pid: Int32, gdbPort: Int?, sshPort: Int?, forwards: [PortForward]?,
+    timeout: Duration
   ) async throws -> QEMUMachine {
     let qmp = try await QMPClient.connect(
       socketPath: layout.qmpSocket.path, connectTimeout: timeout)
@@ -207,7 +214,8 @@ public actor QEMUMachine {
     let runtime = VMRuntime(
       pid: pid, controlSocket: layout.qmpSocket.path, qmpSocket: layout.qmpSocket.path,
       serialSocket: layout.serialSocket.path, vncSocket: layout.vncSocket.path,
-      gdbEndpoint: gdbPort.map { "tcp:127.0.0.1:\($0)" }, sshPort: sshPort)
+      gdbEndpoint: gdbPort.map { "tcp:127.0.0.1:\($0)" }, sshPort: sshPort,
+      forwards: forwards.flatMap { $0.isEmpty ? nil : $0 })
     return QEMUMachine(layout: layout, pid: pid, qmp: qmp, serial: serial, runtime: runtime)
   }
 
