@@ -14,7 +14,7 @@ capability matrix (`Capabilities.swift`, the authority by C7), the selector, the
 D codes. It owns the per-VM event log (`EventLog`, one `VMEvent` JSON object per line of
 `events.jsonl`, appended with `O_APPEND` so the server and runner processes never interleave) and
 process-wide logging (`VMLabLogging`: swift-log to stderr at the `VMLAB_LOG` level, default `info`).
-`CodeSignature` reads `codesign` output so `vmlab doctor` can say whether the runner is entitled.
+`CodeSignature` reads `codesign` output so `vmlab doctor` can say whether the runner is entitled. `Profile` names the four profiles with their Appendix B tiers. `HostProbe` gathers `HostFacts` (Appendix E fast facts) through an injectable `CommandRunning` and merges the slow probes persisted in `VMLAB_HOME/host-facts.json` (`SlowProbes`), resetting to `unknown` any probe recorded under another macOS or QEMU version; `ProbeResult.countsAsYes` is how selection reads a probe (unknown counts as no).
 `FeatureDocs` renders `docs/FEATURES.md` from the matrix. It depends on swift-log only.
 
 **`VMLabQEMU`** (library). The QEMU backend: launching and supervising `qemu-system-aarch64`, the QMP
@@ -25,7 +25,12 @@ client, the serial channel, the GDB stub endpoint, and qcow2 internal snapshots.
 framework itself is loaded only in `vmlab-vz`.
 
 **`VMLabRFB`** (library). A VNC (RFB) client: framebuffer updates to PNG, pointer and key events. It
-gives both engines a screen to look at and click on.
+gives both engines a screen to look at and click on. `RFBClient` (an actor) speaks RFB 3.8 over an
+`RFBTransport`: `SocketTransport` for a unix or TCP socket, `ReplayTransport` for recorded fixture
+streams. It negotiates security None or VNC Authentication (`VNCAuth`, DES via CommonCrypto), sets
+32-bit BGRX, requests Raw, CopyRect and DesktopSize, and a background loop of incremental update
+requests keeps a `Framebuffer` current; `snapshot()` returns a `CGImage` and `Framebuffer.pngData`
+encodes PNG with ImageIO. Failures are `RFBError`, which callers map to Appendix D codes.
 
 **`VMLabGDB`** (library). A GDB remote serial protocol client: registers, memory, breakpoints,
 watchpoints and stepping over a guest's GDB stub. `GDBPacket`/`GDBPacketDecoder` frame packets
