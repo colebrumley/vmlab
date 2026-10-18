@@ -18,8 +18,12 @@ final class FakeBackend: Backend {
 
   let profile: Profile
   let store: Store
-  private let state = Mutex<(calls: [Call], failures: [Operation: VMLabError], delay: Duration?)>(
-    ([], [:], nil))
+  private let state = Mutex<
+    (
+      calls: [Call], failures: [Operation: VMLabError], delay: Duration?,
+      holdUntil: (@Sendable () -> Bool)?
+    )
+  >(([], [:], nil, nil))
 
   init(profile: Profile = .qemuHVF, store: Store) {
     self.profile = profile
@@ -35,6 +39,12 @@ final class FakeBackend: Backend {
 
   /// Makes `create` sleep, so a test can cancel it.
   func delayCreate(_ duration: Duration) { state.withLock { $0.delay = duration } }
+
+  /// Makes `create` wait (polling, up to 10 s) until `condition` holds, so a test that needs
+  /// something to happen during a create does not depend on how busy the machine is.
+  func holdCreate(until condition: @escaping @Sendable () -> Bool) {
+    state.withLock { $0.holdUntil = condition }
+  }
 
   static let engineFailure = VMLabError(
     code: .engineError, message: "fake engine failure", hint: "none")
@@ -52,6 +62,12 @@ final class FakeBackend: Backend {
     let disk = store.directory(of: record.id).appending(path: "disk.raw")
     FileManager.default.createFile(atPath: disk.path, contents: Data())
     if let delay = state.withLock({ $0.delay }) { try? await Task.sleep(for: delay) }
+    if let condition = state.withLock({ $0.holdUntil }) {
+      let deadline = ContinuousClock.now + .seconds(10)
+      while !condition(), ContinuousClock.now < deadline, !Task.isCancelled {
+        try? await Task.sleep(for: .milliseconds(10))
+      }
+    }
   }
 
   func start(_ record: VMRecord) async throws(VMLabError) -> VMRuntime {
