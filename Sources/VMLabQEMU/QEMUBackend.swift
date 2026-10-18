@@ -293,25 +293,29 @@ public struct QEMURunningVM: RunningVM {
   public var gdb: GDBEndpoint? { machine.runtime.gdbEndpoint.flatMap(GDBEndpoint.init(runtime:)) }
   public var introspection: (any Introspection)? { QMPIntrospection(qmp: machine.qmp) }
   public var memoryDump: (any MemoryDumper)? { QMPMemoryDumper(qmp: machine.qmp) }
-  /// SSH through the forwarded port (R-400); R-403 adds the guest agent.
+  /// SSH through the forwarded port (R-400).
   public var exec: any ExecChannel {
     if let ssh { return SSHExecChannel(target: ssh) }
-    return NotYetBuilt(vm: id, channel: "exec", item: "R-403: the guest has no network for SSH")
+    return NoSSH(vm: id)
+  }
+  /// qemu-guest-agent over its virtio-serial port (R-403).
+  public var agentExec: (any ExecChannel)? {
+    GuestAgentExecChannel(agent: machine.agent, vmDirectory: machine.layout.directory)
   }
 }
 
-/// A channel the QEMU backend does not provide yet; every call is `guest_unreachable`.
-struct NotYetBuilt: ExecChannel {
+/// The SSH channel of a guest with no SSH endpoint (no network, or vmnet with no address yet):
+/// every call is `guest_unreachable`, marked as never connected so `via: auto` takes the agent.
+struct NoSSH: ExecChannel {
   let vm: String
-  let channel: String
-  let item: String
 
-  var error: VMLabError {
-    VMLabError(
-      code: .guestUnreachable, message: "The \(channel) channel of \(vm) is not available yet.",
-      hint: "This vmlab build does not provide it for QEMU guests (\(item)).",
-      data: ["vm": .string(vm), "channel": .string(channel)])
+  func run(_ request: ExecRequest) async throws(VMLabError) -> ExecResult {
+    throw VMLabError(
+      code: .guestUnreachable, message: "VM \(vm) has no network for SSH.",
+      hint: "Run it with via: agent (exec_agent), or create the VM with a network.",
+      data: [
+        "vm": .string(vm), "tried": .array([.string("ssh")]),
+        ExecFallback.connectedKey: .bool(false),
+      ])
   }
-
-  func run(_ request: ExecRequest) async throws(VMLabError) -> ExecResult { throw error }
 }

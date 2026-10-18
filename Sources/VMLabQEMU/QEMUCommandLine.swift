@@ -57,6 +57,9 @@ public enum QEMUCommandLine {
     }
   }
 
+  /// The virtio-serial port name qemu-guest-agent opens in the guest.
+  public static let guestAgentPort = "org.qemu.guest_agent.0"
+
   /// The machine type: `q35` for x86_64, `virt` for everything else.
   public static func machine(for arch: GuestSpec.Arch) -> String {
     arch == .x86_64 ? "q35" : "virt"
@@ -169,6 +172,16 @@ public enum QEMUCommandLine {
       // full kernels; virtio-input for cloud kernels, which have no USB stack.
       args += ["-device", "qemu-xhci", "-device", "usb-kbd", "-device", "usb-tablet"]
       args += ["-device", "virtio-keyboard-pci", "-device", "virtio-tablet-pci"]
+    }
+    // R-403: qemu-guest-agent's virtio-serial port, served on a unix socket of its own (QGA is
+    // not reachable through QMP). PCI-less `other` architectures get none.
+    if defaults && plan.grants(.execAgent) {
+      args += [
+        "-chardev",
+        "socket,id=qga0,path=\(escape(layout.agentSocket.path)),server=on,wait=off",
+        "-device", "virtio-serial-pci,id=vser0",
+        "-device", "virtserialport,bus=vser0.0,chardev=qga0,name=\(guestAgentPort)",
+      ]
     }
     args += ["-qmp", "unix:\(layout.qmpSocket.path),server,wait=off"]
     args += ["-serial", "unix:\(layout.serialSocket.path),server,wait=off"]

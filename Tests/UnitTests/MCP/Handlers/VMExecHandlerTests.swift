@@ -41,15 +41,16 @@ import VMLabCore
     #expect(error?.code == .wrongState)
   }
 
-  @Test func viaAgentNeedsExecAgent() async throws {
+  /// R-403: `via: agent` goes to the VM's agent channel (the fixture plan grants exec_agent on
+  /// qemu-hvf), `auto` to SSH when it was granted.
+  @Test func viaPicksTheChannel() async throws {
     let f = try Fixture()
     defer { f.cleanUp() }
     _ = try await f.create()
-    let error = await #expect(throws: VMLabError.self) {
-      try await Self.exec(["command": .string("true"), "via": .string("agent")], in: f)
-    }
-    // The fixture plan grants exec_agent on qemu-hvf, but no backend offers it before R-403.
-    #expect(error?.code == .guestUnreachable || error?.code == .capabilityMissing)
+    let agent = try await Self.exec(["command": .string("id"), "via": .string("agent")], in: f)
+    #expect(agent.value["stdout"] == .string("agent: id\n"))
+    let auto = try await Self.exec(["command": .string("id")], in: f)
+    #expect(auto.value["stdout"] == .string("id\n"))
   }
 
   @Test func malformedFieldsAreInvalidRequest() async throws {

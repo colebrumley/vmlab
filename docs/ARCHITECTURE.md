@@ -62,6 +62,13 @@ it reports the status, `RemoteShell.collect` fetches what it had not passed on a
 guest's files. `read` returns up to 64 KB of log past the offset (on a UTF-8 boundary), starting a
 reader when this process has none, which is how a job survives a server restart; `wait` polls;
 `kill` runs `RemoteShell.kill` (status 143). `stopReaders()` drops this process's readers.
+`AutoExecChannel.swift` (R-403) is `via: auto`, what `Channel.exec` now returns: SSH when it was
+granted, and the agent (`RunningVM.agentExec`, default nil; `Channel.execAgent`) when it was
+granted and SSH never reached the guest, which a channel marks with `data.connected: false` on its
+`guest_unreachable` (`ExecFallback`; `SSHExecChannel` sets it only for connect-phase `ssh` errors,
+so a command that started over SSH is never run twice). `ExecTimeout.error` is the shared
+`timeout` refusal with partial output; `ExecFiles` and `ExecOutput.collect` are public for the
+agent channel.
 `HostProcess` runs one host subprocess asynchronously (stdin bytes, output to file handles, a
 deadline that sends `SIGTERM` then `SIGKILL`, cancellation likewise).
 `Capabilities` is the Appendix B matrix: `Capabilities.entry(feature, on: profile)` gives the unresolved cell (`Availability.yes`, `.no(reason)` or `.conditional(Condition)`, where a `Condition` names a fast fact such as `root` or a `SlowProbe`, plus the note and the item that verifies a `?`), and `capabilities(of:host:allowUnverified:)` resolves every cell to yes or no against `HostFacts` (an `unknown` probe is no unless `allowUnverified`); `unverifiedProbes` says which probes a plan reports as unverified, and `supports(_:on:)` is the guest OS and arch filter.
@@ -107,7 +114,21 @@ sends `system_powerdown` and waits for the process to exit, `kill` sends `quit` 
 `QEMUBackend` is the `Backend` for `qemu-hvf` and `qemu-tcg`: it keeps a `QEMUMachine` per running
 guest (reattaching after a server restart), builds the seed when R-400's `id_ed25519.pub` exists,
 and hands out `QEMURunningVM` (serial, VNC display, GDB, QMP `query-*` introspection,
-checkpoints, memory dumps, exec over SSH through the forwarded loopback port (`SSHExecChannel`)). `QMPIntrospection`
+checkpoints, memory dumps, exec over SSH through the forwarded loopback port (`SSHExecChannel`,
+or `NoSSH`, never connected, without a network), and exec through qemu-guest-agent).
+Guest agent (R-403): when the plan grants `exec_agent` (and the arch has PCI defaults) the command
+line adds a `virtio-serial-pci` with a `virtserialport` named `org.qemu.guest_agent.0` on a
+`-chardev socket` at `<vm>/qga.sock` (QGA is not reachable through QMP). `GuestAgent` (an actor,
+`QEMUMachine.agent`) opens a connection per command, sends 0xFF plus `guest-sync-delimited` to
+discard anything a previous client left, then the command; commands from one process are
+serialised, and an unanswered sync is `guest_unreachable` with `connected: false`.
+`GuestAgentExecChannel` runs `RemoteShell.foreground` (as root, `sudo -n -u` for another user)
+with `guest-exec` of `/bin/sh -c`, base64 stdin and a fixed PATH/HOME, polls `guest-exec-status`
+(50 ms growing to 500 ms), writes the base64 output through `ExecFiles`/`ExecOutput.collect`
+(same 64 KB cut and log as SSH), and at the deadline kills the job's process group with a second
+`guest-exec` of `RemoteShell.kill`, returning `timeout` with what the agent reports. Debian's cloud
+image does not ship qemu-guest-agent: cloud-init installs it on a first boot with a network, so a
+guest created with `net_none` has an agent only when its image does. `QMPIntrospection`
 maps `status`/`block`/`pci`/`cpus` to `query-status`/`query-block`/`query-pci`/`query-cpus-fast`
 and `memory_tree`/`registers`/`devices` to HMP `info mtree`/`info registers -a`/`info qtree`, and
 allows raw only for `query-[a-z0-9-]+` and `info <words>` (anything else `invalid_request`);

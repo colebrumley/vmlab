@@ -123,11 +123,15 @@ struct FakeRunningVM: RunningVM {
   var exec: any ExecChannel
   var checkpoints: any CheckpointProvider
   var memoryDump: (any MemoryDumper)? = FakeMemoryDumper()
+  var agentExec: (any ExecChannel)? = FakeExec(prefix: "agent: ")
 }
 
 struct FakeExec: ExecChannel {
+  /// Put before the echoed command, so a test can tell which channel ran it.
+  var prefix = ""
+
   func run(_ request: ExecRequest) async throws(VMLabError) -> ExecResult {
-    ExecResult(exitCode: 0, stdout: request.command + "\n", stderr: "")
+    ExecResult(exitCode: 0, stdout: prefix + request.command + "\n", stderr: "")
   }
 }
 

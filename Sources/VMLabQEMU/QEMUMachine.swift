@@ -64,6 +64,8 @@ public actor QEMUMachine {
   public nonisolated let qmp: QMPClient
   public nonisolated let serial: SerialChannel
   public nonisolated let runtime: VMRuntime
+  /// qemu-guest-agent on `qga.sock` (R-403); it connects per command, so it needs no setup here.
+  public nonisolated let agent: GuestAgent
 
   init(layout: QEMULayout, pid: Int32, qmp: QMPClient, serial: SerialChannel, runtime: VMRuntime) {
     self.layout = layout
@@ -71,6 +73,8 @@ public actor QEMUMachine {
     self.qmp = qmp
     self.serial = serial
     self.runtime = runtime
+    agent = GuestAgent(
+      vm: layout.directory.lastPathComponent, socketPath: layout.agentSocket.path)
   }
 
   // MARK: Starting
