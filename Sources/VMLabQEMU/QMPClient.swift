@@ -415,18 +415,26 @@ public actor QMPClient {
     }
   }
 
+  /// A marker older than this is stale whoever holds its pid (a reused pid must not excuse a hung
+  /// QEMU for ever).
+  static let busyMarkerMaxAge: TimeInterval = 3600
+
   /// Whether a live process other than this client holds a busy marker in `directory`; markers of
-  /// processes that are gone are removed.
+  /// processes that are gone, or older than `busyMarkerMaxAge`, are removed.
   static func othersBusy(in directory: URL, except own: URL?) -> Bool {
     let names = (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
     var busy = false
     for name in names where name.hasPrefix(busyMarkerPrefix) && name != own?.lastPathComponent {
       let parts = name.dropFirst(busyMarkerPrefix.count).split(separator: ".")
       guard let pid = parts.first.flatMap({ Int32($0) }) else { continue }
-      if LivenessProbe.processExists(pid) {
+      let file = directory.appending(path: name)
+      let modified =
+        (try? FileManager.default.attributesOfItem(atPath: file.path))?[.modificationDate] as? Date
+      let fresh = modified.map { -$0.timeIntervalSinceNow < busyMarkerMaxAge } ?? false
+      if fresh, LivenessProbe.processExists(pid) {
         busy = true
       } else {
-        try? FileManager.default.removeItem(at: directory.appending(path: name))
+        try? FileManager.default.removeItem(at: file)
       }
     }
     return busy
