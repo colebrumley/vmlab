@@ -158,9 +158,10 @@ enum Schema {
           unique: true),
         "resources": object(
           [
-            "cpus": integer("Virtual CPUs.", minimum: 1),
-            "memoryGB": integer("Guest memory in GB.", minimum: 1),
-            "diskGB": integer("Disk size in GB.", minimum: 1),
+            "cpus": integer("Virtual CPUs.", minimum: 1, maximum: ResourceLimits.maxCPUs),
+            "memoryGB": integer(
+              "Guest memory in GB.", minimum: 1, maximum: ResourceLimits.maxMemoryGB),
+            "diskGB": integer("Disk size in GB.", minimum: 1, maximum: ResourceLimits.maxDiskGB),
           ], description: "Guest resources; each omitted field takes the guest's default."),
         "network": object(
           [

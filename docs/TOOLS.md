@@ -578,9 +578,9 @@ The `requirements` object of `vm_plan`, `vm_create` and `fleet` (`Requirements` 
 | `provision.userData` | string |  | cloud-init user-data merged after vmlab's own (its keys win, lists append); must start with #cloud-config, #!, #cloud-boothook or #include (Linux only). |
 | `require` | array of `exec_ssh` \| `exec_agent` \| `gui` \| `gui_preboot` \| `gui_desktop` \| `gui_accel` \| `serial` \| `gdb` \| `introspection` \| `memory_dump` \| `direct_kernel_boot` \| `custom_firmware` \| `custom_devices` \| `halt_at_start` \| `checkpoint_disk` \| `checkpoint_live` \| `pause` \| `net_nat` \| `net_fast` \| `net_segment` \| `net_port_forward` \| `net_none` \| `rosetta` \| `nested_virt` \| `shared_dir` \| `cloud_init` \| `many_guests` |  | Features the VM must have; a profile lacking any is ruled out. Default [] (VZ). |
 | `resources` | object |  | Guest resources; each omitted field takes the guest's default. |
-| `resources.cpus` | integer, ≥ 1 |  | Virtual CPUs. |
-| `resources.diskGB` | integer, ≥ 1 |  | Disk size in GB. |
-| `resources.memoryGB` | integer, ≥ 1 |  | Guest memory in GB. |
+| `resources.cpus` | integer, 1–256 |  | Virtual CPUs. |
+| `resources.diskGB` | integer, 1–65536 |  | Disk size in GB. |
+| `resources.memoryGB` | integer, 1–4096 |  | Guest memory in GB. |
 | `share` | object |  | A host directory mounted read-write in the guest (implies shared_dir): 9p under QEMU (the guest kernel needs 9p; Debian's cloud kernel has none), virtiofs under VZ. |
 | `share.guest` | string, default `/mnt/host` |  | Absolute guest path it is mounted at. |
 | `share.host` | string |  | Absolute host path of an existing directory under your home or /tmp. Omitted: the VM's own shared/ directory (vm_inspect endpoints.share). |

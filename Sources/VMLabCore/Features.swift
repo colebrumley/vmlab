@@ -548,14 +548,20 @@ public struct Requirements: Codable, Sendable, Hashable {
         field: "guest.arch", reason: "empty architecture",
         hint: "Use arm64, x86_64, riscv64 or another architecture name.")
     }
-    for (field, value) in [
-      ("resources.cpus", resources.cpus), ("resources.memoryGB", resources.memoryGB),
-      ("resources.diskGB", resources.diskGB),
+    for (field, value, cap) in [
+      ("resources.cpus", resources.cpus, ResourceLimits.maxCPUs),
+      ("resources.memoryGB", resources.memoryGB, ResourceLimits.maxMemoryGB),
+      ("resources.diskGB", resources.diskGB, ResourceLimits.maxDiskGB),
     ] {
       if let value, value <= 0 {
         throw .invalidRequest(
           field: field, reason: "must be positive, got \(value)",
           hint: "Give a positive number or leave the field out for the default.")
+      }
+      if let value, value > cap {
+        throw .invalidRequest(
+          field: field, reason: "\(value) is more than the limit of \(cap)",
+          hint: "Ask for at most \(cap), or leave the field out for the default.")
       }
     }
     for (index, forward) in network.forwards.enumerated() {

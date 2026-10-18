@@ -109,7 +109,8 @@ public struct VZMacBackend: Backend {
       }
       if let diskGB = record.resources.diskGB {
         // Tart counts decimal gigabytes and only grows (`tart set --disk-size`).
-        let target = UInt64(diskGB) * 1_000_000_000
+        let target = try ResourceLimits.bytes(
+          diskGB, unit: 1_000_000_000, field: "resources.diskGB")
         let current = VZDisk.size(of: clone.disk)
         try VZDisk.refuseShrink(current: current, toBytes: target, diskGB: diskGB, image: name)
         if current < target { try tart.setDiskSize(record.id, gigabytes: diskGB) }

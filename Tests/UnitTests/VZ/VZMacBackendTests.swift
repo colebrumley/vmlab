@@ -146,6 +146,19 @@ import VMLabCore
 
   /// resources.diskGB grows the clone's disk with `tart set --disk-size`; a size below the
   /// clone's is refused with invalid_request and the clone deleted.
+  /// CR-2: a stored diskGB too large for bytes is refused, not a trap.
+  @Test func hugeDiskGBIsRefused() async throws {
+    let (home, store, backend, _) = try Self.sandbox()
+    defer { try? FileManager.default.removeItem(at: home) }
+    let record = try store.update(id: try Self.create(store).id) {
+      $0.resources = ResourceSpec(diskGB: Int.max)
+    }
+    let error = await #expect(throws: VMLabError.self) {
+      try await backend.create(record, plan: Self.plan)
+    }
+    #expect(error?.code == .invalidRequest)
+  }
+
   @Test func diskGBGrowsTheCloneAndRefusesShrinking() async throws {
     let (home, store, backend, fake) = try Self.sandbox()
     defer { try? FileManager.default.removeItem(at: home) }

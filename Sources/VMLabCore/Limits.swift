@@ -25,12 +25,37 @@ public struct ResourceLimits: Sendable, Hashable {
     }
   }
 
-  /// `resources` with every missing field taken from the defaults for `os`.
+  /// The largest sizes a request may ask for (Appendix G); `Requirements` refuses more.
+  public static let maxCPUs = 256
+  public static let maxMemoryGB = 4096
+  public static let maxDiskGB = 65536
+
+  /// `resources` with every missing field taken from the defaults for `os`, each kept within
+  /// 1 and its cap (a record written by hand or before the caps cannot reach an engine larger).
   public static func resolve(_ resources: ResourceSpec, for os: GuestSpec.OS) -> ResourceSpec {
     let defaults = defaultResources(for: os)
+    func clamp(_ value: Int?, _ cap: Int) -> Int? { value.map { min(max($0, 1), cap) } }
     return ResourceSpec(
-      cpus: resources.cpus ?? defaults.cpus, memoryGB: resources.memoryGB ?? defaults.memoryGB,
-      diskGB: resources.diskGB ?? defaults.diskGB)
+      cpus: clamp(resources.cpus ?? defaults.cpus, maxCPUs),
+      memoryGB: clamp(resources.memoryGB ?? defaults.memoryGB, maxMemoryGB),
+      diskGB: clamp(resources.diskGB ?? defaults.diskGB, maxDiskGB))
+  }
+
+  /// `count` units of `unit` bytes (`1 << 30` for GiB, `1_000_000_000` for decimal GB), or
+  /// `invalid_request` on `field` when it is not positive or does not fit in 64 bits.
+  public static func bytes(_ count: Int, unit: UInt64, field: String) throws(VMLabError) -> UInt64 {
+    guard count > 0, let value = UInt64(exactly: count) else {
+      throw .invalidRequest(
+        field: field, reason: "must be positive, got \(count)",
+        hint: "Give a positive number or leave the field out for the default.")
+    }
+    let (bytes, overflow) = value.multipliedReportingOverflow(by: unit)
+    guard !overflow else {
+      throw .invalidRequest(
+        field: field, reason: "\(count) is too large",
+        hint: "Use at most \(maxDiskGB) GB of disk and \(maxMemoryGB) GB of memory.")
+    }
+    return bytes
   }
 
   /// `limit_macos_guests` when starting a `profile` guest would exceed `maxMacOSGuests`.
