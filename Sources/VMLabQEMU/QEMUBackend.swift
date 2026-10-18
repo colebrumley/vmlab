@@ -10,6 +10,8 @@ public final class QEMUBackend: Backend {
   public let profile: Profile
   public let store: Store
   public let images: ImageStore
+  /// The vmnet DHCP lease file (`DHCPLeases.defaultPath`), where a `net_fast` guest's address is.
+  public let leasePath: String
   private let locate: @Sendable () throws(VMLabError) -> QEMUInstallation
   private let machines = Mutex<[String: QEMUMachine]>([:])
   /// CX-25: the attach in flight per VM, which every concurrent `machine(for:)` shares, so one
@@ -20,9 +22,10 @@ public final class QEMUBackend: Backend {
 
   public init(
     profile: Profile, store: Store, images: ImageStore? = nil,
-    installation: QEMUInstallation? = nil
+    installation: QEMUInstallation? = nil, leasePath: String = DHCPLeases.defaultPath
   ) {
     precondition(profile == .qemuHVF || profile == .qemuTCG, "QEMUBackend runs QEMU profiles")
+    self.leasePath = leasePath
     self.profile = profile
     self.store = store
     self.images = images ?? ImageStore(home: store.home)
@@ -142,16 +145,35 @@ public final class QEMUBackend: Backend {
 
   public func attach(_ record: VMRecord) async throws(VMLabError) -> any RunningVM {
     let machine = try await machine(for: record)
-    let target = SSHEndpoint(runtime: machine.runtime).map {
+    let target = (SSHEndpoint(runtime: machine.runtime) ?? SSHEndpoint(runtime: record.runtime)).map
+    {
       SSHTarget(record: record, endpoint: $0, store: store)
     }
     return QEMURunningVM(
       record: record, machine: machine, checkpoints: try checkpointProvider(record), ssh: target)
   }
 
+  /// The forwarded port; for a `net_fast` (vmnet) guest, which has none, its DHCP lease, waited
+  /// for up to `timeout` and recorded as `runtime.ip` while the same QEMU runs.
   public func sshEndpoint(_ record: VMRecord, timeout: Duration) async -> SSHEndpoint? {
-    SSHEndpoint(runtime: record.runtime)
-      ?? machines.withLock({ $0[record.id] }).flatMap { SSHEndpoint(runtime: $0.runtime) }
+    if let known =
+      SSHEndpoint(runtime: record.runtime)
+      ?? machines.withLock({ $0[record.id] }).flatMap({ SSHEndpoint(runtime: $0.runtime) })
+    {
+      return known
+    }
+    guard Self.usesVmnet(record), record.state.isLive, let runtime = record.runtime,
+      let ip = await DHCPLeases.waitForIP(
+        mac: QEMUCommandLine.mac(for: record.id), path: leasePath, timeout: timeout)
+    else { return nil }
+    _ = try? store.update(id: record.id) { current in
+      guard current.state.isLive, var live = current.runtime, live.pid == runtime.pid,
+        live.ip == nil
+      else { return }
+      live.ip = ip
+      current.runtime = live
+    }
+    return SSHEndpoint(host: ip)
   }
 
   /// Checkpoints work on a stopped guest too (`qemu-img`), so they need no attach.

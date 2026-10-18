@@ -95,4 +95,37 @@ import VMLabCore
     #expect(await attaches.value == 1)
     await a.disconnect()
   }
+
+  /// P3: a net_fast (vmnet) guest has no forwarded port, so it had no SSH endpoint at all. Its
+  /// address comes from the vmnet DHCP lease of its MAC and is recorded.
+  @Test func aVmnetGuestIsReachedAtItsLease() async throws {
+    let home = FileManager.default.temporaryDirectory.appending(path: "vmlab-qv-\(UUID())")
+    try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: home) }
+    let store = Store(home: home)
+    var draft = Self.record(state: .running)
+    draft.id = ""
+    draft.features = [.execSSH, .netFast]
+    draft.network = NetworkSpec(mode: .nat)
+    draft.plan = Plan(
+      profile: .qemuHVF, guest: draft.guest, resources: ResourceSpec(),
+      features: [.execSSH, .netFast], requested: [.netFast], estimatedStartupSeconds: 5)
+    draft.runtime = VMRuntime(pid: 4242, controlSocket: "/tmp/q.sock")
+    let record = try store.create(draft)
+    let mac = QEMUCommandLine.mac(for: record.id)
+    let leases = home.appending(path: "dhcpd_leases")
+    let expiry = String(Int(Date().addingTimeInterval(3600).timeIntervalSince1970), radix: 16)
+    try
+      "{\n\tname=debian\n\tip_address=192.168.64.33\n\thw_address=1,\(mac)\n\tlease=0x\(expiry)\n}\n"
+      .write(to: leases, atomically: true, encoding: .utf8)
+    let backend = QEMUBackend(
+      profile: .qemuHVF, store: store,
+      installation: QEMUInstallation(
+        binDirectory: home.appending(path: "bin"), shareDirectory: home.appending(path: "share")),
+      leasePath: leases.path)
+    #expect(QEMUBackend.usesVmnet(record))
+    let endpoint = await backend.sshEndpoint(record, timeout: .seconds(2))
+    #expect(endpoint?.host == "192.168.64.33")
+    #expect(try store.load(id: record.id).runtime?.ip == "192.168.64.33")
+  }
 }

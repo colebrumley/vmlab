@@ -192,14 +192,5 @@ extension VZRunnerConfig {
 public enum MACAddress {
   /// Lowercase, two digits per octet: `2:A:3b:4c:5d:6e` → `02:0a:3b:4c:5d:6e`. macOS's
   /// `dhcpd_leases` drops leading zeros; nil unless there are six hex octets of one or two digits.
-  public static func normalize(_ text: String) -> String? {
-    let parts = text.split(separator: ":", omittingEmptySubsequences: false)
-    guard parts.count == 6 else { return nil }
-    var octets: [String] = []
-    for part in parts {
-      guard (1...2).contains(part.count), let value = UInt8(part, radix: 16) else { return nil }
-      octets.append(String(format: "%02x", value))
-    }
-    return octets.joined(separator: ":")
-  }
+  public static func normalize(_ text: String) -> String? { DHCPLeases.normalizeMAC(text) }
 }

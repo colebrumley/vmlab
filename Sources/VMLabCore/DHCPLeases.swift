@@ -1,11 +1,10 @@
 import Foundation
-import VMLabCore
 
 /// One entry of macOS's vmnet DHCP server lease file.
 public struct DHCPLease: Sendable, Hashable {
   public var name: String?
   public var ipAddress: String
-  /// Normalised (`MACAddress.normalize`).
+  /// Normalised (`DHCPLeases.normalizeMAC`).
   public var hardwareAddress: String
   /// When the lease expires (the file's `lease=0x…`, seconds since 1970).
   public var expires: Date?
@@ -15,6 +14,19 @@ public struct DHCPLease: Sendable, Hashable {
 /// (`VZNATNetworkDeviceAttachment`). The file is world-readable, so no root is needed (C2).
 public enum DHCPLeases {
   public static let defaultPath = "/var/db/dhcpd_leases"
+
+  /// Lowercase, two digits per octet: `2:A:3b:4c:5d:6e` → `02:0a:3b:4c:5d:6e`. macOS's
+  /// `dhcpd_leases` drops leading zeros; nil unless there are six hex octets of one or two digits.
+  public static func normalizeMAC(_ text: String) -> String? {
+    let parts = text.split(separator: ":", omittingEmptySubsequences: false)
+    guard parts.count == 6 else { return nil }
+    var octets: [String] = []
+    for part in parts {
+      guard (1...2).contains(part.count), let value = UInt8(part, radix: 16) else { return nil }
+      octets.append(String(format: "%02x", value))
+    }
+    return octets.joined(separator: ":")
+  }
 
   /// Every well-formed `{ … }` block of `text`; blocks without an address or MAC are skipped.
   public static func parse(_ text: String) -> [DHCPLease] {
@@ -38,7 +50,7 @@ public enum DHCPLeases {
     guard let ip = fields["ip_address"], let hw = fields["hw_address"] else { return nil }
     // `hw_address=1,2:a:3b:4c:5d:6e`: the hardware type (1, Ethernet), then the MAC.
     let mac = hw.split(separator: ",", maxSplits: 1).last.map(String.init) ?? hw
-    guard let normalized = MACAddress.normalize(mac) else { return nil }
+    guard let normalized = DHCPLeases.normalizeMAC(mac) else { return nil }
     var expires: Date? = nil
     if let lease = fields["lease"], lease.hasPrefix("0x"),
       let seconds = UInt64(lease.dropFirst(2), radix: 16)
@@ -51,7 +63,7 @@ public enum DHCPLeases {
 
   /// The address of the newest unexpired lease for `mac` in `text`.
   public static func ip(for mac: String, in text: String, now: Date = Date()) -> String? {
-    guard let mac = MACAddress.normalize(mac) else { return nil }
+    guard let mac = DHCPLeases.normalizeMAC(mac) else { return nil }
     return parse(text)
       .filter { $0.hardwareAddress == mac && ($0.expires.map { $0 > now } ?? true) }
       .max { ($0.expires ?? .distantPast) < ($1.expires ?? .distantPast) }?

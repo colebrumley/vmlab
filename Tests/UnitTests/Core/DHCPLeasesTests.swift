@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-import VMLabVZ
+import VMLabCore
 
 @Suite struct DHCPLeasesTests {
   static let fixture = URL(filePath: #filePath).deletingLastPathComponent()
@@ -35,12 +35,12 @@ import VMLabVZ
   }
 
   @Test func macNormalisation() {
-    #expect(MACAddress.normalize("2:A:3b:4c:5d:6e") == "02:0a:3b:4c:5d:6e")
-    #expect(MACAddress.normalize("02:0a:3b:4c:5d") == nil)
-    #expect(MACAddress.normalize("02:0a:3b:4c:5d:6e:7f") == nil)
-    #expect(MACAddress.normalize("002:0a:3b:4c:5d:6e") == nil)
-    #expect(MACAddress.normalize("zz:0a:3b:4c:5d:6e") == nil)
-    #expect(MACAddress.normalize("02::3b:4c:5d:6e") == nil)
+    #expect(DHCPLeases.normalizeMAC("2:A:3b:4c:5d:6e") == "02:0a:3b:4c:5d:6e")
+    #expect(DHCPLeases.normalizeMAC("02:0a:3b:4c:5d") == nil)
+    #expect(DHCPLeases.normalizeMAC("02:0a:3b:4c:5d:6e:7f") == nil)
+    #expect(DHCPLeases.normalizeMAC("002:0a:3b:4c:5d:6e") == nil)
+    #expect(DHCPLeases.normalizeMAC("zz:0a:3b:4c:5d:6e") == nil)
+    #expect(DHCPLeases.normalizeMAC("02::3b:4c:5d:6e") == nil)
   }
 
   @Test func waitReturnsOnceTheLeaseAppears() async throws {
