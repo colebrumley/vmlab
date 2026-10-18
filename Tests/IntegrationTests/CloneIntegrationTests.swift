@@ -33,7 +33,8 @@ import VMLabQEMU
 
       let started = try #require(try await manager.perform(.start, on: clone.id))
       let twin = QEMUGuest(
-        home: guest.home, manager: manager, backend: guest.backend, record: started,
+        home: guest.home, manager: manager, backend: guest.backend, backends: guest.backends,
+        record: started,
         machine: try await guest.backend.machine(for: started))
       cloneGuest = twin
       let clonePort = try #require(started.runtime?.sshPort)
