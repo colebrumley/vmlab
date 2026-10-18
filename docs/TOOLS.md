@@ -65,8 +65,11 @@ Check the host's prerequisites (QEMU, Tart, Rosetta, the signed VZ runner and it
 **Result**
 
 ```
-{ checks: [ { check, status: ok|missing|unknown, fix? } ],
-  probes: { <probe>: { result: yes|no|unknown, probedAt? } } }
+{ checks: [ { check, status: ok|missing|unknown, detail?, fix? } ],
+  probes: { <probe>: { result: yes|no|unknown, probedAt?, owner,
+                       status?: ran|skipped|failed|not_implemented, note? } },
+  runner: { path?, built, entitled }, freeMemoryGB, freeDiskGB,
+  runningGuests, runningMacOSGuests }
 ```
 
 ## `images`

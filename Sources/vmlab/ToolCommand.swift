@@ -119,7 +119,8 @@ struct DoctorCommand: ToolCommand {
     for check in result.value["checks"]?.arrayValue ?? [] {
       let name = check["check"]?.stringValue ?? "?"
       let status = check["status"]?.stringValue ?? "unknown"
-      var line = Human.pad(name, 16) + status
+      var line = Human.pad(name, 20) + status
+      if let detail = check["detail"]?.stringValue { line += " (\(detail))" }
       if let fix = check["fix"]?.stringValue { line += "  fix: \(fix)" }
       lines.append(line)
     }
@@ -131,8 +132,9 @@ struct DoctorCommand: ToolCommand {
     let probes = result.value["probes"]?.objectValue ?? [:]
     for name in probes.keys.sorted() {
       let result = probes[name]?["result"]?.stringValue ?? "unknown"
-      let date = probes[name]?["probedAt"]?.stringValue.map { " (\($0))" } ?? ""
-      lines.append("probe " + Human.pad(name, 24) + result + date)
+      let date = probes[name]?["probedAt"]?.stringValue.map { " (probed \($0))" } ?? ""
+      let note = probes[name]?["note"]?.stringValue.map { " [\($0)]" } ?? ""
+      lines.append("probe " + Human.pad(name, 24) + result + date + note)
     }
     return lines.joined(separator: "\n")
   }
