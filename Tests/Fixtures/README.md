@@ -11,3 +11,5 @@ Read by unit tests through `#filePath`; never written at test time.
 - `features/` — the feature catalogue snapshot (Appendix A)
 - `gdb/` — GDB target descriptions (`target.xml` and the annexes it includes) and recorded
   remote-protocol sessions (`->` client packet, `<-` stub reply)
+- `images/` — a two-entry image catalogue, a tiny disk file and the `SHA512SUMS`/`SHA256SUMS`
+  that list it

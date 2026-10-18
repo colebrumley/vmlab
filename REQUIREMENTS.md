@@ -314,7 +314,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
 
 ## Phase 3 — QEMU backend
 
-- [ ] **R-300 Linux cloud image catalogue and pull**
+- [x] **R-300 Linux cloud image catalogue and pull**
   `Sources/VMLabCore/Images.swift`: the catalogue of Appendix H (name, guest, arch, URL, format,
   sha512 URL, login). `images pull <name>` downloads to `~/.vmlab/images/<name>/`, verifies the
   checksum, converts qcow2→raw with `qemu-img` when a raw file is also wanted (VZ needs raw; R-603),
@@ -1097,7 +1097,7 @@ six 4 GB guests with the default reserve; macOS 26.6 → VZ save/restore APIs pr
 
 | Name | Guest | Arch | Source | Format | Login |
 |---|---|---|---|---|---|
-| `debian-13-arm64` | linux | arm64 | `https://cloud.debian.org/images/cloud/trixie/latest/debian-13-genericcloud-arm64.raw` (and `.qcow2`), `SHA512SUMS` beside it | raw, qcow2 | `debian` via key |
+| `debian-13-arm64` | linux | arm64 | `https://cloud.debian.org/images/cloud/trixie/latest/debian-13-genericcloud-arm64.qcow2` (a `.raw` is published too; vmlab pulls the smaller qcow2 and converts it), `SHA512SUMS` beside it | qcow2 (converted to raw for VZ) | `debian` via key |
 | `debian-13-amd64` | linux | x86_64 | same path, `-amd64` | qcow2 | `debian` |
 | `ubuntu-24.04-arm64` | linux | arm64 | `https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-arm64.img`, `SHA256SUMS` | qcow2 (converted to raw for VZ) | `ubuntu` |
 | `ubuntu-24.04-amd64` | linux | x86_64 | same, `-amd64.img` | qcow2 | `ubuntu` |
