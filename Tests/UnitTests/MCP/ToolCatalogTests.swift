@@ -67,7 +67,7 @@ import VMLabCore
       Set(properties.keys)
         == [
           "guest", "require", "prefer", "resources", "network", "image", "boot", "extra",
-          "provision",
+          "provision", "share",
         ])
     guard case .object(let require)? = properties["require"],
       case .object(let items)? = require["items"]

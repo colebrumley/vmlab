@@ -458,13 +458,13 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   **Verify:** integration: a background `for i in $(seq 1 5); do echo $i; sleep 1; done` is read
   incrementally and finishes with exit 0.
 
-- [ ] **R-403 Agent exec for QEMU guests**
+- [x] **R-403 Agent exec for QEMU guests**
   `via: agent` uses `qemu-guest-agent` through QMP (`guest-exec`, `guest-exec-status`, polling)
   when `exec_agent` was granted; it works with no guest networking and before SSH is up. `auto`
   prefers SSH when reachable, else the agent.
   **Verify:** integration: with `net_none`, `vm_exec "id"` via agent returns `uid=0`.
 
-- [ ] **R-404 File push, pull and shared directories**
+- [x] **R-404 File push, pull and shared directories**
   `vm_file push|pull` via `scp` (or `sftp` batch) with size reporting; directories recursively;
   `pull` to `<vm>/pulled/` when no local path is given. `shared_dir` grants mount a host directory
   read-write at a guest path: QEMU via 9p (`-virtfs local,...`, mounted by cloud-init `mounts`),
@@ -636,7 +636,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   **Verify:** unit tests against fixture transcripts for every packet; a fake stub in tests serves
   `target.xml` and a `g` reply, and the client names `pc`, `sp`, `x0` with the right values.
 
-- [ ] **R-701 `vm_debug` tool**
+- [x] **R-701 `vm_debug` tool**
   Actions of Appendix C: `info` (endpoint for a human's lldb or gdb, attached state), `halt`,
   `continue`, `step`, `wait(timeout)` (block until stop), `breakpoint_add(address|symbol?,
   hardware)`, `breakpoint_remove`, `breakpoints`, `registers`, `read_memory(address, size)` (hex
@@ -647,7 +647,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   **Verify:** integration on `qemu-tcg` x86_64: halt at start, read `rip`, set a breakpoint at the
   kernel entry from the extracted `System.map` (R-305), continue, `wait` stops there.
 
-- [ ] **R-702 GDB under HVF probe**
+- [x] **R-702 GDB under HVF probe**
   The slow probe `qemu_hvf_gdb`: boot a throwaway guest under HVF with `-gdb`, halt, read
   registers, set a software breakpoint at the current `pc` + 4, continue, expect the stop [VERIFY].
   `yes` keeps `gdb` on `qemu-hvf`; `no` turns it off with "GDB under HVF unsupported by this QEMU;
@@ -655,19 +655,19 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   arm64 TCG guest is legal, only slow).
   **Verify:** the probe runs from `doctor --probe` and writes the fact; the matrix row follows it.
 
-- [ ] **R-703 Halt at start and reset**
+- [x] **R-703 Halt at start and reset**
   `boot.haltAtStart: true` starts QEMU with `-S` so the first instruction can be stepped;
   `vm_lifecycle action: reset` (QEMU `system_reset`; VZ: stop and start) returns the guest to its
   first instruction with breakpoints kept.
   **Verify:** integration: halt at start, `registers` shows the reset `pc`, `continue`, serial shows
   firmware output.
 
-- [ ] **R-704 Watchpoints**
+- [x] **R-704 Watchpoints**
   `Z2`/`Z3`/`Z4` write/read/access watchpoints in the client and `breakpoint_add(kind: watch_write|
   watch_read|watch_access, size)`.
   **Verify:** unit test packets; integration under TCG: a watchpoint on a stack address stops.
 
-- [ ] **R-705 Debug session durability**
+- [x] **R-705 Debug session durability**
   The GDB connection is owned by the server, not the request; it reconnects after a server restart
   if the stub is still listening, and `vm_debug info` reports `attached: false` with the endpoint
   when a human has the stub (QEMU allows one client; the tool says so instead of hanging).

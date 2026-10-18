@@ -212,4 +212,41 @@ import Testing
       try Requirements(guest: GuestSpec(os: .macos, arch: .arm64), require: [.serial])
     }
   }
+
+  /// R-404: `share` decodes, implies shared_dir, refuses relative or fstab-breaking paths, and a
+  /// record mounts a share only when the request asked for one.
+  @Test func shareImpliesSharedDirAndValidates() throws {
+    let ok = try Self.decode(
+      #"{"guest":{"os":"linux","arch":"arm64"},"share":{"host":"/tmp/x","guest":"/srv/x"}}"#)
+    #expect(ok.share == SharedDirSpec(host: "/tmp/x", guest: "/srv/x"))
+    #expect(ok.impliedFeatures.map(\.feature) == [.sharedDir])
+    #expect(
+      try Self.decode(#"{"guest":{"os":"linux","arch":"arm64"},"share":{}}"#).share?
+        .guestPath == "/mnt/host")
+    for (share, field) in [
+      (#"{"host":"relative"}"#, "share.host"), (#"{"guest":"mnt"}"#, "share.guest"),
+      (#"{"guest":"/mnt/a b"}"#, "share.guest"), (#"{"guest":"/"}"#, "share.guest"),
+    ] {
+      let error = #expect(throws: VMLabError.self) {
+        try Self.decode(#"{"guest":{"os":"linux","arch":"arm64"},"share":"# + share + "}")
+      }
+      #expect(error?.data["field"] == .string(field), "\(share)")
+    }
+
+    let guest = GuestSpec(os: .linux, arch: .arm64)
+    var record = VMRecord(id: "vm-aaaaaa", profile: .qemuHVF, guest: guest, features: [.sharedDir])
+    #expect(SharedDirSpec.of(record) == nil, "granted but not asked for: nothing mounted")
+    record.plan = Plan(
+      profile: .qemuHVF, guest: guest, resources: ResourceSpec(), features: [.sharedDir],
+      requested: [.sharedDir], estimatedStartupSeconds: 1)
+    #expect(SharedDirSpec.of(record) == SharedDirSpec())
+    let dir = FileManager.default.temporaryDirectory.appending(path: "vmlab-share-\(UUID())")
+    defer { try? FileManager.default.removeItem(at: dir) }
+    try SharedDirSpec().checkHostDirectory(vmDirectory: dir)
+    #expect(FileManager.default.fileExists(atPath: dir.appending(path: "shared").path))
+    record.share = SharedDirSpec(host: "/no/such/dir")
+    #expect(throws: VMLabError.self) {
+      try SharedDirSpec.of(record)?.checkHostDirectory(vmDirectory: dir)
+    }
+  }
 }

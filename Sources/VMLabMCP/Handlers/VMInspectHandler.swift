@@ -79,6 +79,12 @@ struct VMInspectHandler: ToolHandler {
       endpoints["display"] = display.json
     }
     if let gdb = runtime.gdbEndpoint { endpoints["gdb"] = .string(gdb) }
+    if let share = SharedDirSpec.of(record) {
+      endpoints["share"] = .object([
+        "host": .string(share.hostDirectory(vmDirectory: store.directory(of: record.id)).path),
+        "guest": .string(share.guestPath),
+      ])
+    }
     return endpoints
   }
 }

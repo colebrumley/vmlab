@@ -45,6 +45,17 @@ struct VMLifecycleHandler: ToolHandler {
         try await manager.perform(action, on: record.id)
       }
     }
+    // vm_debug's session follows the guest (R-703): a reset may clear the CPU's debug registers,
+    // so its points go in again; a destroyed VM's session goes.
+    if action == .reset, let session = context.debug.existing(record.id) {
+      do {
+        try await session.afterReset(halted: record.boot?.haltAtStart == true)
+      } catch {
+        warnings.append("the debugger could not insert its breakpoints again: \(error.message)")
+      }
+    } else if action == .destroy {
+      await context.debug.drop(record.id)
+    }
     let elapsed = ContinuousClock.now - started
     let ms = (elapsed / .milliseconds(1)).rounded()
     return ToolResult(
