@@ -358,7 +358,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   **Verify:** unit test against a fake socket: offsets, tail, wait with timeout; integration: the
   Debian boot log contains `login:` within 90 s via `wait`.
 
-- [ ] **R-304 Panic and crash detection**
+- [x] **R-304 Panic and crash detection**
   The serial reader matches a small table (`Kernel panic - not syncing`, `BUG:`, `Oops:`, `general
   protection fault`, `Synchronous Exception`, `rcu: INFO: rcu_sched self-detected stall`) and logs a
   `panic` event with the matched line and offset; `vm_inspect` surfaces the latest. QMP `GUEST_PANICKED`
