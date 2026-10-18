@@ -147,6 +147,6 @@ final class ThreadedFakeRunner: Sendable {
       return DeadPeer.isDeadPeer(error) && error.data["channel"] == .string("control")
         && (error.data["reason"]?.stringValue ?? "").contains("status probe")
     }
-    #expect(ContinuousClock.now - started < .seconds(2))
+    #expect(ContinuousClock.now - started < .seconds(5))
   }
 }

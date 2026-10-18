@@ -261,11 +261,17 @@ actor MutableQMPTransport: QMPTransport {
   @Test func idleConnectionIsProbedAndStaysAlive() async throws {
     let transport = MutableQMPTransport()
     let client = try await QMPClient.handshake(over: transport, timeout: .seconds(2))
-    await client.watchPeer(window: .milliseconds(300), interval: .milliseconds(40))
-    try await Task.sleep(for: .milliseconds(500))
+    await client.watchPeer(window: .seconds(3), interval: .milliseconds(40))
+    // Polled, so a busy machine only makes it slower.
+    let deadline = ContinuousClock.now + .seconds(10)
+    while await transport.received.filter({ $0 == "query-status" }).count < 3,
+      ContinuousClock.now < deadline
+    {
+      try await Task.sleep(for: .milliseconds(20))
+    }
     #expect(await client.isConnected)
     #expect(await client.deadPeerReason == nil)
-    #expect(await transport.received.filter { $0 == "query-status" }.count >= 2)
+    #expect(await transport.received.filter { $0 == "query-status" }.count >= 3)
     await client.close()
   }
 
@@ -286,7 +292,7 @@ actor MutableQMPTransport: QMPTransport {
       return DeadPeer.isDeadPeer(error) && error.data["channel"] == .string("qmp")
     }
     let elapsed = ContinuousClock.now - started
-    #expect(elapsed < .seconds(2))
+    #expect(elapsed < .seconds(5))  // the command's own timeout is 30 s
     #expect(await reported.value?.contains("query-block") == true)
     #expect(await client.isConnected == false)
     #expect(await transport.closed)
@@ -304,7 +310,10 @@ actor MutableQMPTransport: QMPTransport {
     } throws: { ($0 as? VMLabError)?.code == .timeout }
     #expect(await client.deadPeerReason == nil)
     // Once it is over, the probes find the silence.
-    try await Task.sleep(for: .milliseconds(500))
+    let deadline = ContinuousClock.now + .seconds(10)
+    while await client.deadPeerReason == nil, ContinuousClock.now < deadline {
+      try await Task.sleep(for: .milliseconds(20))
+    }
     #expect(await client.deadPeerReason != nil)
   }
 }

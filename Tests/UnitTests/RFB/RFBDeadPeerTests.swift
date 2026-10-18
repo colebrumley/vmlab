@@ -17,11 +17,11 @@ actor StillScreenTransport: RFBTransport {
 
   init(silentHandshake: Bool = false) {
     self.silentHandshake = silentHandshake
-    var init_: [UInt8] = Array("RFB 003.008\n".utf8) + [1, 1] + [0, 0, 0, 0]
-    init_ += [0, 4, 0, 3]  // 4x3
-    init_ += [32, 24, 0, 1, 0, 255, 0, 255, 0, 255, 16, 8, 0, 0, 0, 0]
-    init_ += [0, 0, 0, 4] + Array("test".utf8)
-    buffer = silentHandshake ? [] : init_
+    var serverInit: [UInt8] = Array("RFB 003.008\n".utf8) + [1, 1] + [0, 0, 0, 0]
+    serverInit += [0, 4, 0, 3]  // 4x3
+    serverInit += [32, 24, 0, 1, 0, 255, 0, 255, 0, 255, 16, 8, 0, 0, 0, 0]
+    serverInit += [0, 0, 0, 4] + Array("test".utf8)
+    buffer = silentHandshake ? [] : serverInit
   }
 
   func mute() { muted = true }
@@ -68,10 +68,14 @@ actor StillScreenTransport: RFBTransport {
   @Test func stillScreenIsProbedAndStaysAlive() async throws {
     let transport = StillScreenTransport()
     let client = try await RFBClient.handshake(over: transport, timeout: .seconds(2))
-    await client.start(deadPeerWindow: .milliseconds(300), probeInterval: .milliseconds(40))
-    try await Task.sleep(for: .milliseconds(500))
+    await client.start(deadPeerWindow: .seconds(3), probeInterval: .milliseconds(40))
+    // Polled, so a busy machine only makes it slower.
+    let deadline = ContinuousClock.now + .seconds(10)
+    while await transport.forcedRequests < 4, ContinuousClock.now < deadline {
+      try await Task.sleep(for: .milliseconds(20))
+    }
     #expect(await client.loopError == nil)
-    #expect(await transport.forcedRequests >= 3)
+    #expect(await transport.forcedRequests >= 4)
     await client.close()
   }
 
@@ -88,7 +92,7 @@ actor StillScreenTransport: RFBTransport {
       guard case .deadPeer(let reason) = error as? RFBError else { return false }
       return reason.contains("framebuffer update")
     }
-    #expect(ContinuousClock.now - started < .seconds(2))
+    #expect(ContinuousClock.now - started < .seconds(5))
     #expect(await transport.closed)
   }
 
