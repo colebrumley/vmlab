@@ -4,7 +4,8 @@ import VMLabCore
 /// `fleet` (R-903, R-904): groups of identical VMs on one segment. create plans once, checks the
 /// budget for every member at once, creates and starts `<name>-1..n` in parallel under the start
 /// gate (each waits for SSH) and records the fleet in `fleets/<name>.json`, listing members that
-/// failed with their error; status, list and destroy read and remove it.
+/// failed with their error; status, list and destroy read and remove it; exec runs one command on
+/// every member in parallel.
 struct FleetHandler: ToolHandler {
   var spec: ToolSpec { .fleet }
 
@@ -35,9 +36,8 @@ struct FleetHandler: ToolHandler {
         "name": .string(fleet.name), "destroyed": .array(destroyed.map(JSONValue.string)),
       ])
     case "exec":
-      throw VMLabError.invalidRequest(
-        field: "action", reason: "fleet exec is not built yet (R-904)",
-        hint: "Run vm_exec on each member for now.")
+      let fleet = try fleets.load(try Self.name(arguments))
+      return try await Self.exec(fleet, arguments, context: context)
     case let action:
       throw VMLabError.invalidRequest(
         field: "action", reason: "\(action) is not a fleet action",
@@ -185,6 +185,69 @@ struct FleetHandler: ToolHandler {
       member.error = error
     }
     return member
+  }
+
+  // MARK: exec
+
+  /// R-904: `command` on every member (or `members`) in parallel with `vm_exec`'s options. Each
+  /// result is `vm_exec`'s object, or `{ error }` for a member that could not run it;
+  /// `allSucceeded` is true when every one exited 0.
+  static func exec(
+    _ fleet: FleetRecord, _ arguments: ToolArguments, context: ToolContext
+  ) async throws(VMLabError) -> ToolResult {
+    let request = try VMExecHandler.request(arguments)
+    var chosen = fleet.members
+    if let value = arguments["members"] {
+      guard let names = value.arrayValue?.compactMap(\.stringValue), !names.isEmpty else {
+        throw ToolArguments.mismatch("members", "a non-empty array of member names")
+      }
+      let known = Set(fleet.members.map(\.name))
+      if let unknown = names.first(where: { !known.contains($0) }) {
+        throw VMLabError.invalidRequest(
+          field: "members", reason: "\(unknown) is not a member of \(fleet.name)",
+          hint: "Members are: \(fleet.members.map(\.name).joined(separator: ", ")).")
+      }
+      chosen = fleet.members.filter { names.contains($0.name) }
+    }
+    let manager = context.manager
+    let results = try await context.progress.during(
+      "running a command on \(chosen.count) members of \(fleet.name)", every: context.heartbeat
+    ) { () throws(VMLabError) -> [String: JSONValue] in
+      await withTaskGroup(of: (String, JSONValue).self) { group in
+        for member in chosen {
+          group.addTask {
+            guard let id = member.vm else {
+              let error =
+                member.error
+                ?? VMLabError(
+                  code: .vmNotFound, message: "\(member.name) has no VM",
+                  hint: "Recreate the fleet.", data: ["vm": .string(member.name)])
+              return (member.name, .object(["error": (try? JSONValue(encoding: error)) ?? .null]))
+            }
+            do throws(VMLabError) {
+              let vm = try await manager.attach(id)
+              let result = try await VMExecHandler.channel(of: vm, via: request.via).run(request)
+              var object: [String: JSONValue] = [
+                "exitCode": .number(Double(result.exitCode)), "stdout": .string(result.stdout),
+                "stderr": .string(result.stderr), "durationMs": .number(Double(result.durationMs)),
+                "truncated": .bool(result.truncated),
+              ]
+              if let log = result.logPath { object["logPath"] = .string(log) }
+              return (member.name, .object(object))
+            } catch {
+              return (member.name, .object(["error": (try? JSONValue(encoding: error)) ?? .null]))
+            }
+          }
+        }
+        var results: [String: JSONValue] = [:]
+        for await (name, result) in group { results[name] = result }
+        return results
+      }
+    }
+    let allSucceeded = results.values.allSatisfy { $0["exitCode"] == .number(0) }
+    return ToolResult([
+      "name": .string(fleet.name), "results": .object(results), "allSucceeded": .bool(allSucceeded),
+    ])
   }
 
   // MARK: status, destroy

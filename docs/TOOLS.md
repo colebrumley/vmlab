@@ -508,9 +508,9 @@ list: { segments: [ { name, subnet, members } ] }
 
 ## `fleet`
 
-Run several identical VMs as a group. create makes count members named <name>-1 to <name>-n from one plan of requirements (or image, a template), joins them to segment (auto makes one) and waits for SSH on each; some members may fail and are listed with their error. status reports each member; list shows fleets; exec runs command on every member, or on members, in parallel; destroy removes the fleet and its VMs.
+Run several identical VMs as a group. create makes count members named <name>-1 to <name>-n from one plan of requirements (or image, a template), joins them to segment (auto makes one) and waits for SSH on each; some members may fail and are listed with their error. status reports each member; list shows fleets; exec runs command on every member, or on members, in parallel, with vm_exec's options, and returns each member's result and allSucceeded; destroy removes the fleet and its VMs.
 
-**Errors:** `invalid_request`, `unsatisfiable`, `unverified_capability`, `limit_macos_guests`, `limit_memory`, `image_not_found`, `vm_not_found`, `timeout`
+**Errors:** `invalid_request`, `unsatisfiable`, `unverified_capability`, `limit_macos_guests`, `limit_memory`, `image_not_found`, `vm_not_found`, `timeout`, `wrong_state`
 
 **Input**
 
@@ -520,12 +520,17 @@ Run several identical VMs as a group. create makes count members named <name>-1 
 | `allowUnverified` | boolean, default `false` |  | Treat features whose slow probe has not run on this host as available, instead of failing with unverified_capability. |
 | `command` | string |  | exec: the command, as for vm_exec. |
 | `count` | integer, ≥ 1 |  | create: how many members. |
+| `cwd` | string |  | exec: working directory in each guest. |
+| `env` | object |  | exec: extra environment variables. |
 | `image` | string |  | create: image or template; overrides requirements.image. |
 | `members` | array of string |  | exec: only these members. |
 | `name` | string |  | The fleet's name (every action but list). |
 | `requirements` | [requirements](#requirements) |  | What the VM must be. Only guest is required; every other field has a default. |
 | `segment` | string |  | create: segment to join, or auto to make one for the fleet. |
+| `stdin` | string |  | exec: text fed to each member's command. |
 | `timeoutSeconds` | integer, ≥ 1 |  | create: per-member wait for SSH; exec: per-member command timeout. |
+| `user` | string |  | exec: run as this guest user (sudo) instead of the login user. |
+| `via` | `auto` \| `ssh` \| `agent`, default `auto` |  | exec: transport, as for vm_exec. |
 
 **Result**
 

@@ -68,7 +68,7 @@ struct SegmentCommand: ParsableCommand {
 struct FleetCommand: ParsableCommand {
   static let configuration = CommandConfiguration(
     commandName: "fleet", abstract: "Run groups of identical VMs on a segment (the fleet tool).",
-    subcommands: [Create.self, List.self, Status.self, Destroy.self])
+    subcommands: [Create.self, List.self, Status.self, Exec.self, Destroy.self])
 
   static func render(_ value: JSONValue) -> String {
     var lines = [
@@ -170,6 +170,46 @@ struct FleetCommand: ParsableCommand {
     }
 
     func render(_ result: ToolResult) -> String { FleetCommand.render(result.value) }
+  }
+
+  struct Exec: ToolCommand {
+    static let configuration = CommandConfiguration(
+      abstract: "Run a command on every member (or --member ones) in parallel.")
+    static let toolName = "fleet"
+
+    @Argument(help: "The fleet name.") var name: String
+    @Argument(help: "The command, run by each guest's shell.") var command: String
+    @Option(name: .customLong("member"), help: "Only this member; repeatable.")
+    var members: [String] = []
+    @Option(name: .customLong("timeout"), help: "Seconds before each member's command is killed.")
+    var timeoutSeconds: Int?
+    @Option(help: "Run as this guest user (sudo).") var user: String?
+    @Option(help: "Working directory in the guest.") var cwd: String?
+    @Flag(help: "Print the result object as JSON.") var json = false
+
+    func arguments() throws -> JSONValue {
+      var object: [String: JSONValue] = [
+        "action": .string("exec"), "name": .string(name), "command": .string(command),
+      ]
+      if !members.isEmpty { object["members"] = .array(members.map { .string($0) }) }
+      if let timeoutSeconds { object["timeoutSeconds"] = .number(Double(timeoutSeconds)) }
+      if let user { object["user"] = .string(user) }
+      if let cwd { object["cwd"] = .string(cwd) }
+      return .object(object)
+    }
+
+    func render(_ result: ToolResult) -> String {
+      let results = result.value["results"]?.objectValue ?? [:]
+      return results.keys.sorted().map { member in
+        let value = results[member] ?? .null
+        if let error = value["error"]?["message"]?.stringValue {
+          return "\(member): error: \(error)"
+        }
+        let code = Human.int(value["exitCode"])
+        let out = (value["stdout"]?.stringValue ?? "").trimmingCharacters(in: .newlines)
+        return "\(member) [\(code)]: \(out)"
+      }.joined(separator: "\n")
+    }
   }
 
   struct Destroy: ToolCommand {

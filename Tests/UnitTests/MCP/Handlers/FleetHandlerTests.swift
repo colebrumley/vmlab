@@ -167,3 +167,45 @@ import VMLabCore
     #expect(f.context.manager.segments.list().isEmpty)
   }
 }
+
+extension FleetHandlerTests {
+  /// R-904: a command on every member (or a subset) in parallel, a map of results and
+  /// `allSucceeded`; a stopped member's refusal is its result, and the flag goes false.
+  @Test func execRunsOnEveryMemberOrASubset() async throws {
+    let f = try Fixture()
+    defer { f.cleanUp() }
+    _ = try await f.call([
+      "action": .string("create"), "name": .string("node"), "count": .number(3),
+      "requirements": VMCreateHandlerTests.Fixture.requirements, "allowUnverified": .bool(true),
+    ])
+    let all = try await f.call([
+      "action": .string("exec"), "name": .string("node"), "command": .string("hostname"),
+      "timeoutSeconds": .number(30),
+    ])
+    #expect(all["allSucceeded"] == .bool(true))
+    let results = try #require(all["results"]?.objectValue)
+    #expect(results.keys.sorted() == ["node-1", "node-2", "node-3"])
+    #expect(results["node-2"]?["stdout"] == .string("hostname\n"))
+
+    let some = try await f.call([
+      "action": .string("exec"), "name": .string("node"), "command": .string("true"),
+      "members": .array([.string("node-3")]),
+    ])
+    #expect(some["results"]?.objectValue?.keys.sorted() == ["node-3"])
+
+    try await f.context.manager.perform(.stop, on: "node-1")
+    let partial = try await f.call([
+      "action": .string("exec"), "name": .string("node"), "command": .string("true"),
+    ])
+    #expect(partial["allSucceeded"] == .bool(false))
+    #expect(partial["results"]?["node-1"]?["error"]?["code"] == .string("wrong_state"))
+
+    await #expect {
+      try await f.call([
+        "action": .string("exec"), "name": .string("node"), "command": .string("true"),
+        "members": .array([.string("node-9")]),
+      ])
+    } throws: { ($0 as? VMLabError)?.data["field"] == .string("members") }
+    _ = try await f.call(["action": .string("destroy"), "name": .string("node")])
+  }
+}

@@ -49,6 +49,15 @@ import VMLabMCP
         "\(members)")
       #expect(ContinuousClock.now - started < .seconds(300))
 
+      // R-904 Verify (integration): `fleet exec "hostname"` returns each member's name.
+      let exec = try await Self.fleet(
+        context,
+        ["action": .string("exec"), "name": .string("node"), "command": .string("hostname")])
+      #expect(exec["allSucceeded"] == .bool(true), "\(exec)")
+      for member in ["node-1", "node-2", "node-3"] {
+        #expect(exec["results"]?[member]?["stdout"] == .string(member + "\n"), "\(exec)")
+      }
+
       let destroyed = try await Self.fleet(
         context, ["action": .string("destroy"), "name": .string("node")])
       #expect(destroyed["destroyed"]?.arrayValue?.count == 3)

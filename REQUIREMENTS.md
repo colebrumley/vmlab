@@ -769,7 +769,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   `qemu-hvf` is up with `fleet status` all `running` within 5 minutes, then destroyed with no
   directories left.
 
-- [ ] **R-904 `fleet exec`**
+- [x] **R-904 `fleet exec`**
   Runs a command on every member (or a `members` subset) in parallel with the same options as
   `vm_exec`, returning a map of member → result and an `allSucceeded` flag.
   **Verify:** integration: `fleet exec "hostname"` returns each member's name.
@@ -983,7 +983,7 @@ result also carries `vm` (id and name) where a VM is involved and `warnings: [St
 | `vm_manifest` | **`vm`**, `profile`: linux|macos|custom, `paths` | `{ id, path, counts }` |
 | `vm_logs` | **`vm`**, `source`: events|serial|provision|all, `tail` | `{ lines }` |
 | `net_segment` | **`action`**: create, list, destroy; `name` | `{ name, subnet, members }` |
-| `fleet` | **`action`**: create, list, status, exec, destroy; `name`, `count`, `requirements`, `image`, `segment`, `command`, `members`, `timeoutSeconds` | create/status: `{ members: [ { vm, state, ip, error? } ] }`; exec: `{ results: { name: ExecResult }, allSucceeded }` |
+| `fleet` | **`action`**: create, list, status, exec, destroy; `name`, `count`, `requirements`, `image`, `segment`, `command`, `members`, `timeoutSeconds`, and for exec `vm_exec`'s `cwd`, `env`, `stdin`, `user`, `via` | create/status: `{ members: [ { vm, state, ip, error? } ] }`; exec: `{ results: { name: ExecResult }, allSucceeded }` |
 
 `requirements` (shared by `vm_plan`, `vm_create`, `fleet create`):
 
