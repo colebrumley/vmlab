@@ -10,7 +10,7 @@ import VMLabQEMU
   @Test(.enabled(if: integrationEnabled), .timeLimit(.minutes(10)))
   func qemuRestoresEachSideOfTheTree() async throws {
     let guest = try await QEMUGuest.boot(
-      features: [.serial, .netNAT, .checkpointDisk, .checkpointLive], prepare: GuestSSH.prepare)
+      features: [.serial, .netNAT, .checkpointDisk, .checkpointLive])
     do {
       let id = guest.record.id
       let manager = guest.manager

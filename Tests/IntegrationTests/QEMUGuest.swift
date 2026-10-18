@@ -3,7 +3,7 @@ import Foundation
 import VMLabCore
 import VMLabQEMU
 
-/// A `debian-13-arm64` guest under `qemu-hvf`, created through `VMManager` and `QEMUBackend` in a
+/// A `debian-13-arm64` guest under `qemu-hvf` (or another image and QEMU profile), created through `VMManager` and `QEMUBackend` in a
 /// throwaway `VMLAB_HOME` under /tmp (short, so socket paths fit `sockaddr_un`). The home links
 /// `~/.vmlab/images` instead of pulling again. `shutdown()` kills the guest and removes the home.
 struct QEMUGuest {
@@ -13,6 +13,7 @@ struct QEMUGuest {
   let home: URL
   let manager: VMManager
   let backend: QEMUBackend
+  let backends: BackendRegistry
   let record: VMRecord
   let machine: QEMUMachine
   /// The warnings of the start (R-400: `ssh_unreachable` when exec_ssh was granted and the guest
@@ -62,8 +63,8 @@ struct QEMUGuest {
       }
       let machine = try await backend.machine(for: running)
       return QEMUGuest(
-        home: home, manager: manager, backend: backend, record: running, machine: machine,
-        startWarnings: outcome.warnings)
+        home: home, manager: manager, backend: backend, backends: registry, record: running,
+        machine: machine, startWarnings: outcome.warnings)
     } catch {
       try? await backend.kill(created)
       try? FileManager.default.removeItem(at: home)

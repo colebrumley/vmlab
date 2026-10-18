@@ -40,6 +40,9 @@ public enum GDBCommand {
   public static let step = "s"
   public static let readRegisters = "g"
 
+  /// `Hg<thread>`: selects the thread for register and memory packets.
+  public static func selectThread(_ thread: String) -> String { "Hg" + thread }
+
   public static func writeRegisters(_ data: [UInt8]) -> String { "G" + Hex.encode(data) }
 
   public static func readRegister(_ number: Int) -> String { "p" + Hex.number(number) }
