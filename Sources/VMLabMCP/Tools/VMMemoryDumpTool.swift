@@ -6,7 +6,8 @@ extension ToolSpec {
     summary:
       "Write guest physical memory to a file on the host under the VM's dumps/ directory: the "
       + "range of size bytes at address as raw bytes, or, with neither, all memory as an ELF core "
-      + "for crash or volatility. Ranges over 256 MB need confirm: true. Returns the path, size "
+      + "for crash or volatility. Ranges over \(VMMemoryDumpHandler.confirmAbove >> 20) MB need "
+      + "confirm: true. Returns the path, size "
       + "and format; read it with host tools. Needs the memory_dump feature.",
     inputSchema: Schema.input(
       [

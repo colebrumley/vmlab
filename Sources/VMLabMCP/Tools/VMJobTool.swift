@@ -13,7 +13,8 @@ extension ToolSpec {
         "vm": Schema.vm,
         "job": Schema.string("The job id vm_exec returned."),
         "action": Schema.action(["read", "wait", "kill"], "What to do with the job."),
-        "timeoutSeconds": Schema.timeoutSeconds("wait: the longest to block."),
+        "timeoutSeconds": Schema.timeoutSeconds(
+          "wait: the longest to block.", default: VMJobHandler.defaultWaitSeconds),
       ], required: ["vm", "job", "action"]),
     outputShape: "{ output, finished, exitCode? }",
     errors: [.vmNotFound, .invalidRequest, .guestUnreachable, .timeout])

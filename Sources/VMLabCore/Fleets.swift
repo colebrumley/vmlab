@@ -101,11 +101,13 @@ public enum FleetPlanning {
 
   /// A fleet name is also its auto segment's name: `[a-z0-9-]`, at most 28 characters (so
   /// `<name>-64` stays a valid VM name and the segment name fits).
+  public static let maxNameLength = 28
+
   public static func checkName(_ name: String) throws(VMLabError) {
-    guard SegmentStore.isValidName(name), name.utf8.count <= 28 else {
+    guard SegmentStore.isValidName(name), name.utf8.count <= maxNameLength else {
       throw VMLabError.invalidRequest(
         field: "name", reason: "\"\(name)\" is not a fleet name",
-        hint: "Use lowercase letters, digits and '-', at most 28 characters.")
+        hint: "Use lowercase letters, digits and '-', at most \(maxNameLength) characters.")
     }
   }
 

@@ -141,7 +141,7 @@ Create a VM from requirements: plans it (as vm_plan), pulls the image if needed,
 | `allowUnverified` | boolean, default `false` |  | Treat features whose slow probe has not run on this host as available, instead of failing with unverified_capability. |
 | `autostart` | boolean, default `true` |  | Start the VM once created. |
 | `confirm` | boolean, default `false` |  | Allow a large image pull the server asks to confirm. |
-| `name` | string |  | A unique name for the VM; defaults to its id. |
+| `name` | string, ≤ 64 characters |  | A unique name for the VM; defaults to its id. 1 to 64 letters, digits, '.', '_' or '-', starting with a letter or digit. |
 
 **Result**
 
@@ -181,7 +181,7 @@ Everything about one VM: its record, the plan and resolved features (what channe
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `vm` | string | yes | The VM's id (vm-xxxxxx) or name, as vm_list or vm_create returned it. |
+| `vm` | string, ≤ 64 characters | yes | The VM's id (vm-xxxxxx) or name, as vm_list or vm_create returned it. |
 
 **Result**
 
@@ -205,11 +205,11 @@ Change a VM's power state. start boots it and waits for SSH; stop shuts it down 
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `vm` | string | yes | The VM's id (vm-xxxxxx) or name, as vm_list or vm_create returned it. |
+| `vm` | string, ≤ 64 characters | yes | The VM's id (vm-xxxxxx) or name, as vm_list or vm_create returned it. |
 | `action` | `start` \| `stop` \| `kill` \| `pause` \| `resume` \| `reset` \| `destroy` \| `clone` | yes | The transition. |
 | `force` | boolean, default `false` |  | destroy: even when another VM's disk depends on this one. |
 | `from` | string |  | clone: a checkpoint name to clone from (default: current disk). |
-| `name` | string |  | clone: the new VM's name. |
+| `name` | string, ≤ 64 characters |  | clone: the new VM's name. 1 to 64 letters, digits, '.', '_' or '-', starting with a letter or digit. |
 | `timeoutSeconds` | integer, ≥ 1 |  | start: how long to wait for SSH; stop: the grace period before kill. |
 
 **Result**
@@ -229,7 +229,7 @@ Run a shell command in the guest and return its exit code, stdout and stderr. Us
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `vm` | string | yes | The VM's id (vm-xxxxxx) or name, as vm_list or vm_create returned it. |
+| `vm` | string, ≤ 64 characters | yes | The VM's id (vm-xxxxxx) or name, as vm_list or vm_create returned it. |
 | `command` | string | yes | The command, run by the guest's shell. |
 | `background` | boolean, default `false` |  | Return a job id at once instead of waiting. |
 | `cwd` | string |  | Working directory in the guest. |
@@ -256,10 +256,10 @@ Follow a background command started by vm_exec with background: true. read retur
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `vm` | string | yes | The VM's id (vm-xxxxxx) or name, as vm_list or vm_create returned it. |
+| `vm` | string, ≤ 64 characters | yes | The VM's id (vm-xxxxxx) or name, as vm_list or vm_create returned it. |
 | `job` | string | yes | The job id vm_exec returned. |
 | `action` | `read` \| `wait` \| `kill` | yes | What to do with the job. |
-| `timeoutSeconds` | integer, ≥ 1 |  | wait: the longest to block. |
+| `timeoutSeconds` | integer, ≥ 1, default `60` |  | wait: the longest to block. |
 
 **Result**
 
@@ -277,7 +277,7 @@ Copy files between the host and the guest over SSH. push copies the host path lo
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `vm` | string | yes | The VM's id (vm-xxxxxx) or name, as vm_list or vm_create returned it. |
+| `vm` | string, ≤ 64 characters | yes | The VM's id (vm-xxxxxx) or name, as vm_list or vm_create returned it. |
 | `action` | `push` \| `pull` | yes | Direction of the copy. |
 | `remote` | string | yes | Path in the guest. |
 | `local` | string |  | Absolute path on the host, under your home or /tmp (push: required; pull: optional). |
@@ -290,7 +290,7 @@ Copy files between the host and the guest over SSH. push copies the host path lo
 
 ## `vm_computer`
 
-See and drive the guest's display like a computer-use tool. screenshot returns an image scaled so its long edge is at most maxEdge (default 1280) with the scale used; pass diffFrom a previous screenshot id to get only the changed region, or unchanged: true. zoom crops region at full resolution. Clicks, drags, mouse_move, type, key (xdotool names such as Return, ctrl+c, cmd+space), scroll and wait act, then return a fresh screenshot after settleMs. Coordinates are guest pixels unless scaled: true, which means the coordinates of the last scaled screenshot. cursor_position and screen_info return no image. Needs the gui feature.
+See and drive the guest's display like a computer-use tool. screenshot returns an image scaled so its long edge is at most maxEdge (default 1280) with the scale used; pass diffFrom a previous screenshot id to get only the changed region, or unchanged: true. zoom crops region at full resolution. Clicks, drags, mouse_move, type, key (xdotool names such as Return, ctrl+c, cmd+space), scroll and wait act, then return a fresh screenshot after settleMs (at most 60000 ms). Coordinates are guest pixels unless scaled: true, which means the coordinates of the last scaled screenshot; each coordinate and region corner is 0 to 16777216. wait lasts at most 60 s; scroll sends at most 100 clicks. cursor_position and screen_info return no image. Needs the gui feature.
 
 **Errors:** `vm_not_found`, `wrong_state`, `capability_missing`, `invalid_request`, `engine_error`
 
@@ -298,20 +298,20 @@ See and drive the guest's display like a computer-use tool. screenshot returns a
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `vm` | string | yes | The VM's id (vm-xxxxxx) or name, as vm_list or vm_create returned it. |
+| `vm` | string, ≤ 64 characters | yes | The VM's id (vm-xxxxxx) or name, as vm_list or vm_create returned it. |
 | `action` | `screenshot` \| `left_click` \| `right_click` \| `middle_click` \| `double_click` \| `triple_click` \| `left_click_drag` \| `mouse_move` \| `cursor_position` \| `type` \| `key` \| `scroll` \| `wait` \| `zoom` \| `screen_info` | yes | What to do. |
-| `coordinate` | array of integer, ≥ 0 (2 items) |  | [x, y]: the click, move or scroll point; the drag's end. |
+| `coordinate` | array of integer, 0–16777216 (2 items) |  | [x, y]: the click, move or scroll point; the drag's end. |
 | `diffFrom` | string |  | screenshot: id of an earlier screenshot of this VM; return only what changed. |
-| `durationSeconds` | number, ≥ 0 |  | wait: how long to wait. |
+| `durationSeconds` | number, 0–60 |  | wait: how long to wait, in seconds. |
 | `format` | `png` \| `jpeg`, default `png` |  | Image encoding. |
 | `maxEdge` | integer, ≥ 1, default `1280` |  | Longest edge of the returned image in pixels. |
 | `quality` | integer, 1–100, default `80` |  | jpeg quality, 1 (smallest) to 100. |
-| `region` | array of integer, ≥ 0 (4 items) |  | [x0, y0, x1, y1]: screenshot or zoom only this rectangle. |
+| `region` | array of integer, 0–16777216 (4 items) |  | [x0, y0, x1, y1]: screenshot or zoom only this rectangle. |
 | `scaled` | boolean, default `false` |  | Coordinates are in the last screenshot's scaled space, not guest pixels. |
-| `scrollAmount` | integer, ≥ 1, default `3` |  | scroll: wheel clicks. |
+| `scrollAmount` | integer, 1–100, default `3` |  | scroll: wheel clicks. |
 | `scrollDirection` | `up` \| `down` \| `left` \| `right` |  | scroll: direction. |
-| `settleMs` | integer, ≥ 0, default `300` |  | Delay before the screenshot that follows an action. |
-| `startCoordinate` | array of integer, ≥ 0 (2 items) |  | left_click_drag: [x, y] where the drag starts. |
+| `settleMs` | integer, 0–60000, default `300` |  | Delay in milliseconds before the screenshot that follows an action. |
+| `startCoordinate` | array of integer, 0–16777216 (2 items) |  | left_click_drag: [x, y] where the drag starts. |
 | `text` | string |  | type: the text to type; key: the key or chord, e.g. ctrl+alt+t. |
 
 **Result**
@@ -332,13 +332,13 @@ The guest's serial console, captured from the first byte of boot. read returns t
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `vm` | string | yes | The VM's id (vm-xxxxxx) or name, as vm_list or vm_create returned it. |
+| `vm` | string, ≤ 64 characters | yes | The VM's id (vm-xxxxxx) or name, as vm_list or vm_create returned it. |
 | `action` | `read` \| `tail` \| `write` \| `wait` | yes | What to do. |
-| `lines` | integer, ≥ 1, default `50` |  | tail: how many lines. |
-| `pattern` | string |  | wait: a regular expression to wait for. |
+| `lines` | integer, 1–10000, default `50` |  | tail: how many lines. |
+| `pattern` | string, ≤ 1024 characters |  | wait: a regular expression to wait for, at most 1024 UTF-8 bytes. |
 | `since` | integer, ≥ 0 |  | read, wait: the byte offset to start from. |
 | `text` | string |  | write: the text to send. |
-| `timeoutSeconds` | integer, ≥ 1, default `30` |  | wait: the longest to block. |
+| `timeoutSeconds` | integer, 1–3600, default `30` |  | wait: the longest to block. |
 
 **Result**
 
@@ -356,12 +356,12 @@ Debug the guest CPU through its GDB stub. info gives the endpoint a human can at
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `vm` | string | yes | The VM's id (vm-xxxxxx) or name, as vm_list or vm_create returned it. |
+| `vm` | string, ≤ 64 characters | yes | The VM's id (vm-xxxxxx) or name, as vm_list or vm_create returned it. |
 | `action` | `info` \| `halt` \| `continue` \| `step` \| `wait` \| `breakpoint_add` \| `breakpoint_remove` \| `breakpoints` \| `registers` \| `read_memory` \| `write_memory` | yes | What to do. |
 | `address` | string |  | Guest address in 0x hex, e.g. 0xffff800010000000. |
-| `data` | string |  | write_memory: the bytes as hex, e.g. 1f2003d5. |
+| `data` | string |  | write_memory: the bytes as hex, e.g. 1f2003d5, at most 65536 bytes. |
 | `kind` | `software` \| `hardware` \| `watch_write` \| `watch_read` \| `watch_access`, default `software` |  | breakpoint_add, breakpoint_remove: the kind of stop point. |
-| `size` | integer, ≥ 1 |  | read_memory: bytes to read; watchpoints: bytes to watch. |
+| `size` | integer, 1–65536 |  | read_memory: bytes to read, 1 to 65536; watchpoints: bytes to watch, 1, 2, 4 or 8 (default 1). |
 | `symbolFile` | string |  | A host path to the guest's symbol file (vmlinux, a kernel .debug), recorded for the info output so a human can load it; vmlab resolves no symbols. |
 | `thread` | string |  | step, continue, registers, read_memory, write_memory: the thread (CPU) to act on, as a stop reports it (e.g. p01.02). |
 | `timeoutSeconds` | integer, ≥ 1, default `30` |  | wait: the longest to block. |
@@ -384,7 +384,7 @@ Ask the engine about the machine rather than the guest OS: status (run state), b
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `vm` | string | yes | The VM's id (vm-xxxxxx) or name, as vm_list or vm_create returned it. |
+| `vm` | string, ≤ 64 characters | yes | The VM's id (vm-xxxxxx) or name, as vm_list or vm_create returned it. |
 | `query` | `status` \| `block` \| `pci` \| `cpus` \| `memory_tree` \| `registers` \| `devices` \| `raw` | yes | What to ask. |
 | `hmp` | string |  | raw: an HMP info command, e.g. info mtree. |
 | `qmp` | string |  | raw: a read-only QMP command, e.g. query-chardev. |
@@ -405,7 +405,7 @@ Write guest physical memory to a file on the host under the VM's dumps/ director
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `vm` | string | yes | The VM's id (vm-xxxxxx) or name, as vm_list or vm_create returned it. |
+| `vm` | string, ≤ 64 characters | yes | The VM's id (vm-xxxxxx) or name, as vm_list or vm_create returned it. |
 | `address` | string |  | Guest physical start address in 0x hex. |
 | `confirm` | boolean, default `false` |  | Allow a dump the server asks to confirm (it states the size). |
 | `size` | integer, ≥ 1 |  | Bytes to dump from address. |
@@ -426,12 +426,12 @@ Named snapshots of a VM, kept as a tree. create saves one (mode live includes me
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `vm` | string | yes | The VM's id (vm-xxxxxx) or name, as vm_list or vm_create returned it. |
+| `vm` | string, ≤ 64 characters | yes | The VM's id (vm-xxxxxx) or name, as vm_list or vm_create returned it. |
 | `action` | `create` \| `list` \| `restore` \| `delete` \| `diff` | yes | What to do. |
 | `from` | string |  | diff: the older side (checkpoint, manifest id or @now). |
 | `manifest` | boolean, default `false` |  | create: also take a guest manifest for diff. |
 | `mode` | `auto` \| `disk` \| `live`, default `auto` |  | create: what to save. |
-| `name` | string |  | create, restore, delete: the checkpoint's name; unique per VM. |
+| `name` | string, ≤ 64 characters |  | create, restore, delete: the checkpoint's name; unique per VM. 1 to 64 letters, digits, '.', '_' or '-', starting with a letter or digit. |
 | `note` | string |  | create: a note kept with the checkpoint. |
 | `recursive` | boolean, default `false` |  | delete: also delete its descendants. |
 | `to` | string |  | diff: the newer side (checkpoint, manifest id or @now). |
@@ -457,7 +457,7 @@ Take a manifest of the running guest over SSH: files under paths (size, mode, mt
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `vm` | string | yes | The VM's id (vm-xxxxxx) or name, as vm_list or vm_create returned it. |
+| `vm` | string, ≤ 64 characters | yes | The VM's id (vm-xxxxxx) or name, as vm_list or vm_create returned it. |
 | `paths` | array of string |  | Roots to walk for files. |
 | `profile` | `linux` \| `macos` \| `custom` |  | What to record besides paths; defaults to the guest's OS. |
 
@@ -477,9 +477,9 @@ Read a VM's logs on the host: events (lifecycle, panics, warnings), serial (the 
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `vm` | string | yes | The VM's id (vm-xxxxxx) or name, as vm_list or vm_create returned it. |
+| `vm` | string, ≤ 64 characters | yes | The VM's id (vm-xxxxxx) or name, as vm_list or vm_create returned it. |
 | `source` | `events` \| `serial` \| `provision` \| `all`, default `all` |  | Which log. |
-| `tail` | integer, ≥ 1, default `100` |  | Return only the last tail lines. |
+| `tail` | integer, 1–10000, default `100` |  | Return only the last tail lines. |
 
 **Result**
 
@@ -498,7 +498,7 @@ Manage private host-local Ethernet segments that guests join with a second NIC (
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `action` | `create` \| `list` \| `destroy` | yes | What to do. |
-| `name` | string |  | create, destroy: the segment's name. |
+| `name` | string, ≤ 32 characters |  | create, destroy: the segment's name. Lowercase letters, digits and '-', at most 32 characters. |
 
 **Result**
 
@@ -521,14 +521,14 @@ Run several identical VMs as a group. create makes count members named <name>-1 
 | `allowUnverified` | boolean, default `false` |  | Treat features whose slow probe has not run on this host as available, instead of failing with unverified_capability. |
 | `command` | string |  | exec: the command, as for vm_exec. |
 | `confirm` | boolean, default `false` |  | create: allow a large image pull the server asks to confirm. |
-| `count` | integer, ≥ 1 |  | create: how many members. |
+| `count` | integer, 1–64 |  | create: how many members, 1 to 64. |
 | `cwd` | string |  | exec: working directory in each guest. |
 | `env` | object |  | exec: extra environment variables. |
 | `image` | string |  | create: image or template; overrides requirements.image. |
-| `members` | array of string |  | exec: only these members. |
-| `name` | string |  | The fleet's name (every action but list). |
+| `members` | array of string, 1–64 items |  | exec: only these members. |
+| `name` | string, ≤ 28 characters |  | The fleet's name (every action but list): lowercase letters, digits and '-', at most 28 characters. |
 | `requirements` | [requirements](#requirements) |  | What the VM must be. Only guest is required; every other field has a default. |
-| `segment` | string |  | create: segment to join, or auto to make one for the fleet. |
+| `segment` | string, ≤ 32 characters |  | create: segment to join, or auto to make one for the fleet. |
 | `stdin` | string |  | exec: text fed to each member's command. |
 | `timeoutSeconds` | integer, ≥ 1 |  | create: per-member wait for SSH; exec: per-member command timeout. |
 | `user` | string |  | exec: run as this guest user (sudo) instead of the login user. |
@@ -572,7 +572,7 @@ The `requirements` object of `vm_plan`, `vm_create` and `fleet` (`Requirements` 
 | `network.forwards[].guest` | integer, 1–65535 | yes | Guest port. |
 | `network.forwards[].host` | integer, 1–65535 |  | Host port on 127.0.0.1; omit to let vmlab choose one. |
 | `network.mode` | `nat` \| `none` |  | nat for outbound internet, none for no network device at all. |
-| `network.segment` | string |  | A private segment (net_segment) to join with a second NIC. |
+| `network.segment` | string, ≤ 32 characters |  | A private segment (net_segment) to join with a second NIC. Lowercase letters, digits and '-', at most 32 characters. |
 | `prefer` | array of `exec_ssh` \| `exec_agent` \| `gui` \| `gui_preboot` \| `gui_desktop` \| `gui_accel` \| `serial` \| `gdb` \| `introspection` \| `memory_dump` \| `direct_kernel_boot` \| `custom_firmware` \| `custom_devices` \| `halt_at_start` \| `checkpoint_disk` \| `checkpoint_live` \| `pause` \| `net_nat` \| `net_fast` \| `net_segment` \| `net_port_forward` \| `net_none` \| `rosetta` \| `nested_virt` \| `shared_dir` \| `cloud_init` \| `many_guests` |  | Features to have when possible; they rank profiles but never rule one out. |
 | `provision` | object |  | First-boot provisioning beyond vmlab's own setup. |
 | `provision.packages` | array of string |  | Packages cloud-init installs on first boot (Linux only). |

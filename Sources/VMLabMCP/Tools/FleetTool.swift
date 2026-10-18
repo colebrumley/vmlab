@@ -14,13 +14,19 @@ extension ToolSpec {
     inputSchema: Schema.input(
       [
         "action": Schema.action(["create", "list", "status", "exec", "destroy"], "What to do."),
-        "name": Schema.string("The fleet's name (every action but list)."),
-        "count": Schema.integer("create: how many members.", minimum: 1),
+        "name": Schema.string(
+          "The fleet's name (every action but list): lowercase letters, digits and '-', at most "
+            + "\(FleetPlanning.maxNameLength) characters.", maxLength: FleetPlanning.maxNameLength),
+        "count": Schema.integer(
+          "create: how many members, 1 to \(FleetPlanning.maxMembers).", minimum: 1,
+          maximum: FleetPlanning.maxMembers),
         "requirements": Schema.requirements,
         "allowUnverified": Schema.allowUnverified,
         "confirm": Schema.boolean("create: allow a large image pull the server asks to confirm."),
         "image": Schema.string("create: image or template; overrides requirements.image."),
-        "segment": Schema.string("create: segment to join, or auto to make one for the fleet."),
+        "segment": Schema.string(
+          "create: segment to join, or auto to make one for the fleet.",
+          maxLength: SegmentStore.maxNameLength),
         "command": Schema.string("exec: the command, as for vm_exec."),
         "cwd": Schema.string("exec: working directory in each guest."),
         "env": Schema.object(
@@ -31,7 +37,8 @@ extension ToolSpec {
         "via": Schema.string(
           "exec: transport, as for vm_exec.", enum: ["auto", "ssh", "agent"], default: "auto"),
         "members": Schema.array(
-          Schema.string("A member's name."), "exec: only these members.", unique: true),
+          Schema.string("A member's name."), "exec: only these members.", minItems: 1,
+          maxItems: FleetPlanning.maxMembers, unique: true),
         "timeoutSeconds": Schema.timeoutSeconds(
           "create: per-member wait for SSH; exec: per-member command timeout."),
       ], required: ["action"]),

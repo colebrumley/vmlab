@@ -92,6 +92,13 @@ struct VMComputerHandler: ToolHandler {
   ]
   /// The longest `wait`.
   static let maxWaitSeconds = 60.0
+  /// The longest `settleMs`: a minute, like `wait`.
+  static let maxSettleMs = 60_000
+  static let defaultSettleMs = 300
+  /// The most wheel clicks one `scroll` sends.
+  static let maxScrollAmount = 100
+  /// `quality` for jpeg.
+  static let qualityRange = 1...100
   /// The pause between the clicks of a double or triple click, and between drag steps.
   static let clickGap = Duration.milliseconds(60)
   /// How long a click holds the button: macOS Screen Sharing ignores a press and release that
@@ -191,10 +198,11 @@ struct Computer {
     // An acting action answers with a fresh screenshot once the guest has had time to react. Its
     // arguments are checked before any input goes out, so a refused call has done nothing and a
     // retry does not type twice.
-    let settle = try arguments.int("settleMs") ?? 300
-    guard settle >= 0 else {
+    let settle = try arguments.int("settleMs") ?? VMComputerHandler.defaultSettleMs
+    guard (0...VMComputerHandler.maxSettleMs).contains(settle) else {
       throw VMLabError.invalidRequest(
-        field: "settleMs", reason: "settleMs must be at least 0", hint: "Pass 0 or more.")
+        field: "settleMs", reason: "settleMs must be 0 to \(VMComputerHandler.maxSettleMs)",
+        hint: "Settle for at most a minute; use wait for longer pauses.")
     }
     let answer = try screenshotRequest(region: nil, diffFrom: nil)
     switch action {
@@ -299,9 +307,11 @@ struct Computer {
         hint: "Use up, down, left or right.")
     }
     let amount = try arguments.int("scrollAmount") ?? 3
-    guard (1...100).contains(amount) else {
+    guard (1...VMComputerHandler.maxScrollAmount).contains(amount) else {
       throw VMLabError.invalidRequest(
-        field: "scrollAmount", reason: "scrollAmount must be 1 to 100", hint: "Scroll less at once."
+        field: "scrollAmount",
+        reason: "scrollAmount must be 1 to \(VMComputerHandler.maxScrollAmount)",
+        hint: "Scroll less at once."
       )
     }
     var point = try await optionalPoint("coordinate")
@@ -355,9 +365,11 @@ struct Computer {
         field: "format", reason: "format must be png or jpeg", hint: "Use png or jpeg.")
     }
     let quality = try arguments.int("quality") ?? ScreenshotRequest.defaultQuality
-    guard (1...100).contains(quality) else {
+    let range = VMComputerHandler.qualityRange
+    guard range.contains(quality) else {
       throw VMLabError.invalidRequest(
-        field: "quality", reason: "quality must be 1 to 100", hint: "Pass 1 to 100, or omit it.")
+        field: "quality", reason: "quality must be \(range.lowerBound) to \(range.upperBound)",
+        hint: "Pass \(range.lowerBound) to \(range.upperBound), or omit it.")
     }
     let maxEdge = try arguments.int("maxEdge") ?? ScreenshotRequest.defaultMaxEdge
     guard maxEdge >= 1 else {

@@ -109,7 +109,7 @@ import VMLabCore
         if case .string = item {} else { out.append("\(path): enum value is not a string") }
       }
     }
-    for key in ["minimum", "maximum", "minItems", "maxItems"] {
+    for key in ["minimum", "maximum", "minItems", "maxItems", "maxLength"] {
       if let value = node[key], case .number = value {
       } else if node[key] != nil {
         out.append("\(path): \(key) is not a number")
