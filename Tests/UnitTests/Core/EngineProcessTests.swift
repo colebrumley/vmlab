@@ -12,10 +12,10 @@ import Testing
     try FileManager.default.createDirectory(at: vm, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: root) }
     let fake = root.appending(path: "qemu-system-aarch64")
-    try FileManager.default.copyItem(atPath: "/bin/sh", toPath: fake.path)
-    // A copied platform binary keeps Apple's signature, which the kernel no longer accepts at
-    // its new path: it SIGKILLs it at exec (seen as a flaky "killed by another test"). An ad-hoc
-    // signature makes the copy run.
+    try FileManager.default.copyItem(atPath: "/bin/bash", toPath: fake.path)
+    // bash, not /bin/sh: macOS's sh is a shim that re-execs bash, after which the process's
+    // path is /bin/bash. A copied platform binary keeps Apple's signature, which the kernel
+    // rejects at its new path (SIGKILL at exec); an ad-hoc signature makes the copy run.
     let sign = Process()
     sign.executableURL = URL(filePath: "/usr/bin/codesign")
     sign.arguments = ["--force", "--sign", "-", fake.path]
@@ -25,7 +25,7 @@ import Testing
     try #require(sign.terminationStatus == 0, "codesign of the fake engine failed")
     let engine = Process()
     engine.executableURL = fake
-    // A shell named like QEMU that stays the process (`; :` keeps it from exec'ing sleep); its
+    // A bash named like QEMU that stays the process (`; :` keeps it from exec'ing sleep); its
     // `$1` stands for QEMU's -pidfile argument inside the VM directory.
     engine.arguments = ["-c", "sleep 30; :", "qemu", vm.appending(path: "qemu.pid").path]
     try engine.run()
