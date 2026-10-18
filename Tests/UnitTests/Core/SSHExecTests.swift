@@ -13,12 +13,12 @@ import VMLabCore
       dir = FileManager.default.temporaryDirectory.appending(path: "vmlab-exec-\(UUID())")
       try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
       let ssh = dir.appending(path: "ssh")
-      try """
-      #!/bin/sh
-      for a; do last=$a; done
-      exec /bin/sh -c "$last"
-      """.write(to: ssh, atomically: true, encoding: .utf8)
-      try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: ssh.path)
+      try TestScripts.install(
+        """
+        #!/bin/sh
+        for a; do last=$a; done
+        exec /bin/sh -c "$last"
+        """, at: ssh)
       let target = SSHTarget(
         vm: "vm-t", endpoint: SSHEndpoint(host: "127.0.0.1", port: 1),
         user: NSUserName(), vmDirectory: dir)
@@ -64,9 +64,7 @@ import VMLabCore
   func unreachableSaysWhetherItConnected(stderr: String, connected: Bool) async throws {
     let f = try Fixture()
     let ssh = f.dir.appending(path: "ssh-fails")
-    try "#!/bin/sh\necho '\(stderr)' >&2\nexit 255\n".write(
-      to: ssh, atomically: true, encoding: .utf8)
-    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: ssh.path)
+    try TestScripts.install("#!/bin/sh\necho '\(stderr)' >&2\nexit 255\n", at: ssh)
     let channel = SSHExecChannel(target: f.channel.target, ssh: ssh.path)
     let error = await #expect(throws: VMLabError.self) {
       try await channel.run(ExecRequest(command: "true"))
@@ -129,17 +127,17 @@ import VMLabCore
     // A "remote" that starts 2 s late, in its own process group (ending the local ssh does not
     // end it, as on a real guest); the kill connection runs at once.
     let slow = f.dir.appending(path: "ssh-slow")
-    try """
-    #!/bin/sh
-    for a; do last=$a; done
-    case "$last" in
-      *'rc=$?'*)
-        perl -e 'setpgrp(0, 0); exec @ARGV' /bin/sh -c 'sleep 2; exec /bin/sh -c "$1"' x "$last" &
-        wait ;;
-      *) exec /bin/sh -c "$last" ;;
-    esac
-    """.write(to: slow, atomically: true, encoding: .utf8)
-    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: slow.path)
+    try TestScripts.install(
+      """
+      #!/bin/sh
+      for a; do last=$a; done
+      case "$last" in
+        *'rc=$?'*)
+          perl -e 'setpgrp(0, 0); exec @ARGV' /bin/sh -c 'sleep 2; exec /bin/sh -c "$1"' x "$last" &
+          wait ;;
+        *) exec /bin/sh -c "$last" ;;
+      esac
+      """, at: slow)
     let channel = SSHExecChannel(target: f.channel.target, ssh: slow.path)
     let marker = f.dir.appending(path: "late-child")
     let error = await #expect(throws: VMLabError.self) {
@@ -159,9 +157,9 @@ import VMLabCore
   @Test func sshFailureIsGuestUnreachable() async throws {
     let f = try Fixture()
     let ssh = f.dir.appending(path: "ssh-refused")
-    try "#!/bin/sh\necho 'ssh: connect to host x port 1: Connection refused' >&2\nexit 255\n"
-      .write(to: ssh, atomically: true, encoding: .utf8)
-    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: ssh.path)
+    try TestScripts.install(
+      "#!/bin/sh\necho 'ssh: connect to host x port 1: Connection refused' >&2\nexit 255\n", at: ssh
+    )
     let channel = SSHExecChannel(target: f.channel.target, ssh: ssh.path)
     let error = await #expect(throws: VMLabError.self) {
       try await channel.run(ExecRequest(command: "true"))
@@ -204,14 +202,14 @@ import VMLabCore
   @Test func aDroppedRunAfterTheStartNeverFallsBack() async throws {
     let f = try Fixture()
     let ssh = f.dir.appending(path: "ssh-drops")
-    try """
-    #!/bin/sh
-    for a; do last=$a; done
-    /bin/sh -c "$last" 2>&1 >/dev/null | head -n 1 >&2
-    echo 'ssh: connect to host x port 1: Connection refused' >&2
-    exit 255
-    """.write(to: ssh, atomically: true, encoding: .utf8)
-    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: ssh.path)
+    try TestScripts.install(
+      """
+      #!/bin/sh
+      for a; do last=$a; done
+      /bin/sh -c "$last" 2>&1 >/dev/null | head -n 1 >&2
+      echo 'ssh: connect to host x port 1: Connection refused' >&2
+      exit 255
+      """, at: ssh)
     let channel = SSHExecChannel(target: f.channel.target, ssh: ssh.path)
     let error = await #expect(throws: VMLabError.self) {
       try await channel.run(ExecRequest(command: "sleep 0.2"))

@@ -21,8 +21,7 @@ import Testing
           dst=${dst#*@127.0.0.1:}
           exec cp -R "$src" "$dst"
           """
-      try ("#!/bin/sh\n" + body + "\n").write(to: scp, atomically: true, encoding: .utf8)
-      try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: scp.path)
+      try TestScripts.install(("#!/bin/sh\n" + body + "\n"), at: scp)
       let target = SSHTarget(
         vm: "vm-t", endpoint: SSHEndpoint(host: "127.0.0.1", port: 2222), user: "debian",
         vmDirectory: dir)

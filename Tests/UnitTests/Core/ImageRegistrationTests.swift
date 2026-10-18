@@ -39,8 +39,7 @@ final class RecordingRunner: CommandRunning {
       try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
       for tool in tools {
         let url = bin.appending(path: tool)
-        try Data("#!/bin/sh\nexit 1\n".utf8).write(to: url)
-        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
+        try TestScripts.install("#!/bin/sh\nexit 1\n", at: url)
       }
       runner = RecordingRunner(status: status)
       store = ImageStore(

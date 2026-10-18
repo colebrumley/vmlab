@@ -502,9 +502,7 @@ func eventually(_ condition: () async -> Bool) async -> Bool {
     defer { server.cleanUp() }
     let real = try #require(SerialMatcher.locate(environment: [:]))
     let script = server.directory.appending(path: "slow-match")
-    try "#!/bin/sh\nsleep 1.5\nexec '\(real)'\n".write(
-      to: script, atomically: true, encoding: .utf8)
-    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+    try TestScripts.install("#!/bin/sh\nsleep 1.5\nexec '\(real)'\n", at: script)
     let channel = SerialChannel(
       socketPath: server.path, logURL: server.logURL, matcherPath: script.path)
     try await channel.start()

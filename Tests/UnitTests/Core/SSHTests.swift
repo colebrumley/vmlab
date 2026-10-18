@@ -104,14 +104,15 @@ import VMLabCore
     let dir = try Self.tempDir()
     let counter = dir.appending(path: "count")
     let script = dir.appending(path: "ssh")
-    try """
-    #!/bin/sh
-    n=$(cat '\(counter.path)' 2>/dev/null || echo 0)
-    n=$((n+1)); echo $n > '\(counter.path)'
-    [ $n -ge 3 ] && exit 0
-    echo "ssh: connect to host 127.0.0.1 port 1: Connection refused" >&2; exit 255
-    """.write(to: script, atomically: true, encoding: .utf8)
-    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+    try TestScripts.install(
+      """
+      #!/bin/sh
+      counter="$(dirname "$0")/count"
+      n=$(cat "$counter" 2>/dev/null || echo 0)
+      n=$((n+1)); echo $n > "$counter"
+      [ $n -ge 3 ] && exit 0
+      echo "ssh: connect to host 127.0.0.1 port 1: Connection refused" >&2; exit 255
+      """, at: script)
     let target = SSHTarget(
       vm: "vm-a", endpoint: SSHEndpoint(host: "127.0.0.1", port: 1), user: "u", vmDirectory: dir)
     let readiness = SSHReadiness(ssh: script.path, interval: .milliseconds(10))

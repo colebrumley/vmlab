@@ -111,8 +111,7 @@ final class TartRunner: CommandRunning {
     let bin = root.appending(path: "bin")
     try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
     let tool = bin.appending(path: "qemu-img")
-    try Data("#!/bin/sh\nexit 1\n".utf8).write(to: tool)
-    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: tool.path)
+    try TestScripts.install("#!/bin/sh\nexit 1\n", at: tool)
     return (root.appending(path: "home"), bin)
   }
 
@@ -304,8 +303,7 @@ final class TartRunner: CommandRunning {
     let (home, bin) = try Self.sandbox()
     defer { try? FileManager.default.removeItem(at: home.deletingLastPathComponent()) }
     let tart = bin.appending(path: "tart")
-    try Data("#!/bin/sh\nexit 0\n".utf8).write(to: tart)
-    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: tart.path)
+    try TestScripts.install("#!/bin/sh\nexit 0\n", at: tart)
     let runner = TartRunner()
     let store = ImageStore(
       home: home, catalogue: try Self.catalogue(), downloader: Self.downloader(), runner: runner,

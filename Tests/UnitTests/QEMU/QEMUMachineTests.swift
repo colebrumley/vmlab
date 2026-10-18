@@ -178,9 +178,8 @@ final class HeldMonitor: Sendable {
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     let pidFile = dir.appending(path: "parent.pid")
     let binary = dir.appending(path: "qemu-hang")
-    try "#!/bin/bash\necho $$ > '\(pidFile.path)'\nexec /bin/sleep 60\n".write(
-      to: binary, atomically: true, encoding: .utf8)
-    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: binary.path)
+    try TestScripts.install(
+      "#!/bin/bash\necho $$ > \"$(dirname \"$0\")/parent.pid\"\nexec /bin/sleep 60\n", at: binary)
     return (binary, pidFile, dir)
   }
 

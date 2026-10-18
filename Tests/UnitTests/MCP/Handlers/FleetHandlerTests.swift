@@ -27,16 +27,15 @@ import VMLabCore
       let home = URL(filePath: "/tmp/vfl-\(UInt32.random(in: 0...UInt32.max))")
       try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
       let fakeSwitch = home.appending(path: "fake-switch")
-      try """
-      #!/bin/sh
-      d="$VMLAB_HOME/segments/$1"
-      mkdir -p "$d"
-      : > "$d/switch.sock"; : > "$d/attach.sock"
-      echo $$ > "$d/switch.pid"
-      exec sleep 600
-      """.write(to: fakeSwitch, atomically: true, encoding: .utf8)
-      try FileManager.default.setAttributes(
-        [.posixPermissions: 0o755], ofItemAtPath: fakeSwitch.path)
+      try TestScripts.install(
+        """
+        #!/bin/sh
+        d="$VMLAB_HOME/segments/$1"
+        mkdir -p "$d"
+        : > "$d/switch.sock"; : > "$d/attach.sock"
+        echo $$ > "$d/switch.pid"
+        exec sleep 600
+        """, at: fakeSwitch)
       let store = Store(home: home)
       let registry = BackendRegistry()
       let backend = FakeBackend(profile: .qemuHVF, store: store)

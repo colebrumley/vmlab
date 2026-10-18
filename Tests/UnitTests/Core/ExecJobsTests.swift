@@ -91,14 +91,16 @@ import VMLabCore
     let mark = f.dir.appending(path: "hang")
     FileManager.default.createFile(atPath: mark.path, contents: nil)
     // The stand-in ssh runs the command, then hangs once (the start call) as a lost link would.
-    try """
-    #!/bin/sh
-    for a; do last=$a; done
-    /bin/sh -c "$last"
-    rc=$?
-    if [ -f '\(mark.path)' ]; then rm -f '\(mark.path)'; exec sleep 30; fi
-    exit $rc
-    """.write(to: f.dir.appending(path: "ssh"), atomically: true, encoding: .utf8)
+    try TestScripts.install(
+      """
+      #!/bin/sh
+      for a; do last=$a; done
+      /bin/sh -c "$last"
+      rc=$?
+      mark="$(dirname "$0")/hang"
+      if [ -f "$mark" ]; then rm -f "$mark"; exec sleep 30; fi
+      exit $rc
+      """, at: f.dir.appending(path: "ssh"))
     let pidFile = f.dir.appending(path: "job.pid")
     let jobs = ExecJobs(startTimeout: .seconds(5))
     let error = await #expect(throws: VMLabError.self) {
