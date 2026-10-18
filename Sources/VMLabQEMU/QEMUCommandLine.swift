@@ -230,8 +230,8 @@ public enum QEMUCommandLine {
         "-device", "virtserialport,bus=vser0.0,chardev=qga0,name=\(guestAgentPort)",
       ]
     }
-    args += ["-qmp", "unix:\(layout.qmpSocket.path),server,wait=off"]
-    args += ["-qmp", "unix:\(layout.secondaryQMPSocket.path),server,wait=off"]
+    args += ["-qmp", "unix:\(escape(layout.qmpSocket.path)),server,wait=off"]
+    args += ["-qmp", "unix:\(escape(layout.secondaryQMPSocket.path)),server,wait=off"]
     // The chardev also logs to console.log, so output survives while no vmlab process holds the
     // socket (a one-shot `vmlab start`, a server restart); panics there are found on reattach.
     args += [
@@ -240,7 +240,7 @@ public enum QEMUCommandLine {
         + "logfile=\(escape(layout.consoleLog.path)),logappend=on",
       "-serial", "chardev:serial0",
     ]
-    args += ["-vnc", "unix:\(layout.vncSocket.path)"]
+    args += ["-vnc", "unix:\(escape(layout.vncSocket.path))"]
     if plan.grants(.gdb) {
       guard let port = options.gdbPort else {
         throw VMLabError(

@@ -130,6 +130,21 @@ import VMLabCore
     #expect(throws: VMLabError.self) { try args(BootSpec(mode: .kernel)) }
   }
 
+  /// A comma in the VM directory is escaped as ",," in every QEMU option that names a path,
+  /// the QMP and VNC sockets included (they split the option there otherwise).
+  @Test func commasInSocketPathsAreEscaped() throws {
+    let record = try Self.record("tcg-arm64")
+    let layout = QEMULayout(vmDirectory: URL(filePath: "/Users/a,b/.vmlab/vms/\(record.id)"))
+    let args = try QEMUCommandLine.arguments(
+      record: record, plan: Self.plan(for: record), layout: layout,
+      options: QEMULaunchOptions(firmware: Self.firmware))
+    let qmp = args.indices.filter { args[$0] == "-qmp" }.map { args[$0 + 1] }
+    #expect(qmp.count == 2)
+    #expect(qmp.allSatisfy { $0.hasPrefix("unix:/Users/a,,b/") })
+    #expect(
+      args.firstIndex(of: "-vnc").map { args[$0 + 1] }?.hasPrefix("unix:/Users/a,,b/") == true)
+  }
+
   /// R-306: extra.qemuArgs are appended verbatim, last, when the plan grants custom_devices.
   @Test func customDevicesPassThroughLast() throws {
     var record = try Self.record("tcg-arm64")
