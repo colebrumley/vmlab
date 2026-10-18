@@ -390,9 +390,13 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
 
 - [x] **R-306 Custom devices**
   `Requirements.extra.qemuArgs: [String]` is passed through verbatim for the `custom_devices`
-  feature, after vmlab's own arguments, with a denylist (`-qmp`, `-serial`, `-vnc`, `-gdb`,
-  `-pidfile`, `-daemonize`, `-monitor`, and their equivalents `-s`, `-mon`, `-qmp-pretty`,
-  `-readconfig`) that raises `invalid_request`.
+  feature, after vmlab's own arguments. The options are an allowlist (`-device`, `-global`,
+  `-drive`, `-blockdev`, `-object`, `-chardev`, `-netdev`, `-nic`, `-rtc`, `-boot`, `-smbios`,
+  `-fw_cfg`, `-action`, `-usb`, `-no-reboot`, `-no-shutdown`; bug hunt BH-1 found the earlier
+  denylist let `-incoming exec:` and `mon:` chardevs run host commands): anything else, `exec:`,
+  `mon:` or `cmd:` in a value, host fd/script/helper keys, chardev and netdev types off their
+  lists, host-passthrough devices, and host paths outside the R-1102 path policy, inside
+  `VMLAB_HOME` or naming an existing unix socket raise `invalid_request`.
   **Verify:** unit tests for pass-through and the denylist.
 
 - [x] **R-307 qcow2 checkpoints and the live-snapshot probe**
@@ -849,7 +853,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
 - [x] **R-1102 Security review of the tool surface**
   Paths in `vm_file`, `vm_memory_dump`, `images register` and `shared_dir` are canonicalised and
   must be under the user's home or `/tmp` unless `allowAnyPath` is set in `~/.vmlab/config.json`;
-  `extra.qemuArgs` keeps its denylist; `vm_introspect raw` keeps its allowlist; no tool executes a
+  `extra.qemuArgs` keeps its allowlist (R-306) and its host paths follow the same policy; `vm_introspect raw` keeps its allowlist; no tool executes a
   host shell with model-supplied strings unquoted (all host subprocesses use argument arrays).
   **Verify:** unit tests for the path policy and a grep test that no `Process` in the tree is
   given a `/bin/sh -c` with interpolated input.

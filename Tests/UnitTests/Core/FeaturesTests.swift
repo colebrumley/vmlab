@@ -207,6 +207,100 @@ import Testing
     #expect(throws: Never.self) { _ = try Self.decode(mac) }
   }
 
+  /// BH-1: `-incoming exec:<cmd>` makes QEMU run `/bin/sh -c <cmd>` on the host at startup
+  /// (checked by hand with QEMU 11.1.2), and an HMP monitor on a chardev (`mon:` prefix) can
+  /// `migrate exec:` too. The surface is an allowlist; these and their relatives are refused.
+  @Test func qemuArgsRefuseHostCommandsAndMonitors() {
+    for args in [
+      ["-incoming", "exec:touch /tmp/pwned"],
+      ["--incoming=exec:touch /tmp/pwned"],
+      ["-parallel", "mon:unix:/tmp/m.sock,server=on,wait=off"],
+      ["-debugcon", "mon:stdio"],
+      ["-chardev", "socket,id=c,path=/tmp/m.sock,server=on,mux=on", "-device", "x,chardev=mon:c"],
+      ["-netdev", "user,id=n,guestfwd=tcp:10.0.2.100:80-cmd:/bin/sh"],
+      ["-netdev", "user,id=n,smb=/tmp"],
+      ["-netdev", "tap,id=n,script=/tmp/up.sh"],
+      ["-chardev", "stdio,id=c"],
+      ["-chardev", "serial,id=c,path=/dev/cu.usbserial"],
+      ["-chardev", "socket,id=c,fd=3"],
+      ["-set", "device.x.romfile=/etc/passwd"],
+      ["-add-fd", "fd=3,set=1"], ["-sandbox", "off"], ["-trace", "file=/tmp/t"],
+      ["-D", "/tmp/log"], ["-L", "/tmp"], ["-bios", "/tmp/b"], ["-kernel", "/tmp/k"],
+      ["-pflash", "/tmp/p"], ["-virtfs", "local,path=/,mount_tag=t"], ["-fsdev", "local,id=f"],
+      ["-plugin", "/tmp/p.dylib"], ["-semihosting"], ["-machine", "virt"],
+      ["-object", #"{"qom-type":"memory-backend-file","id":"m","mem-path":"/etc"}"#],
+      ["-drive", "file=json:{\"file.filename\":\"/etc/passwd\"}"],
+      ["-drive", "file=relative.qcow2"],
+      ["-device", "usb-host,vendorid=1"],
+      ["-device"], ["virtio-rng-pci"], ["-device", "virtio-rng-pci", "stray"],
+      ["-device=virtio-rng-pci"],
+    ] {
+      #expect(throws: VMLabError.self, "\(args)") { try ExtraSpec(qemuArgs: args).validate() }
+    }
+    for args in [
+      ["-device", "virtio-rng-pci"], ["-global", "a.b=c,,d"], ["-usb", "-no-reboot"],
+      ["-drive", "if=none,id=d1,file=/tmp/extra.qcow2", "-device", "virtio-blk-pci,drive=d1"],
+      ["-object", "rng-random,id=r,filename=/dev/urandom", "-device", "virtio-rng-pci,rng=r"],
+      ["-chardev", "socket,id=c,path=/tmp/vmlab-x.sock,server=on,wait=off"],
+      ["-netdev", "user,id=n2,hostfwd=tcp:127.0.0.1:8080-:80", "-device", "e1000,netdev=n2"],
+    ] {
+      #expect(throws: Never.self, "\(args)") { try ExtraSpec(qemuArgs: args).validate() }
+    }
+  }
+
+  /// BH-1: host paths in qemuArgs follow the R-1102 path policy, stay out of vmlab's home (its
+  /// QMP sockets and disks) and are not existing unix sockets; `,,` does not hide a key.
+  @Test func qemuArgsHostPathsFollowThePathPolicy() throws {
+    let root = FileManager.default.temporaryDirectory.appending(path: "vmlab-qa-\(UUID())")
+    let vmlabHome = root.appending(path: "vmlab")
+    try FileManager.default.createDirectory(at: vmlabHome, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let policy = PathPolicy(roots: [root.path])
+    func check(_ args: [String]) throws {
+      let spec = ExtraSpec(qemuArgs: args)
+      try spec.validate()
+      try spec.checkHostPaths(policy: policy, vmlabHome: vmlabHome)
+    }
+    #expect(ExtraSpec.parseOptions("a=b,,c,d").map(\.value) == ["b,c", "d"])
+    try check(["-drive", "if=none,id=d,file=\(root.path)/x.qcow2"])
+    try check(["-object", "rng-random,id=r,filename=/dev/urandom"])
+    for args in [
+      ["-drive", "if=none,id=d,file=/etc/passwd"],
+      ["-blockdev", "driver=raw,node-name=n,file.driver=file,file.filename=/etc/passwd"],
+      ["-device", "loader,file=/etc/passwd,addr=0x1000"],
+      ["-global", "driver=virtio-net-pci,property=romfile,value=/etc/passwd"],
+      ["-global", "virtio-net-pci.romfile=/etc/passwd"],
+      ["-object", "memory-backend-file,id=m,size=1M,mem-path=/var/tmp"],
+      ["-drive", "if=none,id=d,file=\(vmlabHome.path)/vms/other/disk.qcow2"],
+      ["-chardev", "socket,id=c,path=\(vmlabHome.path)/vms/other/qmp.sock"],
+    ] {
+      #expect(throws: VMLabError.self, "\(args)") { try check(args) }
+    }
+    // An existing unix socket (an agent the guest could drive) is refused.
+    let socketPath = "/tmp/vmlab-qa-\(getpid()).sock"
+    let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+    defer {
+      close(fd)
+      unlink(socketPath)
+    }
+    var addr = sockaddr_un()
+    addr.sun_family = sa_family_t(AF_UNIX)
+    withUnsafeMutableBytes(of: &addr.sun_path) { buffer in
+      for (offset, byte) in socketPath.utf8.enumerated() { buffer[offset] = byte }
+    }
+    let bound = withUnsafePointer(to: &addr) {
+      $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+        bind(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
+      }
+    }
+    #expect(bound == 0)
+    let open = PathPolicy(roots: ["/tmp", root.path])
+    #expect(throws: VMLabError.self) {
+      let spec = ExtraSpec(qemuArgs: ["-chardev", "socket,id=c,path=\(socketPath)"])
+      try spec.checkHostPaths(policy: open, vmlabHome: vmlabHome)
+    }
+  }
+
   @Test func memberwiseInitValidates() {
     #expect(throws: VMLabError.self) {
       try Requirements(guest: GuestSpec(os: .macos, arch: .arm64), require: [.serial])

@@ -208,8 +208,10 @@ enum Schema {
             "qemuArgs": array(
               string("One QEMU command-line argument."),
               "Arguments appended verbatim after vmlab's own (implies custom_devices, so QEMU), "
-                + "e.g. [\"-device\", \"virtio-rng-pci\"]. -qmp, -serial, -vnc, -gdb, -s, "
-                + "-pidfile, -daemonize, -monitor, -mon and -readconfig are refused: vmlab owns them."
+                + "e.g. [\"-device\", \"virtio-rng-pci\"]. Only -device, -global, -drive, "
+                + "-blockdev, -object, -chardev, -netdev, -nic, -rtc, -boot, -smbios, -fw_cfg, "
+                + "-action, -usb, -no-reboot and -no-shutdown are allowed; host paths must be "
+                + "absolute, under the home or /tmp, and outside VMLAB_HOME."
             )
           ], description: "Engine-specific additions."),
         "provision": object(

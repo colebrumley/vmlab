@@ -300,6 +300,10 @@ public final class QEMUBackend: Backend {
     let publicKey = layout.directory.appending(path: "id_ed25519.pub")
     let share = SharedDirSpec.of(record)
     try share?.checkHostDirectory(vmDirectory: layout.directory)
+    // BH-1: host paths in extra.qemuArgs pass the path policy again at start (a symlink may have
+    // moved since create).
+    try record.extra?.checkHostPaths(
+      policy: PathPolicy.load(home: store.home), vmlabHome: store.home)
     if seed, base != nil, let image = record.image,
       let key = try? String(contentsOf: publicKey, encoding: .utf8)
     {

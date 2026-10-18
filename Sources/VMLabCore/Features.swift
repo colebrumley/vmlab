@@ -339,21 +339,91 @@ public struct SharedDirSpec: Codable, Sendable, Hashable {
 }
 
 /// Engine-specific additions to a request (R-306). `qemuArgs` are appended verbatim after
-/// vmlab's own QEMU arguments; naming any implies `custom_devices`. Options vmlab owns (its
-/// control sockets and process handling) are refused with `invalid_request`.
+/// vmlab's own QEMU arguments; naming any implies `custom_devices`.
+///
+/// The surface is an allowlist (bug hunt BH-1: a denylist kept leaking host code execution, such
+/// as `-incoming exec:` and HMP monitors on `mon:` chardevs). Only the options in
+/// `allowedQEMUOptions` may appear, each value is parsed as QEMU's `key=value,...` (`,,` an
+/// escaped comma), and anything else is `invalid_request`: an unknown option, a stray value, the
+/// JSON form of an option, `exec:`, `mon:` or `cmd:` anywhere, a key that names a host file
+/// descriptor, a helper or a script (`fd`, `script`, `smb`, ...), a chardev or netdev type that is
+/// not on its list, and a host-passthrough device. A host path (`file=`, `path=`, `romfile=`, ...,
+/// matched on the last dotted component, so `file.filename=` too) must be absolute here, and
+/// `checkHostPaths` holds it to the R-1102 `PathPolicy` and out of vmlab's own home.
 public struct ExtraSpec: Codable, Sendable, Hashable {
   public var qemuArgs: [String]
 
-  /// QEMU options a request may not pass: vmlab's QMP, serial, VNC and GDB endpoints, its pid
-  /// file and daemonizing, and any second monitor. Matched on the option name with one or two
-  /// leading dashes and without an `=value` suffix; `-s` is `-gdb tcp::1234`, `-qmp-pretty`
-  /// and `-mon` are monitors, and `-readconfig` could add any of them from a file. R-1102 adds
-  /// `-plugin`, which loads a host shared library into QEMU (code execution as the user), and
-  /// `-run-with`, which changes the process's user or root.
-  public static let deniedQEMUOptions: Set<String> = [
-    "qmp", "qmp-pretty", "serial", "vnc", "gdb", "s", "pidfile", "daemonize", "monitor", "mon",
-    "readconfig", "plugin", "run-with",
+  /// How one allowed QEMU option is checked.
+  public struct OptionRule: Sendable, Hashable {
+    /// The option takes the next argument as its value.
+    public var takesValue: Bool
+    /// The key a leading bare token stands for (`-chardev socket,...` is `backend=socket`).
+    public var impliedKey: String?
+    /// The values that key may take; nil allows any.
+    public var types: Set<String>?
+    /// Values of that key that are refused (host passthrough).
+    public var deniedTypes: Set<String>
+
+    public init(
+      takesValue: Bool = true, impliedKey: String? = nil, types: Set<String>? = nil,
+      deniedTypes: Set<String> = []
+    ) {
+      self.takesValue = takesValue
+      self.impliedKey = impliedKey
+      self.types = types
+      self.deniedTypes = deniedTypes
+    }
+  }
+
+  static let netdevTypes: Set<String> = ["user", "socket", "stream", "dgram", "hubport"]
+
+  /// The QEMU options a request may pass, by name. vmlab owns the machine, CPU, memory, boot
+  /// firmware, monitors, serial, display, GDB and process options; host-facing options that run
+  /// commands or reach outside the guest (`-incoming`, `-add-fd`, `-sandbox`, `-plugin`, `-set`,
+  /// `-readconfig`, `-virtfs`, `-fsdev`, `-trace`, `-D`, `-L`, `-bios`, `-kernel`, ...) are not here.
+  public static let allowedQEMUOptions: [String: OptionRule] = [
+    "device": OptionRule(
+      impliedKey: "driver",
+      deniedTypes: ["usb-host", "u2f-passthru", "vfio-pci", "vfio-platform", "vhost-user-fs-pci"]),
+    "global": OptionRule(),
+    "drive": OptionRule(),
+    "blockdev": OptionRule(),
+    "object": OptionRule(impliedKey: "qom-type"),
+    "chardev": OptionRule(
+      impliedKey: "backend",
+      types: [
+        "socket", "udp", "null", "ringbuf", "memory", "file", "pipe", "pty", "msmouse", "wctablet",
+        "testdev",
+      ]),
+    "netdev": OptionRule(impliedKey: "type", types: netdevTypes),
+    "nic": OptionRule(impliedKey: "type", types: netdevTypes.union(["none"])),
+    "rtc": OptionRule(),
+    "boot": OptionRule(impliedKey: "order"),
+    "smbios": OptionRule(),
+    "fw_cfg": OptionRule(impliedKey: "name"),
+    "action": OptionRule(),
+    "usb": OptionRule(takesValue: false),
+    "no-reboot": OptionRule(takesValue: false),
+    "no-shutdown": OptionRule(takesValue: false),
   ]
+
+  /// Keys refused in any option value: host file descriptors (which could name QEMU's own
+  /// sockets), and helpers or scripts QEMU would run on the host.
+  public static let deniedKeys: Set<String> = [
+    "fd", "fds", "vhostfd", "vhostfds", "script", "downscript", "helper", "smb",
+  ]
+
+  /// Keys whose value is a host path (matched on the last dotted component).
+  public static let hostPathKeys: Set<String> = [
+    "file", "filename", "path", "mem-path", "dir", "romfile", "splash", "evdev", "tftp", "logfile",
+  ]
+
+  /// Substrings refused anywhere in an argument: a command QEMU runs (`exec:` migration,
+  /// `guestfwd=...-cmd:`) or an HMP monitor multiplexed onto a chardev (`mon:`).
+  static let deniedFragments = ["exec:", "mon:", "cmd:"]
+
+  /// Host paths that are allowed though outside the policy's roots.
+  static let harmlessHostPaths: Set<String> = ["/dev/urandom", "/dev/random", "/dev/null"]
 
   public init(qemuArgs: [String] = []) { self.qemuArgs = qemuArgs }
 
@@ -373,15 +443,189 @@ public struct ExtraSpec: Codable, Sendable, Hashable {
     return String(name.prefix { $0 != "=" })
   }
 
-  /// Throws `invalid_request` naming the first denied option.
+  /// Splits a QEMU option value into `(key, value)` pairs as QEMU's opts parser does: `,` ends a
+  /// pair, `,,` is a literal comma, and a token without `=` has a nil key.
+  public static func parseOptions(_ value: String) -> [(key: String?, value: String)] {
+    var tokens: [String] = []
+    var current = ""
+    var chars = Array(value)[...]
+    while let c = chars.popFirst() {
+      if c == "," {
+        if chars.first == "," {
+          current.append(",")
+          chars.removeFirst()
+        } else {
+          tokens.append(current)
+          current = ""
+        }
+      } else {
+        current.append(c)
+      }
+    }
+    tokens.append(current)
+    return tokens.map { token in
+      guard let eq = token.firstIndex(of: "=") else { return (nil, token) }
+      return (String(token[..<eq]), String(token[token.index(after: eq)...]))
+    }
+  }
+
+  /// One host path a value names: the argument's index, its key and the path.
+  public struct HostPath: Sendable, Hashable {
+    public var index: Int
+    public var key: String
+    public var path: String
+  }
+
+  /// Every host path the arguments name (they have passed `validate()`).
+  public var hostPaths: [HostPath] {
+    var result: [HostPath] = []
+    var index = 0
+    while index < qemuArgs.count {
+      guard let name = Self.optionName(qemuArgs[index]), let rule = Self.allowedQEMUOptions[name]
+      else { break }
+      if rule.takesValue, index + 1 < qemuArgs.count {
+        for pair in Self.pairs(option: name, value: qemuArgs[index + 1])
+        where pair.key.map(Self.isHostPathKey) == true {
+          result.append(HostPath(index: index + 1, key: pair.key!, path: pair.value))
+        }
+        index += 2
+      } else {
+        index += 1
+      }
+    }
+    return result
+  }
+
+  static func lastComponent(_ key: String) -> String {
+    String(key.split(separator: ".", omittingEmptySubsequences: false).last ?? Substring(key))
+  }
+
+  static func isHostPathKey(_ key: String) -> Bool { hostPathKeys.contains(lastComponent(key)) }
+
+  /// The pairs of `option`'s `value`. `-global d.p=v` is one pair whose value runs to the end
+  /// (commas included), as QEMU reads it.
+  static func pairs(option: String, value: String) -> [(key: String?, value: String)] {
+    if option == "global", let eq = value.firstIndex(of: "="),
+      value[..<eq].contains("."), !value[..<eq].contains(",")
+    {
+      return [(String(value[..<eq]), String(value[value.index(after: eq)...]))]
+    }
+    return normalised(parseOptions(value))
+  }
+
+  /// `-global driver=d,property=p,value=v` is `d.p=v`; other pairs are as given.
+  typealias Pairs = [(key: String?, value: String)]
+
+  static func normalised(_ pairs: Pairs) -> Pairs {
+    guard let property = pairs.first(where: { $0.key == "property" })?.value,
+      let value = pairs.first(where: { $0.key == "value" })?.value
+    else { return pairs }
+    return pairs.filter { $0.key != "property" && $0.key != "value" } + [(property, value)]
+  }
+
+  /// Throws `invalid_request` naming the first argument that is not allowed.
   public func validate() throws(VMLabError) {
-    for (index, argument) in qemuArgs.enumerated() {
-      if let name = Self.optionName(argument), Self.deniedQEMUOptions.contains(name) {
+    func refuse(_ index: Int, _ reason: String, _ hint: String) -> VMLabError {
+      .invalidRequest(field: "extra.qemuArgs[\(index)]", reason: reason, hint: hint)
+    }
+    let allowed = Self.allowedQEMUOptions.keys.sorted().map { "-" + $0 }.joined(separator: ", ")
+    var index = 0
+    while index < qemuArgs.count {
+      let argument = qemuArgs[index]
+      guard let name = Self.optionName(argument) else {
+        throw refuse(
+          index, "\(argument) is a value with no option before it",
+          "Give each value right after its option, such as [\"-device\", \"virtio-rng-pci\"].")
+      }
+      guard let rule = Self.allowedQEMUOptions[name], !argument.contains("=") else {
+        throw refuse(
+          index, "\(argument) is managed by vmlab or not allowed through extra.qemuArgs",
+          "Drop \(argument); vmlab already wires QMP, serial, VNC, GDB, firmware and the process "
+            + "(use the vm_serial, vm_computer and vm_debug tools). Allowed: \(allowed).")
+      }
+      guard rule.takesValue else {
+        index += 1
+        continue
+      }
+      guard index + 1 < qemuArgs.count else {
+        throw refuse(index, "\(argument) needs a value", "Give the value as the next argument.")
+      }
+      try Self.check(
+        value: qemuArgs[index + 1], rule: rule, name: name, option: argument, index: index + 1)
+      index += 2
+    }
+  }
+
+  static func check(value: String, rule: OptionRule, name: String, option: String, index: Int)
+    throws(VMLabError)
+  {
+    func refuse(_ reason: String, _ hint: String) -> VMLabError {
+      .invalidRequest(field: "extra.qemuArgs[\(index)]", reason: reason, hint: hint)
+    }
+    if let fragment = deniedFragments.first(where: { value.contains($0) }) {
+      throw refuse(
+        "\(value) contains \(fragment), which makes QEMU run a host command or open a monitor",
+        "Drop it; vmlab owns the monitors and runs no host commands for a guest.")
+    }
+    if value.hasPrefix("{") {
+      throw refuse(
+        "the JSON form of \(option) is not accepted", "Give it as key=value,key=value.")
+    }
+    let pairs = pairs(option: name, value: value)
+    if let impliedKey = rule.impliedKey {
+      let type =
+        pairs.first.flatMap { $0.key == nil ? $0.value : nil }
+        ?? pairs.first(where: { $0.key == impliedKey })?.value
+      if let types = rule.types, !types.contains(type ?? "") {
+        throw refuse(
+          "\(option) \(type ?? "with no \(impliedKey)") is not allowed",
+          "Use one of: \(types.sorted().joined(separator: ", ")).")
+      }
+      if let type, rule.deniedTypes.contains(type) {
+        throw refuse(
+          "\(option) \(type) reaches host hardware or a host daemon",
+          "Use an emulated device instead.")
+      }
+    }
+    for (position, pair) in pairs.enumerated() {
+      guard let key = pair.key else {
+        if position == 0, rule.impliedKey != nil { continue }
+        throw refuse(
+          "\(pair.value) in \(option) has no key", "Write every part of the value as key=value.")
+      }
+      if deniedKeys.contains(lastComponent(key)) {
+        throw refuse(
+          "\(key)= in \(option) hands QEMU a host file descriptor, helper or script",
+          "Drop \(key)=.")
+      }
+      if isHostPathKey(key), !pair.value.hasPrefix("/") {
+        throw refuse(
+          "\(key)=\(pair.value) in \(option) is not an absolute host path",
+          "Give an absolute path under your home directory or /tmp.")
+      }
+    }
+  }
+
+  /// Throws `invalid_request` for a host path the arguments name that `policy` refuses or that
+  /// lies inside `vmlabHome` (whose VM directories hold every guest's QMP, serial and VNC
+  /// sockets and disks).
+  public func checkHostPaths(policy: PathPolicy, vmlabHome: URL) throws(VMLabError) {
+    let protected = PathPolicy.canonical(vmlabHome.path)
+    for hostPath in hostPaths where !Self.harmlessHostPaths.contains(hostPath.path) {
+      let field = "extra.qemuArgs[\(hostPath.index)]"
+      let resolved = try policy.check(hostPath.path, field: field).path
+      if PathPolicy.isInside(resolved, protected) {
         throw .invalidRequest(
-          field: "extra.qemuArgs[\(index)]",
-          reason: "\(argument) is managed by vmlab and cannot be passed through",
-          hint: "Drop \(argument); vmlab already wires QMP, serial, VNC, GDB and the process. "
-            + "Use the vm_serial, vm_computer and vm_debug tools instead.")
+          field: field, reason: "\(hostPath.path) is inside vmlab's own home (\(protected))",
+          hint: "Use a path outside VMLAB_HOME; vmlab's VM directories are its own.")
+      }
+      // A chardev or netdev client on an existing unix socket would hand the guest a host
+      // service (an ssh or Docker agent); a server socket QEMU creates does not exist yet.
+      var info = stat()
+      if stat(resolved, &info) == 0, info.st_mode & S_IFMT == S_IFSOCK {
+        throw .invalidRequest(
+          field: field, reason: "\(hostPath.path) is an existing host unix socket",
+          hint: "Let QEMU create the socket (server=on) at a new path instead.")
       }
     }
   }

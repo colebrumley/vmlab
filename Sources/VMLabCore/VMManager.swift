@@ -80,6 +80,8 @@ public actor VMManager {
     if let host = new.share?.host {
       new.share?.host = try PathPolicy.load(home: store.home).check(host, field: "share.host").path
     }
+    // BH-1: so are the host paths named in extra.qemuArgs (checked again at start).
+    try new.extra?.checkHostPaths(policy: PathPolicy.load(home: store.home), vmlabHome: store.home)
     var stored = try store.create(new)
     do throws(VMLabError) {
       if let name = Self.segmentName(of: stored) {
