@@ -67,21 +67,33 @@ struct GenDocs: ParsableCommand {
 
   enum Document: String, ExpressibleByArgument, CaseIterable {
     case features, tools
+    case hostFacts = "host-facts"
   }
 
-  @Argument(help: "features (docs/FEATURES.md) or tools (docs/TOOLS.md)")
+  @Argument(help: "features (docs/FEATURES.md), tools (docs/TOOLS.md) or host-facts (live probes)")
   var document: Document
+
+  @Option(help: "The slow-probe snapshot the features column reads (docs/dev-host-facts.json).")
+  var probes: String?
 
   func run() throws {
     switch document {
     case .features:
-      // The last column is what this host's slow probes recorded (VMLAB_HOME, default ~/.vmlab).
-      let environment = ProcessInfo.processInfo.environment
-      let home =
-        environment["VMLAB_HOME"].map { URL(filePath: $0) }
-        ?? FileManager.default.homeDirectoryForCurrentUser.appending(path: ".vmlab")
-      let probes = try SlowProbes.load(from: SlowProbes.url(home: home))
+      // The last column reads the committed snapshot, never VMLAB_HOME, so the document does not
+      // change with whoever ran a slow probe last. No --probes means every probe is unknown.
+      let probes = try probes.map { try SlowProbes.load(from: URL(filePath: $0)) } ?? SlowProbes()
       print(FeatureDocs.markdown(probes: probes), terminator: "")
+    case .hostFacts:
+      // This host's slow probes (VMLAB_HOME, default ~/.vmlab), in the snapshot's format;
+      // `scripts/gen-docs.sh --refresh-host-facts` writes them to docs/dev-host-facts.json.
+      // A missing file is refused rather than read as all-unknown, so a refresh from the wrong
+      // VMLAB_HOME cannot wipe the committed snapshot.
+      let url = SlowProbes.url(home: Store.defaultHome())
+      guard FileManager.default.fileExists(atPath: url.path) else {
+        throw ValidationError("no slow probes recorded at \(url.path)")
+      }
+      let probes = try SlowProbes.load(from: url)
+      FileHandle.standardOutput.write(try probes.encoded())
     case .tools: print(ToolDocs.markdown(), terminator: "")
     }
   }
