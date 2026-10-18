@@ -71,7 +71,11 @@ import VMLabCore
   @Test func slowCreateEmitsProgress() async throws {
     let f = try Fixture()
     defer { f.cleanUp() }
-    f.backend.delayCreate(.milliseconds(400))
+    // Held until three heartbeats arrived (a fixed sleep starves on a busy machine).
+    let progress = f.progress
+    f.backend.holdCreate {
+      progress.messages.count(where: { $0.hasPrefix("creating the VM (") }) >= 3
+    }
     let result = try await f.create(["autostart": .bool(false)])
     #expect(result.value["state"] == .string("created"))
     #expect(result.value["plan"]?["profile"] == .string("qemu-hvf"))
@@ -79,7 +83,7 @@ import VMLabCore
     let messages = f.progress.messages
     #expect(messages.contains("pulling image tiny-arm64"))
     #expect(messages.contains("creating the VM"))
-    // A heartbeat every 40 ms over a 400 ms create.
+    // A heartbeat every 40 ms while the create is held.
     #expect(messages.count(where: { $0.hasPrefix("creating the VM (") }) >= 3)
     let values = f.progress.values
     #expect(values == values.sorted() && Set(values).count == values.count)

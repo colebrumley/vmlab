@@ -8,14 +8,14 @@ import VMLabCore
     let backend: FakeBackend
     let manager: VMManager
 
-    init(profile: Profile = .qemuHVF) throws {
+    init(profile: Profile = .qemuHVF, readiness: any GuestReadiness = FakeReadiness()) throws {
       let home = FileManager.default.temporaryDirectory.appending(path: "vmlab-manager-\(UUID())")
       try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
       store = Store(home: home)
       backend = FakeBackend(profile: profile, store: store)
       let registry = BackendRegistry()
       registry.register(backend)
-      manager = VMManager(store: store, backends: registry)
+      manager = VMManager(store: store, backends: registry, readiness: readiness)
     }
 
     func plan(_ features: [Feature] = [.execSSH, .serial]) -> Plan {
@@ -165,5 +165,60 @@ import VMLabCore
     #expect(results.count(where: { $0 == nil }) == 1)
     #expect(results.compactMap { $0 }.allSatisfy { $0.code == .wrongState })
     #expect(f.backend.operations.count(where: { $0 == .start }) == 1)
+  }
+
+  @Test func createMakesTheSSHKeyPair() async throws {
+    let f = try Fixture()
+    let vm = try await f.create()
+    let dir = f.store.directory(of: vm.id)
+    let pub = try String(contentsOf: dir.appending(path: "id_ed25519.pub"), encoding: .utf8)
+    #expect(pub.hasPrefix("ssh-ed25519 "))
+    #expect(pub.contains("vmlab-\(vm.id)"))
+  }
+
+  @Test func startWaitsForSSHWhenExecSSHIsGranted() async throws {
+    let readiness = FakeReadiness()
+    let f = try Fixture(readiness: readiness)
+    f.backend.reportSSHPort(50022)
+    let vm = try await f.create()
+    let outcome = try await f.manager.run(.start, on: vm.id)
+    #expect(outcome.record?.state == .running)
+    #expect(outcome.warnings.isEmpty)
+    let target = try #require(readiness.targets.first)
+    #expect(target.endpoint == SSHEndpoint(host: "127.0.0.1", port: 50022))
+    #expect(target.user == "debian")
+    #expect(target.vmDirectory == f.store.directory(of: vm.id))
+  }
+
+  @Test func aGuestThatNeverAnswersStaysRunningWithAWarning() async throws {
+    let readiness = FakeReadiness(warning: "ssh_unreachable: nope")
+    let f = try Fixture(readiness: readiness)
+    f.backend.reportSSHPort(50022)
+    let vm = try await f.create()
+    let outcome = try await f.manager.run(.start, on: vm.id)
+    #expect(outcome.record?.state == .running)
+    #expect(outcome.warnings == ["ssh_unreachable: nope"])
+    #expect(try f.store.load(id: vm.id).state == .running)
+    #expect(try await f.events(vm.id).contains("ssh_unreachable: nope"))
+  }
+
+  @Test func startWithoutExecSSHDoesNotWait() async throws {
+    let readiness = FakeReadiness(warning: "should not be asked")
+    let f = try Fixture(readiness: readiness)
+    f.backend.reportSSHPort(50022)
+    let vm = try await f.create([.serial])
+    let outcome = try await f.manager.run(.start, on: vm.id)
+    #expect(outcome.warnings.isEmpty)
+    #expect(readiness.targets.isEmpty)
+  }
+
+  @Test func startWithNoEndpointWarnsAtOnce() async throws {
+    let readiness = FakeReadiness()
+    let f = try Fixture(readiness: readiness)
+    let vm = try await f.create()
+    let outcome = try await f.manager.run(.start, on: vm.id)
+    #expect(outcome.warnings.count == 1)
+    #expect(outcome.warnings[0].hasPrefix("ssh_unreachable:"))
+    #expect(readiness.targets.isEmpty)
   }
 }

@@ -7,8 +7,9 @@ public struct QEMULaunchRequest: Sendable {
   public var record: VMRecord
   public var plan: Plan
   public var layout: QEMULayout
-  /// The pulled image's qcow2, the backing file of the guest's `disk.qcow2` overlay.
-  public var baseImage: URL
+  /// The pulled image's qcow2, the backing file of the guest's `disk.qcow2` overlay; nil for a
+  /// guest with no disk (a kernel-only image, R-305).
+  public var baseImage: URL?
   public var boot: BootSpec
   /// The cloud-init seed to build into `seed.iso`; nil attaches none.
   public var seed: CloudInitConfig?
@@ -17,11 +18,16 @@ public struct QEMULaunchRequest: Sendable {
   public var gdbPort: Int?
   /// Forwarded to the guest's port 22 when set.
   public var sshHostPort: Int?
+  /// The request's forwards, every host port chosen (R-308); nil forwards the record's as given.
+  public var forwards: [PortForward]?
+  /// The NIC is `vmnet-shared` rather than user-mode networking (`net_fast`, R-309).
+  public var vmnet: Bool
 
   public init(
-    record: VMRecord, plan: Plan, layout: QEMULayout, baseImage: URL,
+    record: VMRecord, plan: Plan, layout: QEMULayout, baseImage: URL?,
     boot: BootSpec = BootSpec(), seed: CloudInitConfig? = nil, installation: QEMUInstallation,
-    gdbPort: Int? = nil, sshHostPort: Int? = nil
+    gdbPort: Int? = nil, sshHostPort: Int? = nil, forwards: [PortForward]? = nil,
+    vmnet: Bool = false
   ) {
     self.record = record
     self.plan = plan
@@ -32,6 +38,19 @@ public struct QEMULaunchRequest: Sendable {
     self.installation = installation
     self.gdbPort = gdbPort
     self.sshHostPort = sshHostPort
+    self.forwards = forwards
+    self.vmnet = vmnet
+  }
+}
+
+extension QEMULaunchRequest {
+  /// Whether the guest has a UEFI variable store: disk boot, or custom firmware as pflash.
+  var usesEFIVars: Bool {
+    switch boot.mode {
+    case .disk: true
+    case .firmware: boot.firmwareFormat == .pflash
+    case .kernel, .binary: false
+    }
   }
 }
 
@@ -82,17 +101,17 @@ public actor QEMUMachine {
     } catch {
       throw ioError("create \(layout.directory.path)", error)
     }
-    if !files.fileExists(atPath: layout.disk.path) {
+    if let baseImage = request.baseImage, !files.fileExists(atPath: layout.disk.path) {
       let diskGB =
         ResourceLimits.resolve(request.plan.resources, for: request.plan.guest.os).diskGB ?? 32
       try run(
         request.installation.qemuImg,
         [
-          "create", "-q", "-f", "qcow2", "-F", "qcow2", "-b", request.baseImage.path,
+          "create", "-q", "-f", "qcow2", "-F", "qcow2", "-b", baseImage.path,
           layout.disk.path, "\(diskGB)G",
         ], step: "qemu-img create")
     }
-    if request.boot.mode != .kernel, !files.fileExists(atPath: layout.efiVars.path) {
+    if request.usesEFIVars, !files.fileExists(atPath: layout.efiVars.path) {
       let firmware = try request.installation.firmware(for: request.plan.guest.arch)
       do {
         try files.copyItem(atPath: firmware.varsTemplate, toPath: layout.efiVars.path)
@@ -126,9 +145,10 @@ public actor QEMUMachine {
     }
     try prepare(request)
     var options = QEMULaunchOptions(
-      boot: request.boot, seed: request.seed != nil, gdbPort: request.gdbPort,
-      sshHostPort: request.sshHostPort)
-    if request.boot.mode != .kernel {
+      boot: request.boot, disk: request.baseImage != nil, seed: request.seed != nil,
+      gdbPort: request.gdbPort, sshHostPort: request.sshHostPort, forwards: request.forwards,
+      vmnet: request.vmnet)
+    if request.boot.mode == .disk {
       options.firmware = try request.installation.firmware(for: request.plan.guest.arch)
     }
     if request.plan.grants(.gdb), options.gdbPort == nil {
@@ -151,6 +171,8 @@ public actor QEMUMachine {
     do {
       machine = try await connect(
         layout: layout, pid: pid, gdbPort: options.gdbPort, sshPort: request.sshHostPort,
+        forwards: request.record.network.mode == .disabled || request.vmnet
+          ? nil : request.forwards ?? request.record.network.forwards,
         timeout: connectTimeout)
     } catch {
       Darwin.kill(pid, SIGKILL)
@@ -168,7 +190,7 @@ public actor QEMUMachine {
   /// Reconnects to the QEMU process already running in `layout` (its pid file, QMP and serial
   /// sockets). `guest_unreachable` when no live process owns the directory.
   public static func attach(
-    layout: QEMULayout, gdbPort: Int? = nil, sshPort: Int? = nil,
+    layout: QEMULayout, gdbPort: Int? = nil, sshPort: Int? = nil, forwards: [PortForward]? = nil,
     connectTimeout: Duration = .seconds(5)
   ) async throws -> QEMUMachine {
     guard let pid = readPID(layout), isAlive(pid) else {
@@ -177,11 +199,13 @@ public actor QEMUMachine {
         hint: "Start the VM.", data: ["tried": .string(layout.pidFile.path)])
     }
     return try await connect(
-      layout: layout, pid: pid, gdbPort: gdbPort, sshPort: sshPort, timeout: connectTimeout)
+      layout: layout, pid: pid, gdbPort: gdbPort, sshPort: sshPort, forwards: forwards,
+      timeout: connectTimeout)
   }
 
   private static func connect(
-    layout: QEMULayout, pid: Int32, gdbPort: Int?, sshPort: Int?, timeout: Duration
+    layout: QEMULayout, pid: Int32, gdbPort: Int?, sshPort: Int?, forwards: [PortForward]?,
+    timeout: Duration
   ) async throws -> QEMUMachine {
     let qmp = try await QMPClient.connect(
       socketPath: layout.qmpSocket.path, connectTimeout: timeout)
@@ -195,7 +219,8 @@ public actor QEMUMachine {
     let runtime = VMRuntime(
       pid: pid, controlSocket: layout.qmpSocket.path, qmpSocket: layout.qmpSocket.path,
       serialSocket: layout.serialSocket.path, vncSocket: layout.vncSocket.path,
-      gdbEndpoint: gdbPort.map { "tcp:127.0.0.1:\($0)" }, sshPort: sshPort)
+      gdbEndpoint: gdbPort.map { "tcp:127.0.0.1:\($0)" }, sshPort: sshPort,
+      forwards: forwards.flatMap { $0.isEmpty ? nil : $0 })
     return QEMUMachine(layout: layout, pid: pid, qmp: qmp, serial: serial, runtime: runtime)
   }
 
