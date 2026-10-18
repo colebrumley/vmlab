@@ -212,6 +212,18 @@ enum Schema {
                 + "-pidfile, -daemonize, -monitor, -mon and -readconfig are refused: vmlab owns them."
             )
           ], description: "Engine-specific additions."),
+        "share": object(
+          [
+            "host": string(
+              "Absolute host path of an existing directory. Omitted: the VM's own shared/ "
+                + "directory (vm_inspect endpoints.share)."),
+            "guest": string(
+              "Absolute guest path it is mounted at.", default: SharedDirSpec.defaultGuestPath),
+          ],
+          description:
+            "A host directory mounted read-write in the guest (implies shared_dir): 9p under "
+            + "QEMU (the guest kernel needs 9p; Debian's cloud kernel has none), virtiofs under VZ."
+        ),
       ], required: ["guest"],
       description: "What the VM must be. Only guest is required; every other field has a default.")
   }()

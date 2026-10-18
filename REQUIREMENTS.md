@@ -464,7 +464,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   prefers SSH when reachable, else the agent.
   **Verify:** integration: with `net_none`, `vm_exec "id"` via agent returns `uid=0`.
 
-- [ ] **R-404 File push, pull and shared directories**
+- [x] **R-404 File push, pull and shared directories**
   `vm_file push|pull` via `scp` (or `sftp` batch) with size reporting; directories recursively;
   `pull` to `<vm>/pulled/` when no local path is given. `shared_dir` grants mount a host directory
   read-write at a guest path: QEMU via 9p (`-virtfs local,...`, mounted by cloud-init `mounts`),

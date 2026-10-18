@@ -276,7 +276,7 @@ Copy files between the host and the guest over SSH. push copies the host path lo
 | `vm` | string | yes | The VM's id (vm-xxxxxx) or name, as vm_list or vm_create returned it. |
 | `action` | `push` \| `pull` | yes | Direction of the copy. |
 | `remote` | string | yes | Path in the guest. |
-| `local` | string |  | Path on the host (push: required; pull: optional). |
+| `local` | string |  | Absolute path on the host (push: required; pull: optional). |
 
 **Result**
 
@@ -562,3 +562,6 @@ The `requirements` object of `vm_plan`, `vm_create` and `fleet` (`Requirements` 
 | `resources.cpus` | integer, ≥ 1 |  | Virtual CPUs. |
 | `resources.diskGB` | integer, ≥ 1 |  | Disk size in GB. |
 | `resources.memoryGB` | integer, ≥ 1 |  | Guest memory in GB. |
+| `share` | object |  | A host directory mounted read-write in the guest (implies shared_dir): 9p under QEMU (the guest kernel needs 9p; Debian's cloud kernel has none), virtiofs under VZ. |
+| `share.guest` | string, default `/mnt/host` |  | Absolute guest path it is mounted at. |
+| `share.host` | string |  | Absolute host path of an existing directory. Omitted: the VM's own shared/ directory (vm_inspect endpoints.share). |

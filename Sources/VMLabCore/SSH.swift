@@ -145,6 +145,18 @@ public struct SSHTarget: Sendable, Hashable {
   /// once, a changed one refused) under an alias of the VM id so a new forwarded port does not
   /// make a new entry, and keepalives so a dead guest is noticed in about 15 s.
   public func arguments(remote: String, connectTimeoutSeconds: Int = 10) -> [String] {
+    options(connectTimeoutSeconds: connectTimeoutSeconds) + [
+      "-T",
+      "-p", String(endpoint.port),
+      "-l", user,
+      endpoint.host,
+      "--",
+      remote,
+    ]
+  }
+
+  /// The key, host-key and connection options `ssh` and `scp` share.
+  public func options(connectTimeoutSeconds: Int = 10) -> [String] {
     [
       "-i", SSHKeys.privateKey(in: vmDirectory).path,
       "-o", "BatchMode=yes",
@@ -161,12 +173,6 @@ public struct SSHTarget: Sendable, Hashable {
       "-o", "ServerAliveCountMax=3",
       "-o", "LogLevel=ERROR",
       "-F", "/dev/null",
-      "-T",
-      "-p", String(endpoint.port),
-      "-l", user,
-      endpoint.host,
-      "--",
-      remote,
     ]
   }
 }

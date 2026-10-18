@@ -69,6 +69,17 @@ granted and SSH never reached the guest, which a channel marks with `data.connec
 so a command that started over SSH is never run twice). `ExecTimeout.error` is the shared
 `timeout` refusal with partial output; `ExecFiles` and `ExecOutput.collect` are public for the
 agent channel.
+`FileTransfer.swift` (R-404) is `SSHFileTransfer`: the system `scp` in SFTP mode (`-s`, so a
+guest path is never seen by a remote shell), `-r`, with `SSHTarget.options` (the key and
+known-hosts options `ssh` shares); `push(local:remote:)` and `pull(remote:local:)` (no local:
+`<vm>/pulled/<name>`, replaced; an existing local directory receives the copy inside it) return
+`FileTransferResult` (`bytes` of every regular file, `path`), mapping an `ssh` failure to
+`guest_unreachable` and any other `scp` error to `invalid_request` on `remote`.
+`SharedDirSpec` (in `Features.swift`, R-404) is the request's `share` (`host`, absolute, default
+`<vm>/shared/`; `guest`, default `/mnt/host`; tag `share0`), which implies `shared_dir` and is kept
+as `VMRecord.share`; `SharedDirSpec.of(record)` is what a backend mounts: the record's `share`, or
+the default when the plan *requested* `shared_dir` (every profile grants it, which alone mounts
+nothing). Both engines put it in the seed as a `GuestMount`.
 `HostProcess` runs one host subprocess asynchronously (stdin bytes, output to file handles, a
 deadline that sends `SIGTERM` then `SIGKILL`, cancellation likewise).
 `Capabilities` is the Appendix B matrix: `Capabilities.entry(feature, on: profile)` gives the unresolved cell (`Availability.yes`, `.no(reason)` or `.conditional(Condition)`, where a `Condition` names a fast fact such as `root` or a `SlowProbe`, plus the note and the item that verifies a `?`), and `capabilities(of:host:allowUnverified:)` resolves every cell to yes or no against `HostFacts` (an `unknown` probe is no unless `allowUnverified`); `unverifiedProbes` says which probes a plan reports as unverified, and `supports(_:on:)` is the guest OS and arch filter.
@@ -116,6 +127,11 @@ guest (reattaching after a server restart), builds the seed when R-400's `id_ed2
 and hands out `QEMURunningVM` (serial, VNC display, GDB, QMP `query-*` introspection,
 checkpoints, memory dumps, exec over SSH through the forwarded loopback port (`SSHExecChannel`,
 or `NoSSH`, never connected, without a network), and exec through qemu-guest-agent).
+Shared directory (R-404): `SharedDirSpec.of(record)` becomes `-virtfs local,path=...,mount_tag=share0,
+security_model=mapped-xattr` (refused unless the plan grants `shared_dir`) and a cloud-init
+`mounts` entry (`9p`, `trans=virtio,version=9p2000.L,rw,nofail`); create and start check the host
+directory exists. Debian's cloud kernel has no 9p (`CONFIG_NET_9P` unset), so the mount needs a
+kernel with it, such as Ubuntu's cloud images.
 Guest agent (R-403): when the plan grants `exec_agent` (and the arch has PCI defaults) the command
 line adds a `virtio-serial-pci` with a `virtserialport` named `org.qemu.guest_agent.0` on a
 `-chardev socket` at `<vm>/qga.sock` (QGA is not reachable through QMP). `GuestAgent` (an actor,
@@ -224,7 +240,9 @@ request into an `ExecRequest`, picks the channel by `via` (`Channel.execSSH`, `.
 `.exec`) on `VMManager.attach`, runs it under a heartbeat and returns `exitCode`, `stdout`,
 `stderr`, `durationMs`, `truncated`, `logPath`; `background: true` starts an `ExecJobs` job over
 the VM's `SSHExecChannel` and returns `{ job }`), `vm_job` (read/wait/kill: `output`, `finished`,
-`exitCode`, `more`, `logPath`), `images`
+`exitCode`, `more`, `logPath`), `vm_file` (R-404: push/pull through `SSHFileTransfer` over the VM's
+SSH channel, absolute host paths only, returning `bytes` and `path`; `vm_inspect` and `vm_create`
+endpoints carry `share` `{ host, guest }`), `images`
 (list/pull/remove), `vm_computer` (`Handlers/VMComputerHandler.swift`, R-502: resolves the VM's
 `DisplayEndpoint`, gets its session from `ToolContext.displays`, and maps the computer-use actions
 onto pointer, key and type events; clicks move first, double and triple clicks repeat 60 ms apart,
@@ -257,7 +275,7 @@ it turns its flags into the tool's JSON arguments and calls the same `ToolHandle
 to stderr (the Appendix D object with `--json`) with exit status 1; a long call's progress messages
 go to stderr. Built: `facts`, `doctor`, `plan`, `create` (the `plan` flags plus `--name`,
 `--no-start`), `list`, `inspect`, `logs`, `start`, `stop`, `kill`, `pause`, `resume`, `reset`,
-`destroy`, `exec` and `job` (`Sources/vmlab/ExecCommands.swift`: stdout to stdout, stderr and a
+`destroy`, `exec`, `job` and `file` (`Sources/vmlab/ExecCommands.swift`: stdout to stdout, stderr and a
 non-zero status to stderr), `images pull|list|remove`, `computer <vm> <action>` (`--at x,y`, `--out` writes the image), `introspect`, `memory-dump`, `serve`, `--version`. It bootstraps logging and hands off to Core and `VMLabMCP`.
 
 **`VMLabEngines`** (library). The engine wiring, and the only module that imports both Core and the

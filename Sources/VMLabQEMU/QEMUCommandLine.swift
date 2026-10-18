@@ -20,11 +20,13 @@ public struct QEMULaunchOptions: Sendable, Hashable {
   /// `net_fast` (R-309): the NIC is `vmnet-shared` (root or the `qemu_vmnet` probe) instead of
   /// user-mode networking. The guest is then reached on its own address; nothing is forwarded.
   public var vmnet: Bool
+  /// The host directory shared as 9p tag `share0` (R-404); nil shares nothing.
+  public var sharedDirectory: String?
 
   public init(
     boot: BootSpec = BootSpec(), firmware: QEMUFirmware? = nil, disk: Bool = true,
     seed: Bool = false, gdbPort: Int? = nil, sshHostPort: Int? = nil,
-    forwards: [PortForward]? = nil, vmnet: Bool = false
+    forwards: [PortForward]? = nil, vmnet: Bool = false, sharedDirectory: String? = nil
   ) {
     self.boot = boot
     self.firmware = firmware
@@ -34,6 +36,7 @@ public struct QEMULaunchOptions: Sendable, Hashable {
     self.sshHostPort = sshHostPort
     self.forwards = forwards
     self.vmnet = vmnet
+    self.sharedDirectory = sharedDirectory
   }
 }
 
@@ -172,6 +175,20 @@ public enum QEMUCommandLine {
       // full kernels; virtio-input for cloud kernels, which have no USB stack.
       args += ["-device", "qemu-xhci", "-device", "usb-kbd", "-device", "usb-tablet"]
       args += ["-device", "virtio-keyboard-pci", "-device", "virtio-tablet-pci"]
+    }
+    // R-404: the shared directory as 9p over virtio (`-virtfs`). `mapped-xattr` keeps the
+    // guest's owners and modes in extended attributes, since QEMU runs unprivileged.
+    if let shared = options.sharedDirectory {
+      guard plan.grants(.sharedDir) else {
+        throw VMLabError.invalidRequest(
+          field: "share", reason: "the plan does not grant shared_dir",
+          hint: "Require shared_dir, or drop share.")
+      }
+      args += [
+        "-virtfs",
+        "local,path=\(escape(shared)),mount_tag=\(SharedDirSpec.tag),"
+          + "security_model=mapped-xattr,id=\(SharedDirSpec.tag)",
+      ]
     }
     // R-403: qemu-guest-agent's virtio-serial port, served on a unix socket of its own (QGA is
     // not reachable through QMP). PCI-less `other` architectures get none.

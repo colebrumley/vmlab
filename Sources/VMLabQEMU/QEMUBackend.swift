@@ -204,6 +204,8 @@ public final class QEMUBackend: Backend {
     var config: CloudInitConfig?
     // The key is R-400's; until it exists the guest boots without a seed.
     let publicKey = layout.directory.appending(path: "id_ed25519.pub")
+    let share = SharedDirSpec.of(record)
+    try share?.checkHostDirectory(vmDirectory: layout.directory)
     if seed, base != nil, let image = record.image,
       let key = try? String(contentsOf: publicKey, encoding: .utf8)
     {
@@ -212,11 +214,15 @@ public final class QEMUBackend: Backend {
         user: images.pulled(image)?.login.user ?? "debian",
         sshPublicKey: key.trimmingCharacters(in: .whitespacesAndNewlines),
         // R-504: the desktop only; QEMU's VNC socket is the display, so no VNC server.
-        gui: plan.provisionsDesktop ? GUIStack(vncPassword: nil) : nil)
+        gui: plan.provisionsDesktop ? GUIStack(vncPassword: nil) : nil,
+        mounts: share.map {
+          [GuestMount(tag: SharedDirSpec.tag, guestPath: $0.guestPath, kind: .ninep)]
+        } ?? [])
     }
     return QEMULaunchRequest(
       record: record, plan: plan, layout: layout, baseImage: base, boot: boot, seed: config,
-      installation: try locate())
+      installation: try locate(),
+      sharedDirectory: share?.hostDirectory(vmDirectory: layout.directory))
   }
 
   /// The record's boot spec with host paths checked; a kernel boot without a kernel path takes

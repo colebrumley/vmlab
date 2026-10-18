@@ -309,4 +309,24 @@ import VMLabCore
     #expect(mac != QEMUCommandLine.mac(for: "vm-abc235"))
     #expect(mac.hasPrefix("52:54:00:") && mac.count == 17)
   }
+
+  /// R-404: a shared directory is `-virtfs` with tag share0, and needs shared_dir in the plan.
+  @Test func sharedDirectoryIsVirtfs() throws {
+    var record = try Self.record("hvf")
+    record.features.append(.sharedDir)
+    let options = QEMULaunchOptions(
+      firmware: Self.firmware, gdbPort: 1234, sharedDirectory: "/Users/me/a,b")
+    let args = try QEMUCommandLine.arguments(
+      record: record, plan: Self.plan(for: record), layout: Self.layout(record), options: options)
+    let index = try #require(args.firstIndex(of: "-virtfs"))
+    #expect(
+      args[index + 1]
+        == "local,path=/Users/me/a,,b,mount_tag=share0,security_model=mapped-xattr,id=share0")
+    record.features.removeAll { $0 == .sharedDir }
+    #expect(throws: VMLabError.self) {
+      try QEMUCommandLine.arguments(
+        record: record, plan: Self.plan(for: record), layout: Self.layout(record),
+        options: options)
+    }
+  }
 }

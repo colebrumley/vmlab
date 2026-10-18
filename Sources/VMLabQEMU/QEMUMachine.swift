@@ -22,12 +22,14 @@ public struct QEMULaunchRequest: Sendable {
   public var forwards: [PortForward]?
   /// The NIC is `vmnet-shared` rather than user-mode networking (`net_fast`, R-309).
   public var vmnet: Bool
+  /// The host directory shared into the guest (R-404).
+  public var sharedDirectory: URL?
 
   public init(
     record: VMRecord, plan: Plan, layout: QEMULayout, baseImage: URL?,
     boot: BootSpec = BootSpec(), seed: CloudInitConfig? = nil, installation: QEMUInstallation,
     gdbPort: Int? = nil, sshHostPort: Int? = nil, forwards: [PortForward]? = nil,
-    vmnet: Bool = false
+    vmnet: Bool = false, sharedDirectory: URL? = nil
   ) {
     self.record = record
     self.plan = plan
@@ -40,6 +42,7 @@ public struct QEMULaunchRequest: Sendable {
     self.sshHostPort = sshHostPort
     self.forwards = forwards
     self.vmnet = vmnet
+    self.sharedDirectory = sharedDirectory
   }
 }
 
@@ -151,7 +154,7 @@ public actor QEMUMachine {
     var options = QEMULaunchOptions(
       boot: request.boot, disk: request.baseImage != nil, seed: request.seed != nil,
       gdbPort: request.gdbPort, sshHostPort: request.sshHostPort, forwards: request.forwards,
-      vmnet: request.vmnet)
+      vmnet: request.vmnet, sharedDirectory: request.sharedDirectory?.path)
     if request.boot.mode == .disk {
       options.firmware = try request.installation.firmware(for: request.plan.guest.arch)
     }
