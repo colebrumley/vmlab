@@ -207,7 +207,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   the exact expected suggestions; a property test over 500 random requirement sets asserts a
   returned plan satisfies every required feature and the dynamic limits.
 
-- [ ] **R-104 VM store and `vm.json`**
+- [x] **R-104 VM store and `vm.json`**
   `VMLAB_HOME` (default `~/.vmlab`) with the layout of Appendix F. `VMRecord` (`schemaVersion`,
   `id`, `name`, `profile`, `guest`, `features`, `resources`, `image`, `network`, `createdAt`,
   `state: created|running|paused|stopped|suspended|broken`, `runtime: { pid, controlSocket,
