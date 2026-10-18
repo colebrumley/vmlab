@@ -29,6 +29,44 @@ import VMLabCore
     #expect(bystander.isRunning, "vmlab SIGKILLed /bin/sleep, which it never started")
   }
 
+  /// CX-15: nothing observed the runner's exit, so after a guest shutdown or a SIGKILL the VM
+  /// showed running until the next restart. The backend watches the runner pid and records it.
+  @Test(.timeLimit(.minutes(1))) func aRunnerExitIsRecordedWhenItHappens() async throws {
+    let home = FileManager.default.temporaryDirectory.appending(path: "vmlab-vzx-\(UUID())")
+    defer { try? FileManager.default.removeItem(at: home) }
+    let store = Store(home: home)
+    let runner = Process()
+    runner.executableURL = URL(filePath: "/bin/sleep")
+    runner.arguments = ["0.3"]
+    try runner.run()
+    let pid = runner.processIdentifier
+    let record = try store.create(
+      VMRecord(
+        id: "", profile: .vzLinux, guest: GuestSpec(os: .linux, arch: .arm64), features: [],
+        state: .running, runtime: VMRuntime(pid: pid, controlSocket: "/tmp/none.sock")))
+    let backend = VZBackend(store: store)
+    backend.watchExit(id: record.id, pid: pid, isRunning: { LivenessProbe.processExists($0) })
+    let deadline = ContinuousClock.now + .seconds(30)
+    while try store.load(id: record.id).state == .running, ContinuousClock.now < deadline {
+      try await Task.sleep(for: .milliseconds(50))
+    }
+    let stopped = try store.load(id: record.id)
+    #expect(stopped.state == .stopped)
+    #expect(stopped.runtime == nil)
+
+    // A pid already gone when watched is recorded too.
+    let gone = try store.create(
+      VMRecord(
+        id: "", name: "gone", profile: .vzLinux, guest: GuestSpec(os: .linux, arch: .arm64),
+        features: [], state: .running,
+        runtime: VMRuntime(pid: 999_999, controlSocket: "/tmp/none.sock")))
+    backend.watchExit(id: gone.id, pid: 999_999, isRunning: { _ in false })
+    while try store.load(id: gone.id).state == .running, ContinuousClock.now < deadline {
+      try await Task.sleep(for: .milliseconds(50))
+    }
+    #expect(try store.load(id: gone.id).state == .stopped)
+  }
+
   static let tools =
     FileManager.default.isExecutableFile(atPath: "/usr/bin/ssh-keygen")
     && FileManager.default.isExecutableFile(atPath: "/usr/bin/hdiutil")

@@ -21,6 +21,9 @@ public struct VZBackend: Backend {
   public var commands: any CommandRunning
   /// The connected serial channel of each guest, shared by every copy of this backend.
   let serialChannels = VZSerialChannels()
+  /// CX-15: the runner process of every guest this backend started or attached, watched for its
+  /// exit (guest shutdown, SIGKILL), which is recorded at once instead of at the next restart.
+  let exitWatchers = VZExitWatchers()
 
   public init(
     store: Store, launcher: VZRunnerLauncher = VZRunnerLauncher(),
@@ -151,6 +154,7 @@ public struct VZBackend: Backend {
       })
     await serialChannels.drop(record.id)
     let handle = try await launcher.launch(vmDirectory: dir, config: config)
+    watchExit(id: record.id, pid: handle.runtime.pid)
     var runtime = handle.runtime
     if let socket = config.serialSocket {
       runtime.serialSocket = socket
@@ -245,6 +249,7 @@ public struct VZBackend: Backend {
 
   public func attach(_ record: VMRecord) async throws(VMLabError) -> any RunningVM {
     let handle = try await VMLabVZ.attach(socketPath: target(record).client.socketPath)
+    if record.runtime?.pid == handle.pid { watchExit(id: record.id, pid: handle.pid) }
     var serial: SerialChannel? = nil
     if record.features.contains(.serial) {
       let socket = record.runtime?.serialSocket ?? paths(record).serialSocket.path
@@ -258,6 +263,26 @@ public struct VZBackend: Backend {
     return VZRunningVM(
       id: record.id, profile: profile, features: record.features, handle: handle, serial: serial,
       ssh: ssh, checkpoints: VZCheckpoints(backend: self, record: record))
+  }
+
+  /// Records the runner's exit as soon as process `pid` ends (`Store.recordEngineExit`, which
+  /// leaves a VM an action already moved, or one on another pid, alone).
+  func watchExit(
+    id: String, pid: Int32,
+    isRunning: (@Sendable (Int32) -> Bool)? = nil
+  ) {
+    guard pid > 0 else { return }
+    let store = store
+    let directory = store.directory(of: id)
+    let serial = serialChannels
+    exitWatchers.watch(
+      id: id, pid: pid,
+      isRunning: isRunning ?? { EngineProcess.isRunning($0, vmDirectory: directory) }
+    ) {
+      await serial.drop(id)
+      await store.recordEngineExit(
+        id: id, pid: pid, reason: "the vmlab-vz runner (pid \(pid)) exited")
+    }
   }
 
   /// The runner's client and pid, from the record's runtime or the VM directory.
@@ -320,6 +345,56 @@ enum VZDisk {
         code: .internal, message: "Cannot grow \(url.path) to \(target) bytes: \(error)",
         hint: "Check free disk space under VMLAB_HOME.")
     }
+  }
+}
+
+/// One kqueue process source (`EVFILT_PROC`, `NOTE_EXIT`) per watched guest; a guest watched
+/// again on the same pid keeps its source, on a new pid replaces it.
+final class VZExitWatchers: Sendable {
+  private struct Watch: @unchecked Sendable {
+    var pid: Int32
+    var source: any DispatchSourceProcess
+  }
+  private let watches = Mutex<[String: Watch]>([:])
+
+  func watch(
+    id: String, pid: Int32, isRunning: @escaping @Sendable (Int32) -> Bool,
+    onExit: @escaping @Sendable () async -> Void
+  ) {
+    let fired = Mutex(false)
+    let fire: @Sendable () -> Void = { [weak self] in
+      guard
+        fired.withLock({ was in
+          defer { was = true }
+          return !was
+        })
+      else { return }
+      self?.watches.withLock { watches in
+        if let watch = watches[id], watch.pid == pid {
+          watch.source.cancel()
+          watches[id] = nil
+        }
+      }
+      Task { await onExit() }
+    }
+    let replaced = watches.withLock { watches -> Bool in
+      if let current = watches[id] {
+        if current.pid == pid { return false }
+        current.source.cancel()
+      }
+      let source = DispatchSource.makeProcessSource(
+        identifier: pid, eventMask: .exit, queue: .global())
+      source.setEventHandler(handler: fire)
+      watches[id] = Watch(pid: pid, source: source)
+      source.resume()
+      return true
+    }
+    // A process that ended before the source was registered never fires it.
+    if replaced, !isRunning(pid) { fire() }
+  }
+
+  func stop(_ id: String) {
+    watches.withLock { $0.removeValue(forKey: id)?.source.cancel() }
   }
 }
 
