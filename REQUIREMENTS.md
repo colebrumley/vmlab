@@ -677,7 +677,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
 
 ## Phase 8 — Checkpoints and manifests
 
-- [ ] **R-800 Checkpoint tree**
+- [x] **R-800 Checkpoint tree**
   `<vm>/checkpoints.json`: nodes with `id`, `name`, `parent`, `mode: disk|live`, `createdAt`,
   `state at creation`, `manifestPath?`, `note`. `vm_checkpoint create(name, mode: auto|disk|live,
   manifest: bool, note)`: `auto` picks `live` if granted and the guest is running, else `disk`
