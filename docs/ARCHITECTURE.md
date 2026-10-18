@@ -37,9 +37,25 @@ and `EventLog.latestPanic()` reads the newest. Also process-wide logging (`VMLab
 client, the GDB stub endpoint, and qcow2 internal snapshots. The serial channel itself is Core's
 `SerialChannel`, shared with VZ.
 
-**`VMLabVZ`** (library). The Virtualization.framework backend, seen from the server: the client of a
-`vmlab-vz` runner's control socket, and the integration with Tart for macOS images and clones. The
-framework itself is loaded only in `vmlab-vz`.
+**`VMLabVZ`** (library). The Virtualization.framework backend, seen from the server; it never
+imports Virtualization (`BoundariesTests`), which is loaded only in `vmlab-vz`. `ControlProtocol.swift`
+is the control-socket codec both ends share: one JSON object per line, `ControlRequest` (`command`:
+`status`, `pause`, `resume`, `stop` (the guest's `requestStop`), `kill`, `save`/`restore` with an
+absolute `path`, `exit`) and `ControlResponse` (`ok`, `state` as `RunnerState`, `pid`, or an Appendix
+D `error`), `ControlCodec` (refuses bad lines with `invalid_request`) and `LineBuffer` (64 KB line
+cap). `UnixStream` holds the blocking unix-socket calls. `VZControlClient` opens one connection per
+request (off the cooperative pool, per-command timeouts) and maps no answer to `guest_unreachable`
+and a late one to `timeout`. `RunnerConfig.swift` has `VZRunnerPaths` (`<vm>/control.sock`,
+`vz.pid`, `vz.log`, `vz-config.json`) and `VZRunnerConfig`, the plain machine description the
+runner builds from (`linuxEFI(record:vmDirectory:)`: CPUs, memory, `efi-vars.bin`, `disk.raw`, NAT,
+console to `console.log`; R-601 extends it). `VZRunnerLauncher` checks the runner's entitlement
+(`host_missing_tool` with `signingHint`), writes the config and starts `vmlab-vz run <vm>` with
+`Process` (own process group, stdin `/dev/null`, output appended to `vz.log`), then waits for
+`status` to say `running` (or `stopped` with `hold`); a runner that dies first reports its error as
+a `vmlab-vz-error: <json>` line in `vz.log`. `VMLabVZ.attach(socketPath:)` / `attach(runtime:)`
+reconnect by socket path alone. `VZBackend` (profile `vz-linux`) conforms to Core's `Backend`:
+create clones the pulled raw image to `<vm>/disk.raw`, start launches, stop/kill wait for the runner
+to exit; `VZRunningVM` offers no serial, display or checkpoint channel yet (R-602, R-503, R-605).
 
 **`VMLabRFB`** (library). A VNC (RFB) client: framebuffer updates to PNG, pointer and key events. It
 gives both engines a screen to look at and click on. `RFBClient` (an actor) speaks RFB 3.8 over an
@@ -105,9 +121,15 @@ to stderr (the Appendix D object with `--json`) with exit status 1. Built: `fact
 directly until the `images` handler lands. It bootstraps logging and hands off to Core and `VMLabMCP`.
 
 **`vmlab-vz`** (executable). The VZ runner: one process per Virtualization.framework guest, so a
-guest outlives the server, driven over `control.sock` in the VM directory. It is the only binary
-that needs `com.apple.security.virtualization`; `scripts/sign.sh` ad-hoc signs it with
-`Sources/vmlab-vz/vmlab-vz.entitlements` after every build.
+guest outlives the server. `vmlab-vz run <vm-dir> [--hold]` writes `vz.pid`, builds the machine from
+`vz-config.json` (`ConfigurationBuilder`: generic platform, `VZEFIBootLoader` with its variable
+store, virtio-blk raw disks, NAT virtio-net, virtio console to a file, entropy; a missing entitlement
+at `validate()` is `host_missing_tool`), owns the `VZVirtualMachine` on the main queue (`Runner`) and
+serves `control.sock` (`ControlServer`: an accept thread and one thread per connection, each request
+handed to the main queue). It ignores SIGHUP, treats SIGTERM/SIGINT as `exit`, logs `lifecycle`
+events to `events.jsonl`, and once the guest has run and stops it removes its socket and pid file and
+exits. It is the only binary that needs `com.apple.security.virtualization`; `scripts/sign.sh`
+ad-hoc signs it with `Sources/vmlab-vz/vmlab-vz.entitlements` after every build.
 
 **`VMLabSwitch`** (library). The segment switch with no engine and no Core dependency.
 `SwitchCore` is the forwarding logic on integer ports: a learning MAC table with aging, flooding of
