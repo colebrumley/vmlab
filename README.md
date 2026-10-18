@@ -50,12 +50,14 @@ toolchain:
 swift build -c release
 scripts/sign.sh release                     # the VZ runner's virtualization entitlement
 mkdir -p ~/.local/bin
-cp .build/release/vmlab .build/release/vmlab-vz .build/release/vmlab-switch ~/.local/bin/
+cp .build/release/vmlab .build/release/vmlab-vz .build/release/vmlab-switch .build/release/vmlab-match \
+  ~/.local/bin/
 ~/.local/bin/vmlab doctor
 ~/.local/bin/vmlab install-mcp --client claude-code --write
 ```
 
-Keep the three binaries in one directory: `vmlab` looks for `vmlab-vz` next to itself.
+Keep the four binaries in one directory: `vmlab` looks for `vmlab-vz`, `vmlab-switch` and
+`vmlab-match` (which runs `vm_serial wait` patterns in a process it can kill) next to itself.
 
 ### Release tarball
 
@@ -65,6 +67,6 @@ VMLAB_VERSION=0.0.0-dry scripts/release.sh  # a dry run without a tag
 ```
 
 It builds in release, signs `vmlab-vz`, and writes `dist/vmlab-<version>-arm64.tar.gz` (`vmlab`,
-`vmlab-vz`, `vmlab-switch`, this README) with a `.sha256` beside it; `vmlab --version` prints that
+`vmlab-vz`, `vmlab-switch`, `vmlab-match`, this README) with a `.sha256` beside it; `vmlab --version` prints that
 version. It then unpacks the tarball into a temp directory and checks that the unpacked `vmlab doctor` finds its
-signed `vmlab-vz`. Unpack it anywhere and put the directory on `PATH`.
+signed `vmlab-vz` and that `vmlab-match --self-test` passes. Unpack it anywhere and put the directory on `PATH`.

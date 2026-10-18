@@ -158,7 +158,8 @@ public struct VZBackend: Backend {
     if let held = try await startSuspended(record) { return held }
     let dir = store.directory(of: record.id)
     // VZ refuses to start with a missing shared directory; say which field instead.
-    try SharedDirSpec.of(record)?.checkHostDirectory(vmDirectory: dir)
+    try SharedDirSpec.of(record)?.checkHostDirectory(
+      vmDirectory: dir, policy: PathPolicy.load(home: store.home))
     // R-604: a kernel boot takes the image's (extracted, uncompressed) kernel when none was given.
     let boot =
       record.boot == nil

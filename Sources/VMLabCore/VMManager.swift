@@ -79,18 +79,32 @@ public actor VMManager {
     // (`require` or `prefer` without a mode) must mean no network device. Requirements already
     // refuse net_none beside mode nat, forwards or a segment.
     if plan.requests(.netNone) { new.network.mode = .disabled }
-    // R-1102: a share's host directory is model-supplied; it must pass the path policy and is
-    // recorded canonical, so a symlink swapped in later does not move it.
+    // R-1102: a share's host directory is model-supplied and the guest writes it; it must pass
+    // the path policy as a write path and is recorded canonical, so a symlink swapped in later
+    // does not move it (backends check it again at start).
     if let host = new.share?.host {
-      new.share?.host = try PathPolicy.load(home: store.home).check(host, field: "share.host").path
+      new.share?.host = try PathPolicy.load(home: store.home).check(
+        host, field: "share.host", access: .write
+      ).path
     }
     // BH-1: so are the host paths named in extra.qemuArgs (checked again at start).
-    try new.extra?.checkHostPaths(policy: PathPolicy.load(home: store.home), vmlabHome: store.home)
+    try new.extra?.checkHostPaths(
+      policy: PathPolicy.load(home: store.home), vmlabHome: store.home,
+      allowHostCode: VMLabConfig.load(home: store.home).allowHostCode)
     // CR-4: boot images are model-supplied host paths the engine reads; the same policy, plus
     // VMLAB_HOME's images/ (where extract_kernel puts kernels), recorded canonical.
     if let boot = new.boot { new.boot = try Self.checkedBoot(boot, home: store.home) }
+    // A secret: kept in <vm>/sudo.pass for the backend, never in the record.
+    let sudoPassword = new.provision?.sudoPassword
+    if sudoPassword != nil {
+      new.provision?.sudoPassword = nil
+      if new.provision?.isEmpty == true { new.provision = nil }
+    }
     var stored = try store.create(new)
     do throws(VMLabError) {
+      if let sudoPassword {
+        try SudoPassword.write(sudoPassword, in: store.directory(of: stored.id))
+      }
       if let name = Self.segmentName(of: stored) {
         let attachment = try segments.join(name, vm: stored)
         stored = try store.update(id: stored.id) { $0.segment = attachment }

@@ -392,3 +392,55 @@ final class FakeProvisioner: GuestProvisioning {
     #expect(silent.vms.isEmpty)
   }
 }
+
+extension ProvisionTests {
+  /// provision.sudoPassword is macOS only, one line, and never encoded (so never in vm.json).
+  @Test func sudoPasswordIsMacOSOnlyAndNeverEncoded() throws {
+    let r = try Self.decode(
+      #"{"guest":{"os":"macos","arch":"arm64"},"provision":{"sudoPassword":"pa ss'\"w"}}"#)
+    #expect(r.provision?.sudoPassword == "pa ss'\"w")
+    #expect(r.provision?.isEmpty == true && r.impliedFeatures.isEmpty)
+    let encoded = String(decoding: try JSONEncoder().encode(r), as: UTF8.self)
+    #expect(!encoded.contains("sudoPassword") && !encoded.contains("pa ss"))
+    for (json, os) in [
+      (#"{"sudoPassword":"x"}"#, "linux"), (#"{"sudoPassword":""}"#, "macos"),
+      (#"{"sudoPassword":"a\nb"}"#, "macos"),
+    ] {
+      let error = #expect(throws: VMLabError.self) {
+        _ = try Self.decode(
+          #"{"guest":{"os":""# + os + #"","arch":"arm64"},"provision":"# + json + "}")
+      }
+      #expect(error?.data["field"] == .string("provision.sudoPassword"))
+    }
+  }
+
+  @Test func sudoPasswordFileIsPrivate() throws {
+    let dir = try Self.directory()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    #expect(SudoPassword.read(in: dir) == nil)
+    try SudoPassword.write("s3cret", in: dir)
+    try SudoPassword.write("s3cr3t", in: dir)
+    #expect(SudoPassword.read(in: dir) == "s3cr3t")
+    let mode =
+      try FileManager.default.attributesOfItem(
+        atPath: SudoPassword.url(in: dir).path)[.posixPermissions] as? Int
+    #expect(mode == 0o600)
+  }
+
+  /// A macOS share.guest may hold spaces and quotes (the LaunchDaemon takes it as an argument);
+  /// a Linux one may not (it is an fstab field); neither takes a control character.
+  @Test func macOSShareGuestTakesSpacesAndQuotes() throws {
+    let mac = try Self.decode(
+      #"{"guest":{"os":"macos","arch":"arm64"},"share":{"guest":"/Users/admin/it's \"here\""}}"#)
+    #expect(mac.share?.guest == #"/Users/admin/it's "here""#)
+    _ = try Self.decode(
+      #"{"guest":{"os":"macos","arch":"arm64"},"share":{"guest":"/Volumes/My Shared Files"}}"#)
+    for (os, path) in [("linux", "/mnt/a b"), ("macos", #"/a\tb"#), ("macos", "/")] {
+      let error = #expect(throws: VMLabError.self) {
+        _ = try Self.decode(
+          #"{"guest":{"os":""# + os + #"","arch":"arm64"},"share":{"guest":""# + path + #""}}"#)
+      }
+      #expect(error?.data["field"] == .string("share.guest"))
+    }
+  }
+}

@@ -61,7 +61,8 @@ import VMLabVZ
   }
 
   static func makeGuest(
-    features: [Feature], suffix: String, provision: ProvisionSpec? = nil
+    features: [Feature], suffix: String, provision: ProvisionSpec? = nil,
+    share: (URL) -> SharedDirSpec? = { _ in nil }
   ) async throws -> Guest {
     let home = URL(filePath: "/tmp/vmlab-test-\(getpid())-\(suffix)")
     try? FileManager.default.removeItem(at: home)
@@ -83,7 +84,7 @@ import VMLabVZ
     let created = try await manager.create(
       VMRecord(
         id: "", profile: .vzMacOS, guest: plan.guest, features: [], image: "macos-base",
-        provision: provision),
+        provision: provision, share: share(home)),
       plan: plan)
     return Guest(
       home: home, store: store, manager: manager, registry: registry,
@@ -156,6 +157,59 @@ import VMLabVZ
       #expect(wrote?.status == 0, "\(wrote?.output ?? "nothing")")
       let back = try? String(contentsOf: shared.appending(path: "back.txt"), encoding: .utf8)
       #expect(back?.contains("from the guest") == true)
+    } catch {
+      await guest.teardown()
+      throw error
+    }
+    await guest.teardown()
+  }
+
+  /// A share at a guest path of its own (/Users/admin/hostshare): first boot installs the
+  /// io.vmlab.share LaunchDaemon with the image's sudo password; a host file is readable there, a
+  /// guest write shows up on the host, and after a stop and start the mount is back.
+  @Test(.enabled(if: ready && hostHasRoom()), .timeLimit(.minutes(15)))
+  func shareAtAGuestPathOfItsOwnSurvivesARestart() async throws {
+    let mount = "/Users/admin/hostshare"
+    let guest = try await Self.makeGuest(
+      features: [.execSSH, .sharedDir], suffix: "h",
+      share: { home in
+        let host = home.appending(path: "hostshare", directoryHint: .isDirectory)
+        try? FileManager.default.createDirectory(at: host, withIntermediateDirectories: true)
+        return SharedDirSpec(host: host.path, guest: mount)
+      })
+    do {
+      let host = URL(filePath: try #require(guest.record.share?.host))
+      try Data("from the host\n".utf8).write(to: host.appending(path: "hello.txt"))
+      let started = try #require(
+        try await guest.manager.performAdmitted(.start, on: guest.record.id))
+      let ip = try #require(started.runtime?.ip)
+      let report = try #require(ProvisionReport.load(from: guest.directory))
+      #expect(report.steps.allSatisfy { $0.status == .succeeded }, "\(report.steps)")
+      #expect(report.steps.contains { $0.name == "share_mount" })
+      let read = Self.keySSH(guest, host: ip, command: "cat '\(mount)/hello.txt'")
+      #expect(read?.output.contains("from the host") == true, "\(read?.output ?? "nothing")")
+      let wrote = Self.keySSH(guest, host: ip, command: "echo from the guest > '\(mount)/back.txt'")
+      #expect(wrote?.status == 0, "\(wrote?.output ?? "nothing")")
+      let back = try? String(contentsOf: host.appending(path: "back.txt"), encoding: .utf8)
+      #expect(back?.contains("from the guest") == true)
+
+      // A restart: the daemon mounts it again at boot (provisioning does not run twice).
+      _ = try await guest.manager.perform(.stop, on: guest.record.id)
+      try Data("after the restart\n".utf8).write(to: host.appending(path: "again.txt"))
+      let again = try #require(
+        try await guest.manager.performAdmitted(.start, on: guest.record.id))
+      let ip2 = try #require(again.runtime?.ip)
+      var output: CommandOutput? = nil
+      let clock = ContinuousClock()
+      let deadline = clock.now.advanced(by: .seconds(180))
+      while clock.now < deadline {
+        output = Self.keySSH(guest, host: ip2, command: "cat '\(mount)/again.txt'")
+        if output?.status == 0 { break }
+        try await Task.sleep(for: .seconds(3))
+      }
+      #expect(output?.output.contains("after the restart") == true, "\(output?.output ?? "")")
+      let mounts = Self.keySSH(guest, host: ip2, command: "/sbin/mount")
+      #expect(mounts?.output.contains(" on \(mount) (") == true, "\(mounts?.output ?? "")")
     } catch {
       await guest.teardown()
       throw error

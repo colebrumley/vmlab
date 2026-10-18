@@ -42,6 +42,35 @@ import VMLabCore
     }
   }
 
+  /// A pull writes `local`: a home dotfile, `~/Library` or a home folder outside the write roots
+  /// is refused before any copy; a push may still read the home.
+  @Test func pullDestinationsFollowTheWritePolicy() async throws {
+    let f = try Fixture()
+    defer { f.cleanUp() }
+    _ = try await f.create()
+    let home = FileManager.default.homeDirectoryForCurrentUser.path
+    for local in [
+      home + "/.zshrc", home + "/.ssh/authorized_keys", home + "/Library/LaunchAgents/x.plist",
+      home + "/Documents/vmlab-nope.txt", home, f.context.home.path + "/vms/x",
+    ] {
+      let error = await #expect(throws: VMLabError.self) {
+        try await Self.file(
+          ["action": .string("pull"), "remote": .string("/x"), "local": .string(local)], in: f)
+      }
+      #expect(error?.code == .invalidRequest, "\(local)")
+      #expect(error?.data["field"] == .string("local"))
+      #expect(error?.data["access"] == .string("write"))
+    }
+    // Passes the policy and reaches the channel (the fake backend has no SSH).
+    for (action, local) in [("pull", "/tmp/vmlab-pulled"), ("push", home)] {
+      let error = await #expect(throws: VMLabError.self) {
+        try await Self.file(
+          ["action": .string(action), "remote": .string("/x"), "local": .string(local)], in: f)
+      }
+      #expect(error?.code == .guestUnreachable, "\(action) \(local)")
+    }
+  }
+
   @Test func needsAnSSHChannel() async throws {
     let f = try Fixture()
     defer { f.cleanUp() }

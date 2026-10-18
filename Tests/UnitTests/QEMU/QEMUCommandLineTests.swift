@@ -172,6 +172,59 @@ import VMLabCore
     } throws: { ($0 as? VMLabError)?.data["field"] == .string("extra.qemuArgs[0]") }
   }
 
+  /// The request's -cpu replaces vmlab's and its -machine properties join vmlab's -machine;
+  /// neither is appended again.
+  static func customArgs(_ fixture: String, _ qemuArgs: [String]) throws -> [String] {
+    var record = try record(fixture)
+    record.extra = ExtraSpec(qemuArgs: qemuArgs)
+    record.features.append(.customDevices)
+    return try QEMUCommandLine.arguments(
+      record: record, plan: plan(for: record), layout: layout(record),
+      options: QEMULaunchOptions(firmware: firmware, gdbPort: 41234))
+  }
+
+  @Test func cpuAndMachineReplaceVmlabsOwn() throws {
+    let hvf = try Self.customArgs(
+      "hvf", ["-cpu", "host,pmu=off", "-machine", "highmem=off,dumpdtb=/tmp/a,,b.dtb", "-usb"])
+    #expect(
+      Array(hvf.prefix(10)) == [
+        "-name", "vmlab-\(try Self.record("hvf").id)", "-nodefaults", "-no-user-config",
+        "-machine", "virt,highmem=off,dumpdtb=/tmp/a,,b.dtb", "-accel", "hvf", "-cpu",
+        "host,pmu=off",
+      ])
+    #expect(hvf.filter { $0 == "-cpu" }.count == 1 && hvf.filter { $0 == "-machine" }.count == 1)
+    #expect(hvf.last == "-usb")
+
+    let tcg = try Self.customArgs(
+      "tcg-arm64", ["-M", "sbsa-ref,secure=on", "-cpu", "cortex-a72,pmu=on", "-icount", "auto"])
+    #expect(tcg[tcg.firstIndex(of: "-machine")! + 1] == "sbsa-ref,secure=on")
+    #expect(tcg[tcg.firstIndex(of: "-cpu")! + 1] == "cortex-a72,pmu=on")
+    #expect(tcg.filter { $0 == "-cpu" }.count == 1)
+    #expect(Array(tcg.suffix(2)) == ["-icount", "auto"])
+
+    // vmlab's own defaults stand when the request names neither.
+    let plain = try Self.customArgs("hvf", ["-usb"])
+    #expect(plain[plain.firstIndex(of: "-machine")! + 1] == "virt")
+    #expect(plain[plain.firstIndex(of: "-cpu")! + 1] == "host")
+  }
+
+  /// What contradicts the profile is invalid_request naming the argument.
+  @Test(arguments: [
+    ("hvf", ["-cpu", "cortex-a72"], 1),
+    ("hvf", ["-usb", "-machine", "raspi3b"], 2),
+    ("hvf", ["-icount", "shift=auto"], -1),
+    ("tcg-arm64", ["-cpu", "host"], 1),
+  ])
+  func profileContradictionsAreRefused(fixture: String, qemuArgs: [String], index: Int) {
+    #expect {
+      _ = try Self.customArgs(fixture, qemuArgs)
+    } throws: { error in
+      guard let error = error as? VMLabError, error.code == .invalidRequest else { return false }
+      let field = index < 0 ? "extra.qemuArgs" : "extra.qemuArgs[\(index)]"
+      return error.data["field"] == .string(field)
+    }
+  }
+
   /// R-308: user-mode NIC with the SSH forward and every requested forward, ephemeral ones
   /// resolved; net_none has no NIC at all.
   @Test func userNetworkingSnapshot() throws {

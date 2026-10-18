@@ -230,11 +230,18 @@ enum Schema {
           [
             "qemuArgs": array(
               string("One QEMU command-line argument."),
-              "Arguments appended verbatim after vmlab's own (implies custom_devices, so QEMU), "
-                + "e.g. [\"-device\", \"virtio-rng-pci\"]. Only -device, -global, -drive, "
-                + "-blockdev, -object, -chardev, -netdev, -nic, -rtc, -boot, -smbios, -fw_cfg, "
-                + "-action, -usb, -no-reboot and -no-shutdown are allowed; host paths must be "
-                + "absolute, under the home or /tmp, and outside VMLAB_HOME."
+              "QEMU arguments after vmlab's own (implies custom_devices, so QEMU), e.g. "
+                + "[\"-device\", \"virtio-rng-pci\"]. Devices, drives, objects, chardevs, "
+                + "user-mode netdevs, -cpu (replaces vmlab's; host or max under qemu-hvf), "
+                + "-machine properties (merged into vmlab's; no accel=), -icount, -d, -D, -trace, "
+                + "-numa, -overcommit and more are allowed. Refused: monitors, -serial (vmlab's "
+                + "console; add -chardev plus -device pci-serial), -incoming, -add-fd, -set, "
+                + "-readconfig, exec:/mon:/cmd:, fd/script/helper keys, tap/bridge/vmnet; "
+                + "-plugin, -semihosting and passthrough devices need the owner's allowHostCode. "
+                + "Host paths must be absolute and outside VMLAB_HOME; paths QEMU only reads "
+                + "(-cdrom, romfile=, readonly=on disks) may be under the home or /tmp, paths it "
+                + "writes (-D, -trace file=, chardev path=, writable disks, shared dirs) only "
+                + "under /tmp, $TMPDIR or ~/vmlab-files (never a home dotfile or ~/Library)."
             )
           ], description: "Engine-specific additions."),
         "provision": object(
@@ -250,15 +257,24 @@ enum Schema {
               "Commands run in order on first boot: as root after cloud-init (Linux), or over "
                 + "SSH as the login user (macOS). The first that fails stops the rest; "
                 + "vm_inspect reports it as provision_failed."),
+            "sudoPassword": string(
+              "macOS only: the guest login user's password, for sudo. Needed only for a "
+                + "share.guest other than \(SharedDirSpec.macOSAutomountPath) on an image that "
+                + "records no password (macos-base has one). Kept in the VM directory, never "
+                + "in vm.json or provision.json."),
           ], description: "First-boot provisioning beyond vmlab's own setup."),
         "share": object(
           [
             "host": string(
-              "Absolute host path of an existing directory under your home or /tmp. Omitted: the VM's own shared/ "
+              "Absolute host path of an existing directory under /tmp, $TMPDIR or ~/vmlab-files "
+                + "(the guest writes it; never the home itself, a home dotfile or ~/Library). "
+                + "Omitted: the VM's own shared/ "
                 + "directory (vm_inspect endpoints.share)."),
             "guest": string(
-              "Absolute guest path it is mounted at. A macOS guest always mounts it at "
-                + "\(SharedDirSpec.macOSAutomountPath).",
+              "Absolute guest path it is mounted at. macOS: default "
+                + "\(SharedDirSpec.macOSAutomountPath) (automounted); any other path is mounted "
+                + "at every boot by a LaunchDaemon that first boot installs with sudo, so the "
+                + "image must record the login password or provision.sudoPassword must give it.",
               default: SharedDirSpec.defaultGuestPath),
           ],
           description:

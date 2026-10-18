@@ -12,23 +12,41 @@ public struct ProvisionSpec: Codable, Sendable, Hashable {
   /// Shell commands run in order as root (Linux) or the login user (macOS); the first that exits
   /// non-zero stops the rest.
   public var runCommands: [String]
+  /// The macOS login user's password for `sudo` (and for the first SSH login when the image
+  /// records none), needed to mount `share.guest` anywhere but `/Volumes/My Shared Files`.
+  /// Decoded from the request only: never encoded, so never in `vm.json`; `VMManager.create`
+  /// moves it to `<vm>/sudo.pass` (mode 0600, `SudoPassword`).
+  public var sudoPassword: String?
 
-  public init(packages: [String] = [], userData: String? = nil, runCommands: [String] = []) {
+  public init(
+    packages: [String] = [], userData: String? = nil, runCommands: [String] = [],
+    sudoPassword: String? = nil
+  ) {
     self.packages = packages
     self.userData = userData
     self.runCommands = runCommands
+    self.sudoPassword = sudoPassword
   }
 
-  enum CodingKeys: String, CodingKey { case packages, userData, runCommands }
+  enum CodingKeys: String, CodingKey { case packages, userData, runCommands, sudoPassword }
 
   public init(from decoder: any Decoder) throws {
     let c = try decoder.container(keyedBy: CodingKeys.self)
     packages = try c.decodeIfPresent([String].self, forKey: .packages) ?? []
     userData = try c.decodeIfPresent(String.self, forKey: .userData)
     runCommands = try c.decodeIfPresent([String].self, forKey: .runCommands) ?? []
+    sudoPassword = try c.decodeIfPresent(String.self, forKey: .sudoPassword)
   }
 
-  /// True when nothing is asked for.
+  /// Everything but `sudoPassword`, which is a secret.
+  public func encode(to encoder: any Encoder) throws {
+    var c = encoder.container(keyedBy: CodingKeys.self)
+    try c.encode(packages, forKey: .packages)
+    try c.encodeIfPresent(userData, forKey: .userData)
+    try c.encode(runCommands, forKey: .runCommands)
+  }
+
+  /// True when nothing is asked for (a `sudoPassword` alone asks for nothing to run).
   public var isEmpty: Bool {
     packages.isEmpty && (userData ?? "").isEmpty && runCommands.isEmpty
   }
@@ -57,6 +75,15 @@ public struct ProvisionSpec: Codable, Sendable, Hashable {
       throw .invalidRequest(
         field: "provision.runCommands[\(index)]", reason: "empty command",
         hint: "Drop the empty entry or give the shell command to run.")
+    }
+    if let sudoPassword {
+      guard guest.os == .macos else {
+        throw .invalidRequest(
+          field: "provision.sudoPassword",
+          reason: "a Linux guest is provisioned as root by cloud-init and needs no password",
+          hint: "Leave provision.sudoPassword out.")
+      }
+      try SudoPassword.check(sudoPassword)
     }
     if guest.os == .macos {
       if !packages.isEmpty {
@@ -480,5 +507,53 @@ public enum ProvisionPaths {
       steps[fields[0]] = (fields[1], fields[2])
     }
     return steps
+  }
+}
+
+/// The macOS guest's sudo password a request gave (`provision.sudoPassword`), kept beside the VM
+/// in `<vm>/sudo.pass` (mode 0600) and never in `vm.json`, a log or a command line: provisioning
+/// hands it to `sudo -S` on stdin.
+public enum SudoPassword {
+  public static let fileName = "sudo.pass"
+
+  public static func url(in vmDirectory: URL) -> URL { vmDirectory.appending(path: fileName) }
+
+  /// `invalid_request` for an empty password or one `sudo -S` cannot read as one line.
+  public static func check(_ password: String) throws(VMLabError) {
+    guard !password.isEmpty,
+      !password.unicodeScalars.contains(where: { $0 == "\n" || $0 == "\r" || $0 == "\0" })
+    else {
+      throw .invalidRequest(
+        field: "provision.sudoPassword", reason: "the password is empty or spans lines",
+        hint: "Give the guest login user's password on one line.")
+    }
+  }
+
+  /// Writes `password` to `<vm>/sudo.pass`, readable by its owner only.
+  public static func write(_ password: String, in vmDirectory: URL) throws(VMLabError) {
+    let file = url(in: vmDirectory)
+    let fd = open(file.path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC | O_NOFOLLOW, 0o600)
+    guard fd >= 0 else {
+      throw VMLabError(
+        code: .internal, message: "Cannot write \(file.path): errno \(errno)",
+        hint: "Check that the VM directory is writable.")
+    }
+    defer { close(fd) }
+    _ = fchmod(fd, 0o600)
+    let bytes = Array(password.utf8)
+    let written = bytes.withUnsafeBytes { Foundation.write(fd, $0.baseAddress, $0.count) }
+    guard written == bytes.count else {
+      throw VMLabError(
+        code: .internal, message: "Cannot write \(file.path): errno \(errno)",
+        hint: "Check that the VM directory is writable.")
+    }
+  }
+
+  /// The password in `<vm>/sudo.pass`, or nil when there is none.
+  public static func read(in vmDirectory: URL) -> String? {
+    guard let text = try? String(contentsOf: url(in: vmDirectory), encoding: .utf8),
+      !text.isEmpty
+    else { return nil }
+    return text
   }
 }

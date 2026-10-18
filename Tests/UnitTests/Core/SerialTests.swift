@@ -352,34 +352,39 @@ func eventually(_ condition: () async -> Bool) async -> Bool {
     await channel.stop()
   }
 
-  /// CR-3: a backtracking pattern must not block the channel. `(=|=)+x` is exponential in Swift
-  /// Regex (about a second at 18 '=', four times longer per two more) and is not a nested
-  /// quantifier, so it reaches the matcher. 22 '=' keeps the abandoned match to ~15 s of CPU.
-  @Test(.timeLimit(.minutes(1))) func runawayPatternStillTimesOutAndChannelStaysLive()
-    async throws
-  {
+  /// True once `pid` names no process, not even a zombie: it exited and was reaped.
+  static func gone(_ pid: pid_t) -> Bool { Darwin.kill(pid, 0) != 0 && errno == ESRCH }
+
+  /// CR-3: a backtracking pattern must not block the channel or outlive its wait. `(=|=)+x` is
+  /// exponential in Swift Regex (minutes at 30 '=') and is not a nested quantifier, so it reaches
+  /// the matcher; the wait times out on time and its `vmlab-match` process is killed and reaped.
+  @Test(.timeLimit(.minutes(1))) func runawayPatternTimesOutAndLeavesNoMatcher() async throws {
     let (server, channel) = try await connected()
     defer { server.cleanUp() }
-    server.send(String(repeating: "=", count: 22))
-    #expect(await eventually { await channel.endOffset == 22 })
+    server.send(String(repeating: "=", count: 30))
+    #expect(await eventually { await channel.endOffset == 30 })
     let started = ContinuousClock.now
     async let waited: SerialMatch = channel.wait(
       for: "(=|=)+x", since: 0, timeout: .seconds(2))
     try await Task.sleep(for: .milliseconds(200))
     // Other calls on the channel answer while the match runs, and the reader keeps ingesting.
     let readStarted = ContinuousClock.now
-    #expect(await channel.read(since: 0).text.count == 22)
+    #expect(await channel.read(since: 0).text.count == 30)
     #expect(ContinuousClock.now - readStarted < .milliseconds(500))
     server.send("more\n")
-    #expect(await eventually { await channel.endOffset == 27 })
+    #expect(await eventually { await channel.endOffset == 35 })
     do {
       _ = try await waited
       Issue.record("wait should have timed out")
     } catch let error as VMLabError {
       #expect(error.code == .timeout)
+      #expect(error.data["text"] == .string(String(repeating: "=", count: 30) + "more\n"))
     }
     #expect(ContinuousClock.now - started < .seconds(3))
-    // A second wait on the same channel still works.
+    #expect(await eventually { await !channel.matcherPIDs.isEmpty })
+    let pids = await channel.matcherPIDs
+    #expect(await eventually { pids.allSatisfy(Self.gone) }, "matchers \(pids) still exist")
+    // A second wait on the same channel still works, with a matcher of its own.
     async let next = channel.wait(for: "ready", timeout: .seconds(2))
     try await Task.sleep(for: .milliseconds(50))
     server.send("ready\n")
@@ -387,30 +392,149 @@ func eventually(_ condition: () async -> Bool) async -> Bool {
     await channel.stop()
   }
 
-  @Test(.timeLimit(.minutes(1))) func abandonedMatchesAreBoundedPerChannel() async throws {
+  /// More runaway waits than a channel has matchers: the extra ones queue, every one times out,
+  /// none is refused, no matcher survives, and an ordinary wait afterwards matches at once.
+  @Test(.timeLimit(.minutes(1))) func runawayWaitsQueueForMatchersAndAllEnd() async throws {
     let (server, channel) = try await connected()
     defer { server.cleanUp() }
-    // About 3.5 s of backtracking each, far past the waits' timeouts.
-    server.send(String(repeating: "=", count: 20))
-    #expect(await eventually { await channel.endOffset == 20 })
-    for _ in 0..<SerialChannel.maxAbandonedScans {
-      await #expect(throws: VMLabError.self) {
-        try await channel.wait(for: "(=|=)+x", since: 0, timeout: .milliseconds(100))
+    server.send(String(repeating: "=", count: 30))
+    #expect(await eventually { await channel.endOffset == 30 })
+    let count = SerialChannel.maxMatchers + 2
+    let started = ContinuousClock.now
+    try await withThrowingTaskGroup(of: ErrorCode?.self) { group in
+      for _ in 0..<count {
+        group.addTask {
+          do {
+            _ = try await channel.wait(for: "(=|=)+x", since: 0, timeout: .milliseconds(500))
+            return nil
+          } catch let error as VMLabError {
+            return error.code
+          } catch {
+            return .internal
+          }
+        }
       }
+      for try await code in group { #expect(code == .timeout) }
     }
+    #expect(ContinuousClock.now - started < .seconds(3))
+    let pids = await channel.matcherPIDs
+    #expect(pids.count <= count)
+    #expect(await eventually { pids.allSatisfy(Self.gone) }, "matchers \(pids) still exist")
+    let match = try await channel.wait(for: "=+", since: 0, timeout: .seconds(2))
+    #expect(match == SerialMatch(match: String(repeating: "=", count: 30), start: 0, offset: 30))
+    await channel.stop()
+  }
+
+  @Test func missingMatcherIsEngineError() async throws {
+    let server = try FakeSerialServer()
+    defer { server.cleanUp() }
+    let channel = SerialChannel(
+      socketPath: server.path, logURL: server.logURL, matcherPath: "/nonexistent/vmlab-match")
+    try await channel.start()
+    server.accept()
     do {
-      _ = try await channel.wait(for: "=", since: 0, timeout: .seconds(1))
-      Issue.record("expected invalid_request while the runaway matches run")
+      _ = try await channel.wait(for: "log[a-z]+:", timeout: .seconds(1))
+      Issue.record("expected engine_error")
     } catch let error as VMLabError {
-      #expect(error.code == .invalidRequest)
+      #expect(error.code == .engineError)
+      #expect(error.data["tool"] == .string("vmlab-match"))
+      #expect(error.data["path"] == .string("/nonexistent/vmlab-match"))
     }
-    // Once they finish on their own, waits are accepted again.
-    var accepted = false
-    for _ in 0..<300 where !accepted {
-      accepted = (try? await channel.wait(for: "=", since: 0, timeout: .seconds(1))) != nil
-      if !accepted { try await Task.sleep(for: .milliseconds(100)) }
+    let unlocated = SerialChannel(
+      socketPath: server.path, logURL: server.logURL, matcherPath: nil)
+    await #expect(throws: VMLabError.self) {
+      try await unlocated.wait(for: "x+", since: 0, timeout: .seconds(1))
     }
-    #expect(accepted)
+    // A matcher that exits instead of answering (no SIGPIPE reaches the server either).
+    let other = try FakeSerialServer()
+    defer { other.cleanUp() }
+    let broken = SerialChannel(
+      socketPath: other.path, logURL: other.logURL, matcherPath: "/usr/bin/true")
+    try await broken.start()
+    other.accept()
+    other.send("abc")
+    #expect(await eventually { await broken.endOffset == 3 })
+    do {
+      _ = try await broken.wait(for: "x+", since: 0, timeout: .seconds(2))
+      Issue.record("expected engine_error")
+    } catch let error as VMLabError {
+      #expect(error.code == .engineError)
+    }
+    await broken.stop()
+    await channel.stop()
+  }
+
+  @Test func matcherIsLocatedBesideTheTestBundleOrByEnvironment() {
+    let found = SerialMatcher.locate(environment: [:])
+    #expect(found?.hasSuffix("/vmlab-match") == true)
+    #expect(SerialMatcher.locate(environment: ["VMLAB_MATCH_HELPER": "/bin/ls"]) == "/bin/ls")
+    #expect(SerialMatcher.locate(environment: ["VMLAB_MATCH_HELPER": "/nonexistent"]) == nil)
+  }
+
+  /// A plain literal (escaped punctuation allowed) is matched in-process: no matcher is needed or
+  /// launched, and offsets are bytes.
+  @Test func literalPatternsNeedNoMatcher() async throws {
+    #expect(SerialMatcher.literal(of: "login:") == "login:")
+    #expect(SerialMatcher.literal(of: "\\$ ") == "$ ")
+    #expect(SerialMatcher.literal(of: "a\\.b\\(c\\)") == "a.b(c)")
+    for regex in ["=+", "\\$ $", "^x", "a|b", "[ab]", "\\d", "x{2}", "(?i)x", "a.b", ""] {
+      #expect(SerialMatcher.literal(of: regex) == nil, "\(regex)")
+    }
+    let server = try FakeSerialServer()
+    defer { server.cleanUp() }
+    let channel = SerialChannel(socketPath: server.path, logURL: server.logURL, matcherPath: nil)
+    try await channel.start()
+    server.accept()
+    server.send("café prompt$ ")
+    #expect(await eventually { await channel.endOffset == 14 })
+    let match = try await channel.wait(for: "prompt\\$ ", since: 0, timeout: .seconds(1))
+    #expect(match == SerialMatch(match: "prompt$ ", start: 6, offset: 14))
+    #expect(await channel.matcherPIDs.isEmpty)
+    await channel.stop()
+  }
+
+  /// A matcher that takes longer to start than the wait's whole timeout does not make an ordinary
+  /// pattern time out: start-up time is added to the deadline.
+  @Test(.timeLimit(.minutes(1))) func slowMatcherStartDoesNotCountAgainstTheTimeout()
+    async throws
+  {
+    let server = try FakeSerialServer()
+    defer { server.cleanUp() }
+    let real = try #require(SerialMatcher.locate(environment: [:]))
+    let script = server.directory.appending(path: "slow-match")
+    try "#!/bin/sh\nsleep 1.5\nexec '\(real)'\n".write(
+      to: script, atomically: true, encoding: .utf8)
+    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+    let channel = SerialChannel(
+      socketPath: server.path, logURL: server.logURL, matcherPath: script.path)
+    try await channel.start()
+    server.accept()
+    server.send("== done\n")
+    #expect(await eventually { await channel.endOffset == 8 })
+    // The first wait gets the spare while it is still starting; the second starts a matcher.
+    let first = try await channel.wait(for: "=+ done", since: 0, timeout: .milliseconds(500))
+    #expect(first == SerialMatch(match: "== done", start: 0, offset: 7))
+    let second = try await channel.wait(for: "d[aeiou]ne", since: 0, timeout: .milliseconds(500))
+    #expect(second.start == 3)
+    await channel.stop()
+  }
+
+  /// Output arriving a few bytes at a time is matched with correct offsets, with far fewer matcher
+  /// round trips than chunks (the rescan interval batches them), by one matcher per wait.
+  @Test func tricklingOutputMatchesWithOneMatcher() async throws {
+    let (server, channel) = try await connected()
+    defer { server.cleanUp() }
+    async let found = channel.wait(for: "login: $", timeout: .seconds(10))
+    try await Task.sleep(for: .milliseconds(50))
+    let text = String(repeating: "booting...\n", count: 20) + "debian login: "
+    for byte in text.utf8 {
+      server.send([byte])
+      try await Task.sleep(for: .milliseconds(1))
+    }
+    let match = try await found
+    let total = UInt64(text.utf8.count)
+    #expect(match == SerialMatch(match: "login: ", start: total - 7, offset: total))
+    #expect(await channel.matcherPIDs.count == 1)
     await channel.stop()
   }
 
