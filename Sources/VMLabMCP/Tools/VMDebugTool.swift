@@ -11,7 +11,9 @@ extension ToolSpec {
       + "over size bytes); breakpoint_remove clears it; breakpoints lists them; registers reads "
       + "them; read_memory returns size bytes at address as hex (with ASCII up to 256 bytes); "
       + "write_memory writes hex data. Addresses are numbers in 0x hex; no symbols. Needs gdb; "
-      + "require halt_at_start to debug from the first instruction.",
+      + "require halt_at_start to debug from the first instruction. The first action that "
+      + "needs the stub attaches, and QEMU stops the guest when a debugger attaches; continue "
+      + "resumes it. Breakpoints set on a running CPU leave it running.",
     inputSchema: Schema.input(
       [
         "vm": Schema.vm,
@@ -29,11 +31,17 @@ extension ToolSpec {
           enum: ["software", "hardware", "watch_write", "watch_read", "watch_access"],
           default: "software"),
         "timeoutSeconds": Schema.timeoutSeconds("wait: the longest to block.", default: 30),
-        "thread": Schema.string("The thread (CPU) to act on, as registers or info names it."),
+        "thread": Schema.string(
+          "step, continue, registers, read_memory, write_memory: the thread (CPU) to act on, "
+            + "as a stop reports it (e.g. p01.02)."),
+        "symbolFile": Schema.string(
+          "A host path to the guest's symbol file (vmlinux, a kernel .debug), recorded for the "
+            + "info output so a human can load it; vmlab resolves no symbols."),
       ], required: ["vm", "action"]),
     outputShape: """
       { stopped, reason?, pc?, registers?: { <name>: hex }, bytes?: hex, ascii?,
-        breakpoints?: [ { address, kind, size? } ], endpoint, attached }
+        breakpoints?: [ { address, kind, size? } ], endpoint, attached,
+        info: connect: { gdb, lldb }, symbolFile, note }
       """,
     errors: [
       .vmNotFound, .wrongState, .capabilityMissing, .invalidRequest, .debugBusy, .timeout,

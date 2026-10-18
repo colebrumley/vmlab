@@ -62,6 +62,24 @@ it reports the status, `RemoteShell.collect` fetches what it had not passed on a
 guest's files. `read` returns up to 64 KB of log past the offset (on a UTF-8 boundary), starting a
 reader when this process has none, which is how a job survives a server restart; `wait` polls;
 `kill` runs `RemoteShell.kill` (status 143). `stopReaders()` drops this process's readers.
+`AutoExecChannel.swift` (R-403) is `via: auto`, what `Channel.exec` now returns: SSH when it was
+granted, and the agent (`RunningVM.agentExec`, default nil; `Channel.execAgent`) when it was
+granted and SSH never reached the guest, which a channel marks with `data.connected: false` on its
+`guest_unreachable` (`ExecFallback`; `SSHExecChannel` sets it only for connect-phase `ssh` errors,
+so a command that started over SSH is never run twice). `ExecTimeout.error` is the shared
+`timeout` refusal with partial output; `ExecFiles` and `ExecOutput.collect` are public for the
+agent channel.
+`FileTransfer.swift` (R-404) is `SSHFileTransfer`: the system `scp` in SFTP mode (`-s`, so a
+guest path is never seen by a remote shell), `-r`, with `SSHTarget.options` (the key and
+known-hosts options `ssh` shares); `push(local:remote:)` and `pull(remote:local:)` (no local:
+`<vm>/pulled/<name>`, replaced; an existing local directory receives the copy inside it) return
+`FileTransferResult` (`bytes` of every regular file, `path`), mapping an `ssh` failure to
+`guest_unreachable` and any other `scp` error to `invalid_request` on `remote`.
+`SharedDirSpec` (in `Features.swift`, R-404) is the request's `share` (`host`, absolute, default
+`<vm>/shared/`; `guest`, default `/mnt/host`; tag `share0`), which implies `shared_dir` and is kept
+as `VMRecord.share`; `SharedDirSpec.of(record)` is what a backend mounts: the record's `share`, or
+the default when the plan *requested* `shared_dir` (every profile grants it, which alone mounts
+nothing). Both engines put it in the seed as a `GuestMount`.
 `Manifest.swift` (R-801) holds guest manifests: `GuestManifest` (files keyed by path with kind,
 size, octal mode, mtime and sha256 up to 8 MB; packages, services, users and defaults as key →
 value maps; login items and configuration profiles as lists), stored by `Store.saveManifest` at
@@ -79,6 +97,7 @@ roots differ, and is saved whole by `Store.saveManifestDiff` at
 `<vm>/manifests/diff-<from>-<to>.json`.
 `HostProcess` runs one host subprocess asynchronously (stdin bytes, output to file handles, a
 deadline that sends `SIGTERM` then `SIGKILL`, cancellation likewise).
+`Debug.swift` (R-701, R-705) is the engine-free debugger: `DebugPoint` (`address`, `DebugPointKind` software, hardware, watch_write, watch_read, watch_access, `size` for watchpoints), `DebugStop` (`reason` breakpoint, watchpoint, halted, step, signal or exited, `signal`, `thread`, `pc`, `watchAddress`) and `DebugRegister` (name, `0x` hex or nil); `protocol DebugTarget` is one live stub connection in all-stop mode and `protocol DebugConnector` opens one on a `GDBEndpoint` (`debug_busy` when the stub has another client). `DebugSession` (an actor, one per VM) owns the connection for this process rather than for a request: it connects on first use, follows the VM to a new endpoint, reconnects once when the stub closed the connection, adds and removes points on a running CPU by halting and resuming around them, names stops (a recorded breakpoint's pc is `breakpoint`, a SIGTRAP after a step is `step`, SIGINT is `halted`) and persists its points and the human's `symbolFile` in `<vm>/debug.json`, inserting every point again (remove, then insert) after a reconnect or a server restart, and after a reset (`afterReset(halted:)`, which `vm_lifecycle reset` calls: QEMU under HVF loses hardware breakpoints on `system_reset`; the CPU is left stopped for a `haltAtStart` VM, else running if it ran). A connect that finds the stub held by another client is `debug_busy` and sets `busySince` (cleared by the next connect that works), which `vm_debug info` reports instead of attaching. `DebugSessions` (`.shared`) holds the sessions and the registered connector; `vmlab` registers the GDB one through `VMLabEngines`. `Tests/UnitTests/Support/FakeDebugTarget.swift` is the scripted target tests drive it with.
 `Checkpoints.swift` is the checkpoint tree (R-800): `CheckpointTree` (`<vm>/checkpoints.json`: `CheckpointNode`s in creation order with `id` (`cp-` plus six base32 characters, the engine snapshot tag), unique `name`, `parent`, `mode`, `createdAt`, the VM `state` at creation, `manifestPath?`, `note?`, `temporary`; the `current` node; the `resume` node of a suspended VM), read and written by `Store.checkpoints(of:)` and `Store.updateCheckpoints(of:_:)` under the VM's lock, which also rewrites `vm.json`'s `checkpoints` summary. `VMManager.createCheckpoint` (auto is live when `checkpoint_live` was granted and the guest is live, else disk; a running guest without it is `wrong_state`, never an implicit stop), `restoreCheckpoint` (the restored node becomes current), `deleteCheckpoint` (children only with `recursive`, deepest first; current passes to the nearest surviving ancestor) and `checkpoints(of:)` drive the engine through `Backend.checkpoints(_:)`; `@latest` names the newest node. `checkpoint_stop` (`VMManager.perform`) takes a temporary live checkpoint, kills the engine and leaves the VM `suspended` with `resume` set; starting it boots the engine and restores that checkpoint (an engine that restores natively should leave `resume` unset). `GuestManifestTaker` is the R-801 hook: `VMManager(manifests:)` (`ToolContext` passes `CheckpointManifests`); without one, or when the manifest fails (a stopped guest), `manifest: true` is a warning and no `manifestPath`.
 `Clone.swift` (R-803): `VMManager.clone(_:name:from:)` makes a new `created` VM from a VM's current disk (the source must not be live) or from one of its checkpoints (any state but broken), with the source's plan, profile, image and network, a new id (so a new MAC: both engines derive it from the id) and a new SSH key (`SSHKeys`, as `create`), and the guest's memory not cloned. `Backend.clone(_:checkpoint:into:)` makes the disk and returns the files it reads through; the manager records them as `VMRecord.backingChain` with `VMRecord.clonedFrom` (`CloneOrigin`), and `VMManager.dependents(of:)` lists the VMs whose chain reads a file in another VM's directory. The cloud-init instance id is the VM id, so a clone's first boot runs the per-instance modules again and installs its own key.
 `GarbageCollector.swift` (R-805) is `vmlab gc` (`Sources/vmlab/GCCommand.swift`, CLI only, `--dry-run`, `--json`): over one `VMLAB_HOME` it ends orphaned engine processes (a `qemu.pid`/`vz.pid` in a VM directory whose `vm.json` is gone, when `ProcessInspector` (`proc_pidpath`) says it is `qemu-system-*` or `vmlab-vz`) and removes that directory, removes `dumps/*` and `exec/*.log` older than 7 days, deletes temporary checkpoints (`VMManager.dropCheckpoint`, children move up) except a suspended VM's resume point, and removes files in `<vm>/backing/` that no record's `backingChain` reads; anything younger than a 10-minute grace is spared, so a create or clone in another process is never collected. It returns a `GCReport` (items with kind, target, allocated bytes; errors; `bytesFreed`). `VMManager.run(.destroy, force:)` refuses with `invalid_request` (field `force`, `dependents`) while `dependents(of:)` is not empty, and with `force` destroys anyway with a warning.
@@ -123,9 +142,29 @@ forked daemon otherwise aborts on its first `snapshot-save` under HVF), connects
 halted, then sends `cont` unless `haltAtStart`; `attach` reconnects from the pid file, `powerdown`
 sends `system_powerdown` and waits for the process to exit, `kill` sends `quit` then `SIGKILL`.
 `QEMUBackend` is the `Backend` for `qemu-hvf` and `qemu-tcg`: it keeps a `QEMUMachine` per running
-guest (reattaching after a server restart), builds the seed when R-400's `id_ed25519.pub` exists (with the desktop, no VNC server, when the stored plan provisions one, R-504),
+guest (reattaching after a server restart), resets with QMP `system_reset` (after `stop` when
+`boot.haltAtStart`, so the CPU waits at its first instruction again, R-703), builds the seed when R-400's `id_ed25519.pub` exists (with the desktop, no VNC server, when the stored plan provisions one, R-504),
 and hands out `QEMURunningVM` (serial, VNC display, GDB, QMP `query-*` introspection,
-checkpoints, memory dumps, exec over SSH through the forwarded loopback port (`SSHExecChannel`)). `QMPIntrospection`
+checkpoints, memory dumps, exec over SSH through the forwarded loopback port (`SSHExecChannel`,
+or `NoSSH`, never connected, without a network), and exec through qemu-guest-agent).
+Shared directory (R-404): `SharedDirSpec.of(record)` becomes `-virtfs local,path=...,mount_tag=share0,
+security_model=mapped-xattr` (refused unless the plan grants `shared_dir`) and a cloud-init
+`mounts` entry (`9p`, `trans=virtio,version=9p2000.L,rw,nofail`); create and start check the host
+directory exists. Debian's cloud kernel has no 9p (`CONFIG_NET_9P` unset), so the mount needs a
+kernel with it, such as Ubuntu's cloud images.
+Guest agent (R-403): when the plan grants `exec_agent` (and the arch has PCI defaults) the command
+line adds a `virtio-serial-pci` with a `virtserialport` named `org.qemu.guest_agent.0` on a
+`-chardev socket` at `<vm>/qga.sock` (QGA is not reachable through QMP). `GuestAgent` (an actor,
+`QEMUMachine.agent`) opens a connection per command, sends 0xFF plus `guest-sync-delimited` to
+discard anything a previous client left, then the command; commands from one process are
+serialised, and an unanswered sync is `guest_unreachable` with `connected: false`.
+`GuestAgentExecChannel` runs `RemoteShell.foreground` (as root, `sudo -n -u` for another user)
+with `guest-exec` of `/bin/sh -c`, base64 stdin and a fixed PATH/HOME, polls `guest-exec-status`
+(50 ms growing to 500 ms), writes the base64 output through `ExecFiles`/`ExecOutput.collect`
+(same 64 KB cut and log as SSH), and at the deadline kills the job's process group with a second
+`guest-exec` of `RemoteShell.kill`, returning `timeout` with what the agent reports. Debian's cloud
+image does not ship qemu-guest-agent: cloud-init installs it on a first boot with a network, so a
+guest created with `net_none` has an agent only when its image does. `QMPIntrospection`
 maps `status`/`block`/`pci`/`cpus` to `query-status`/`query-block`/`query-pci`/`query-cpus-fast`
 and `memory_tree`/`registers`/`devices` to HMP `info mtree`/`info registers -a`/`info qtree`, and
 allows raw only for `query-[a-z0-9-]+` and `info <words>` (anything else `invalid_request`);
@@ -191,7 +230,13 @@ watchpoints and stepping over a guest's GDB stub. `GDBPacket`/`GDBPacketDecoder`
 actor in all-stop mode over a `GDBTransport` (`GDBTCPTransport` for QEMU's `-gdb tcp:...`) that
 serialises commands, acks replies, resends on `-`, and turns stop replies into `StopReason`.
 `RegisterMap` comes from `qXfer:features:read` (`target.xml` and its `xi:include`s) or a built-in
-arm64/x86_64 layout. Errors are the module's own `GDBError`; the debug tool maps them to Appendix D.
+arm64/x86_64 layout. Errors are the module's own `GDBError`. `GDBDebugTarget.swift` adapts the
+client to Core's debugger seam: `GDBDebugConnector` opens a `GDBTCPTransport`, handshakes and loads
+the register map (a handshake that times out or is hung up on is `debug_busy`, since QEMU leaves a
+second client unanswered in its backlog; nothing listening is `guest_unreachable`), and
+`GDBDebugTarget` maps points to `Z0`..`Z4` (breakpoint kind from the architecture), threads to
+`Hg`/`vCont`, stops to `DebugStop`, and `GDBError.vmLabError(endpoint:)` maps every error to an
+Appendix D code with the `endpoint`.
 
 **`VMLabMCP`** (library). The MCP server on the official Swift SDK: tool schemas (Appendix C),
 handlers that call Core, rendering of `VMLabError` as structured refusals, and the stdio transport.
@@ -217,12 +262,15 @@ entitlement, the probes with owner and date; `probe: true` runs `SlowProbeRunner
 source in turn, prefixed), `vm_create` (plan, pull the image if missing, `VMManager.create`, then
 start unless `autostart: false`; all or nothing: a cancelled or failed call destroys the VM),
 `vm_lifecycle` (start/stop/kill/pause/resume/reset/destroy; clone waits for R-803; a start's
-`ssh_unreachable` warning comes from `VMManager.Outcome`), `vm_exec` (R-401: validates the
+`ssh_unreachable` warning comes from `VMManager.Outcome`; after a reset the VM's debug session
+inserts its points again, and a destroy drops the session), `vm_exec` (R-401: validates the
 request into an `ExecRequest`, picks the channel by `via` (`Channel.execSSH`, `.execAgent`,
 `.exec`) on `VMManager.attach`, runs it under a heartbeat and returns `exitCode`, `stdout`,
 `stderr`, `durationMs`, `truncated`, `logPath`; `background: true` starts an `ExecJobs` job over
 the VM's `SSHExecChannel` and returns `{ job }`), `vm_job` (read/wait/kill: `output`, `finished`,
-`exitCode`, `more`, `logPath`), `vm_manifest` (R-801: `profile` defaults to the guest's OS,
+`exitCode`, `more`, `logPath`), `vm_file` (R-404: push/pull through `SSHFileTransfer` over the VM's
+SSH channel, absolute host paths only, returning `bytes` and `path`; `vm_inspect` and `vm_create`
+endpoints carry `share` `{ host, guest }`), `vm_manifest` (R-801: `profile` defaults to the guest's OS,
 `custom` needs `paths`; a running VM only; returns `{ id, path, profile, counts }` with the
 manifest's warnings), `vm_checkpoint diff` (`Handlers/CheckpointDiff.swift`, R-802: each side
 is `@now`, taken with the other side's profile and roots, a manifest id, or a checkpoint whose node
@@ -235,7 +283,10 @@ drags hold the left button over eight steps, scroll strikes wheel buttons; coord
 against the screen and, with `scaled: true`, mapped through the last screenshot as origin +
 pixel / scale; every acting action sleeps `settleMs` and returns a fresh screenshot), `vm_introspect` (an `IntrospectionQuery` to the attached VM's `introspection`
 channel; `raw` takes exactly one of `qmp`/`hmp`; returns `{ query, json | text }`) and
-`vm_memory_dump` (the `memory_dump` channel writes to `<vm>/dumps/<UTC time>-0x<addr>-<size>.raw`
+`vm_debug` (R-701: `VMManager.attach`, the `.gdb` channel, then the VM's `DebugSession` from
+`ToolContext.debug`, `DebugSessions.shared` by default; addresses are `0x` hex or decimal, memory
+reads up to 64 KB with an ASCII column up to 256 bytes, `symbolFile` recorded for `info`, which
+reports the endpoint and gdb/lldb commands without attaching), `vm_memory_dump` (the `memory_dump` channel writes to `<vm>/dumps/<UTC time>-0x<addr>-<size>.raw`
 or `<UTC time>.elf`; a range over 256 MB without `confirm: true` is `confirm_required` with
 `bytes`). Long calls (R-205) go through `Handlers/LongOperation.swift`: an image pull and
 a start under `StartGate.withStart`, each wrapped in `ToolProgress.during`, which reports a step
@@ -261,12 +312,14 @@ to stderr (the Appendix D object with `--json`) with exit status 1; a long call'
 go to stderr. Built: `facts`, `doctor`, `plan`, `create` (the `plan` flags plus `--name`,
 `--no-start`), `list`, `inspect`, `logs`, `start`, `stop`, `kill`, `pause`, `resume`, `reset`,
 `destroy`, `exec` and `job` (`Sources/vmlab/ExecCommands.swift`: stdout to stdout, stderr and a
+non-zero status to stderr), `images pull|list|remove`, `computer <vm> <action>` (`--at x,y`, `--out` writes the image), `debug <vm> <action>`, `introspect`, `memory-dump`, `serve`, `--version`. It bootstraps logging and hands off to Core and `VMLabMCP`.
+`destroy`, `exec`, `job` and `file` (`Sources/vmlab/ExecCommands.swift`: stdout to stdout, stderr and a
 non-zero status to stderr), `images pull|list|remove`, `computer <vm> <action>` (`--at x,y`, `--out` writes the image), `introspect`, `memory-dump`, `serve`, `--version`. It bootstraps logging and hands off to Core and `VMLabMCP`.
 
 **`VMLabEngines`** (library). The engine wiring, and the only module that imports both Core and the
-backends for that purpose: `Engines.registerAll(store:into:displays:)` registers `QEMUBackend` for `qemu-hvf`
+backends for that purpose: `Engines.registerAll(store:into:displays:debug:)` registers `QEMUBackend` for `qemu-hvf`
 and `qemu-tcg` and `VZBackend` for `vz-linux` in `Backends.shared` (or a given `BackendRegistry`),
-and `RFBDisplayConnector` in `Displays.shared`. `RFBDisplay.swift` is Core's `DisplaySession` over
+`RFBDisplayConnector` in `Displays.shared` and `GDBDebugConnector` in `DebugSessions.shared`. `RFBDisplay.swift` is Core's `DisplaySession` over
 `VMLabRFB`: `RFBDisplaySession` (an actor) connects with the endpoint's password file, waits for the
 first frame, keeps the VM's `ScreenshotCache` across reconnects (a dropped connection is reopened on
 the next call) and maps `RFBError` to Appendix D codes (bad requests and key names
@@ -274,8 +327,13 @@ the next call) and maps `RFBError` to Appendix D codes (bad requests and key nam
 `engine_error`).
 `vmlab` calls it once in `main`, before any command runs, so `serve` and every tool subcommand can
 create and start guests; `Engines.registerProbes(into:)` likewise fills `SlowProbeRunners.shared`
-with the engines' slow probes (`VMLabQEMU.probeRunners`). `vz-macos` joins `Engines.profiles` when `VZBackend` runs macOS guests.
-`BoundariesTests` checks that it imports only Core, QEMU, VZ and RFB and that no library imports it.
+with the engines' slow probes (`VMLabQEMU.probeRunners`, and `HVFGDBProbe`, `qemu_hvf_gdb`, R-702:
+it starts a diskless, firmware-less arm64 `virt` machine under HVF halted with `-gdb`, writes a
+`nop; nop; b` loop at 0x40000000, points `pc` at it, continues, halts, reads the registers, sets a
+software breakpoint at `pc + 4` and expects the stop there; `unknown` without QEMU or HVF, and a
+`no` makes `gdb` on `qemu-hvf` refuse with `SlowProbe.noReason`, so arm64 guests that need gdb go
+to `qemu-tcg`). `vz-macos` joins `Engines.profiles` when `VZBackend` runs macOS guests.
+`BoundariesTests` checks that it imports only Core, QEMU, VZ, RFB and GDB and that no library imports it.
 
 **`vmlab-vz`** (executable). The VZ runner: one process per Virtualization.framework guest, so a
 guest outlives the server. `vmlab-vz run <vm-dir> [--hold]` writes `vz.pid`, builds the machine from

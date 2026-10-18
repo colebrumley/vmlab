@@ -20,11 +20,13 @@ public struct QEMULayout: Sendable, Hashable {
   public var qmpSocket: URL { directory.appending(path: "qmp.sock") }
   public var serialSocket: URL { directory.appending(path: "serial.sock") }
   public var vncSocket: URL { directory.appending(path: "vnc.sock") }
+  /// The host end of the `org.qemu.guest_agent.0` virtio-serial port (R-403).
+  public var agentSocket: URL { directory.appending(path: "qga.sock") }
   public var pidFile: URL { directory.appending(path: "qemu.pid") }
   public var log: URL { directory.appending(path: "qemu.log") }
   public var serialLog: URL { directory.appending(path: "serial.log") }
 
-  public var sockets: [URL] { [qmpSocket, serialSocket, vncSocket] }
+  public var sockets: [URL] { [qmpSocket, serialSocket, vncSocket, agentSocket] }
 
   /// Throws `invalid_request` when a socket path is too long for `sockaddr_un`.
   public func validate() throws(VMLabError) {

@@ -36,6 +36,12 @@ usb-tablet
 virtio-keyboard-pci
 -device
 virtio-tablet-pci
+-chardev
+socket,id=qga0,path=/Users/someone/.vmlab/vms/vm-hvf234/qga.sock,server=on,wait=off
+-device
+virtio-serial-pci,id=vser0
+-device
+virtserialport,bus=vser0.0,chardev=qga0,name=org.qemu.guest_agent.0
 -qmp
 unix:/Users/someone/.vmlab/vms/vm-hvf234/qmp.sock,server,wait=off
 -serial

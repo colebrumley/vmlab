@@ -4,7 +4,7 @@
   "name": "kernel-lab",
   "profile": "qemu-hvf",
   "guest": { "os": "linux", "arch": "arm64" },
-  "features": ["exec_ssh", "serial", "gui", "gdb", "net_nat"],
+  "features": ["exec_ssh", "exec_agent", "serial", "gui", "gdb", "net_nat"],
   "resources": { "cpus": 4, "memoryGB": 8, "diskGB": 40 },
   "image": "debian-13-arm64",
   "network": { "mode": "nat", "forwards": [{ "guest": 80, "host": 8080 }, { "guest": 443, "host": 8443 }] },

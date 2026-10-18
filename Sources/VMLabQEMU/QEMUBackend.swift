@@ -87,10 +87,16 @@ public final class QEMUBackend: Backend {
     _ = try await Self.lift { try await machine.qmp.execute("cont") }
   }
 
-  /// `system_reset`: the same process and endpoints, the guest rebooted.
+  /// `system_reset`: the same process and endpoints (a debugger stays attached and QEMU keeps its
+  /// breakpoints), the guest rebooted. With `boot.haltAtStart` the CPU is stopped first, so it
+  /// waits at its first instruction as it did at start (R-703); otherwise it runs on.
   public func reset(_ record: VMRecord) async throws(VMLabError) -> VMRuntime {
     let machine = try await machine(for: record)
-    _ = try await Self.lift { try await machine.qmp.execute("system_reset") }
+    let halt = record.boot?.haltAtStart == true
+    _ = try await Self.lift {
+      if halt { _ = try await machine.qmp.execute("stop") }
+      return try await machine.qmp.execute("system_reset")
+    }
     return machine.runtime
   }
 
@@ -204,6 +210,8 @@ public final class QEMUBackend: Backend {
     var config: CloudInitConfig?
     // The key is R-400's; until it exists the guest boots without a seed.
     let publicKey = layout.directory.appending(path: "id_ed25519.pub")
+    let share = SharedDirSpec.of(record)
+    try share?.checkHostDirectory(vmDirectory: layout.directory)
     if seed, base != nil, let image = record.image,
       let key = try? String(contentsOf: publicKey, encoding: .utf8)
     {
@@ -212,11 +220,15 @@ public final class QEMUBackend: Backend {
         user: images.pulled(image)?.login.user ?? "debian",
         sshPublicKey: key.trimmingCharacters(in: .whitespacesAndNewlines),
         // R-504: the desktop only; QEMU's VNC socket is the display, so no VNC server.
-        gui: plan.provisionsDesktop ? GUIStack(vncPassword: nil) : nil)
+        gui: plan.provisionsDesktop ? GUIStack(vncPassword: nil) : nil,
+        mounts: share.map {
+          [GuestMount(tag: SharedDirSpec.tag, guestPath: $0.guestPath, kind: .ninep)]
+        } ?? [])
     }
     return QEMULaunchRequest(
       record: record, plan: plan, layout: layout, baseImage: base, boot: boot, seed: config,
-      installation: try locate())
+      installation: try locate(),
+      sharedDirectory: share?.hostDirectory(vmDirectory: layout.directory))
   }
 
   /// The record's boot spec with host paths checked; a kernel boot without a kernel path takes
@@ -297,25 +309,29 @@ public struct QEMURunningVM: RunningVM {
   public var gdb: GDBEndpoint? { machine.runtime.gdbEndpoint.flatMap(GDBEndpoint.init(runtime:)) }
   public var introspection: (any Introspection)? { QMPIntrospection(qmp: machine.qmp) }
   public var memoryDump: (any MemoryDumper)? { QMPMemoryDumper(qmp: machine.qmp) }
-  /// SSH through the forwarded port (R-400); R-403 adds the guest agent.
+  /// SSH through the forwarded port (R-400).
   public var exec: any ExecChannel {
     if let ssh { return SSHExecChannel(target: ssh) }
-    return NotYetBuilt(vm: id, channel: "exec", item: "R-403: the guest has no network for SSH")
+    return NoSSH(vm: id)
+  }
+  /// qemu-guest-agent over its virtio-serial port (R-403).
+  public var agentExec: (any ExecChannel)? {
+    GuestAgentExecChannel(agent: machine.agent, vmDirectory: machine.layout.directory)
   }
 }
 
-/// A channel the QEMU backend does not provide yet; every call is `guest_unreachable`.
-struct NotYetBuilt: ExecChannel {
+/// The SSH channel of a guest with no SSH endpoint (no network, or vmnet with no address yet):
+/// every call is `guest_unreachable`, marked as never connected so `via: auto` takes the agent.
+struct NoSSH: ExecChannel {
   let vm: String
-  let channel: String
-  let item: String
 
-  var error: VMLabError {
-    VMLabError(
-      code: .guestUnreachable, message: "The \(channel) channel of \(vm) is not available yet.",
-      hint: "This vmlab build does not provide it for QEMU guests (\(item)).",
-      data: ["vm": .string(vm), "channel": .string(channel)])
+  func run(_ request: ExecRequest) async throws(VMLabError) -> ExecResult {
+    throw VMLabError(
+      code: .guestUnreachable, message: "VM \(vm) has no network for SSH.",
+      hint: "Run it with via: agent (exec_agent), or create the VM with a network.",
+      data: [
+        "vm": .string(vm), "tried": .array([.string("ssh")]),
+        ExecFallback.connectedKey: .bool(false),
+      ])
   }
-
-  func run(_ request: ExecRequest) async throws(VMLabError) -> ExecResult { throw error }
 }
