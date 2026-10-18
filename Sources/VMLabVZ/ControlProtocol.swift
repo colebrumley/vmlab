@@ -167,15 +167,20 @@ public struct LineBuffer: Sendable {
     pending.append(contentsOf: bytes)
     var lines: [Data] = []
     while let newline = pending.firstIndex(of: UInt8(ascii: "\n")) {
-      lines.append(Data(pending[pending.startIndex..<newline]))
+      let line = Data(pending[pending.startIndex..<newline])
       pending = Data(pending[pending.index(after: newline)...])
+      // A line that arrived whole in one chunk is held to the limit too.
+      guard line.count <= ControlCodec.maxLineBytes else { throw overlong() }
+      lines.append(line)
     }
-    guard pending.count <= ControlCodec.maxLineBytes else {
-      pending = Data()
-      throw VMLabError.invalidRequest(
-        field: "line", reason: "a control line exceeds \(ControlCodec.maxLineBytes) bytes",
-        hint: "Send one short JSON object per line.")
-    }
+    guard pending.count <= ControlCodec.maxLineBytes else { throw overlong() }
     return lines
+  }
+
+  private mutating func overlong() -> VMLabError {
+    pending = Data()
+    return VMLabError.invalidRequest(
+      field: "line", reason: "a control line exceeds \(ControlCodec.maxLineBytes) bytes",
+      hint: "Send one short JSON object per line.")
   }
 }

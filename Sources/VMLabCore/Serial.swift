@@ -179,6 +179,8 @@ public actor SerialChannel {
       Darwin.close(fd)
       throw error
     }
+    // Non-blocking, so a write never waits inside the descriptor's lock (CX-13).
+    SocketSend.setNonBlocking(fd)
     let box = SocketBox(fd: fd)
     socket = box
     let readFD = fd
@@ -186,11 +188,9 @@ public actor SerialChannel {
       let thread = Thread {
         var buffer = [UInt8](repeating: 0, count: 65536)
         while true {
-          let n = buffer.withUnsafeMutableBytes { Darwin.read(readFD, $0.baseAddress, $0.count) }
+          let n = buffer.withUnsafeMutableBytes { SocketSend.read(readFD, into: $0) }
           if n > 0 {
             continuation.yield(Array(buffer[0..<n]))
-          } else if n < 0 && errno == EINTR {
-            continue
           } else {
             break
           }
@@ -266,11 +266,27 @@ public actor SerialChannel {
 
   /// Sends `text` to the guest as UTF-8, unchanged (callers add `\n` or `\r`). Returns the end
   /// offset at the time of the write, so a following `wait(since:)` sees only the reply.
+  /// The write runs on a thread of its own, off the channel, and gives up with `timeout` once the
+  /// guest has taken no byte for `stallTimeout` (a paused guest stops reading), so neither a
+  /// large write nor a stuck guest holds up reads, waits or `stop` (CX-13).
   @discardableResult
-  public func write(_ text: String) throws -> UInt64 {
+  public func write(_ text: String, stallTimeout: Duration = .seconds(10)) async throws -> UInt64 {
     guard let socket, !closed else { throw Self.unreachable(socketPath) }
-    try socket.write(Array(text.utf8), path: socketPath)
-    return ring.end
+    let mark = ring.end
+    let (bytes, path) = (Array(text.utf8), socketPath)
+    try await withCheckedThrowingContinuation { (done: CheckedContinuation<Void, any Error>) in
+      let thread = Thread {
+        do {
+          try socket.write(bytes, path: path, stall: stallTimeout)
+          done.resume()
+        } catch {
+          done.resume(throwing: error)
+        }
+      }
+      thread.name = "vmlab.serial.writer"
+      thread.start()
+    }
+    return mark
   }
 
   /// Waits until `pattern` (Swift `Regex` syntax) matches output at or after `since` (default: the
@@ -702,34 +718,44 @@ struct SerialLog {
   }
 }
 
-/// The connected socket's descriptor, closed exactly once (by the reader thread when it exits),
-/// with writes and shutdown taken under the same lock so none touches a reused descriptor.
+/// The connected socket's descriptor, closed exactly once (by the reader thread when it exits).
+/// Writes, shutdown and close take `lock` only around each system call, never across a wait for
+/// the guest to read (`SocketSend`), so none touches a reused descriptor and shutdown always
+/// proceeds; `writeLock` keeps whole writes from interleaving.
 final class SocketBox: @unchecked Sendable {
   private let lock = NSLock()
+  private let writeLock = NSLock()
   private var fd: Int32
+  private var shut = false
 
   init(fd: Int32) { self.fd = fd }
 
-  func write(_ bytes: [UInt8], path: String) throws {
-    lock.lock()
-    defer { lock.unlock() }
-    var written = 0
-    while written < bytes.count {
-      guard fd >= 0 else { break }
-      let n = bytes[written...].withUnsafeBytes { Darwin.write(fd, $0.baseAddress, $0.count) }
-      if n < 0 && errno == EINTR { continue }
-      guard n > 0 else {
-        throw VMLabError(
-          code: .guestUnreachable, message: "Writing to the serial socket failed.",
-          hint: "The guest may have stopped; check its state.",
-          data: ["socket": .string(path), "errno": .number(Double(errno))])
+  func write(_ bytes: [UInt8], path: String, stall: Duration) throws {
+    writeLock.lock()
+    defer { writeLock.unlock() }
+    do throws(SocketSend.Failure) {
+      try SocketSend.sendAll(bytes, lock: lock, stall: stall) {
+        fd >= 0 && !shut ? fd : nil
       }
-      written += n
-    }
-    if written < bytes.count {
+    } catch .stalled(let sent) {
+      throw VMLabError(
+        code: .timeout,
+        message:
+          "The guest stopped reading the serial port: \(sent) of \(bytes.count) bytes were sent.",
+        hint: "The guest may be paused or hung; check its state, or send less at once.",
+        data: [
+          "socket": .string(path), "sent": .number(Double(sent)),
+          "bytes": .number(Double(bytes.count)),
+        ])
+    } catch .closed {
       throw VMLabError(
         code: .guestUnreachable, message: "The serial socket closed during the write.",
         hint: "The guest may have stopped; check its state.", data: ["socket": .string(path)])
+    } catch .failed(let code) {
+      throw VMLabError(
+        code: .guestUnreachable, message: "Writing to the serial socket failed.",
+        hint: "The guest may have stopped; check its state.",
+        data: ["socket": .string(path), "errno": .number(Double(code))])
     }
   }
 
@@ -737,6 +763,7 @@ final class SocketBox: @unchecked Sendable {
   func shutdown() {
     lock.lock()
     defer { lock.unlock() }
+    shut = true
     if fd >= 0 { _ = Darwin.shutdown(fd, SHUT_RDWR) }
   }
 

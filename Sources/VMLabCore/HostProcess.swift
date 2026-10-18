@@ -5,7 +5,7 @@ import Synchronization
 /// One host subprocess run asynchronously with an argument array (never a shell): optional bytes
 /// on stdin, stdout and stderr to file handles the caller owns, and an optional deadline after
 /// which it is sent `SIGTERM` and, two seconds later, `SIGKILL`. Cancelling the calling task ends
-/// it the same way.
+/// it the same way; either way the call returns once the process has exited and been reaped.
 public enum HostProcess {
   public struct Outcome: Sendable, Hashable {
     /// The exit status, or the signal number for a process that was killed.
@@ -72,9 +72,17 @@ public enum HostProcess {
         stop()
       }
     }
-    var status: Int32 = -1
-    await withTaskCancellationHandler {
+    // The wait runs in a task of its own: an `AsyncStream` iterated under a cancelled task ends at
+    // once, which would mark the child exited before the SIGKILL that a child ignoring SIGTERM
+    // needs (CX-12). Awaiting `value` is not cut short by cancellation, so the call returns only
+    // once the child has been reaped.
+    let waiter = Task<Int32, Never> {
+      var status: Int32 = -1
       for await value in statuses { status = value }
+      return status
+    }
+    let status = await withTaskCancellationHandler {
+      await waiter.value
     } onCancel: {
       stop()
     }

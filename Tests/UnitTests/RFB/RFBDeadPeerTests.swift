@@ -86,10 +86,13 @@ actor StillScreenTransport: RFBTransport {
     try await client.waitForUpdateCount(1, timeout: .seconds(2))
     await transport.mute()
     let started = ContinuousClock.now
-    // An update answered just before the mute may still land; then the silence counts.
-    while await client.loopError == nil, ContinuousClock.now - started < .seconds(30) {
+    // An update answered just before the mute may still land; then the silence counts. The
+    // bound is one a busy host still meets but a watchdog ignoring the 300 ms window would not.
+    while await client.loopError == nil, ContinuousClock.now - started < .seconds(5) {
       try await Task.sleep(for: .milliseconds(20))
     }
+    let elapsed = ContinuousClock.now - started
+    #expect(elapsed < .seconds(5), "\(elapsed) for a 300 ms window")
     guard case .deadPeer(let reason)? = await client.loopError else {
       Issue.record("expected deadPeer, got \(String(describing: await client.loopError))")
       return

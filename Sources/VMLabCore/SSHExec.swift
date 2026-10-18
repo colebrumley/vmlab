@@ -33,6 +33,7 @@ public struct SSHExecChannel: ExecChannel {
       stdout: files.stdout, stderr: files.stderr, timeout: request.timeout)
     let durationMs = Int((ContinuousClock.now - started) / .milliseconds(1))
     files.close()
+    let marks = RemoteShell.stripMarkers(stderr: files.stderrURL, job: job)
     if outcome.timedOut {
       // Not under the caller's task: a cancelled call still kills what it started.
       let (ssh, target) = (ssh, target)
@@ -52,8 +53,10 @@ public struct SSHExecChannel: ExecChannel {
       throw ExecTimeout.error(
         vm: target.vm, timeout: request.timeout, output: output, durationMs: durationMs)
     }
-    if outcome.status == 255, Self.isSSHFailure(output.stderr) {
-      throw Self.unreachable(target, output.stderr)
+    // A command whose script wrote its done marker ran to the end: 255 is its own status. One
+    // that wrote the start marker may have had its effect, so it is never run elsewhere (CX-4).
+    if outcome.status == 255, !marks.finished, Self.isSSHFailure(output.stderr) {
+      throw Self.unreachable(target, output.stderr, started: marks.started)
     }
     return ExecResult(
       exitCode: outcome.status, stdout: output.stdout, stderr: output.stderr,
@@ -90,7 +93,9 @@ public struct SSHExecChannel: ExecChannel {
       || (stderr.contains("Connection closed by") && !stderr.contains("Broken pipe"))
   }
 
-  static func unreachable(_ target: SSHTarget, _ stderr: String) -> VMLabError {
+  static func unreachable(_ target: SSHTarget, _ stderr: String, started: Bool = false)
+    -> VMLabError
+  {
     let last =
       stderr.split(separator: "\n").last.map(String.init)?.trimmingCharacters(in: .whitespaces)
       ?? ""
@@ -101,7 +106,7 @@ public struct SSHExecChannel: ExecChannel {
       hint: "The guest may still be booting; wait and retry, or read vm_serial to see where it is.",
       data: [
         "vm": .string(target.vm), "tried": .array([.string("ssh")]), "error": .string(last),
-        ExecFallback.connectedKey: .bool(!isConnectFailure(stderr)),
+        ExecFallback.connectedKey: .bool(started || !isConnectFailure(stderr)),
       ])
   }
 }

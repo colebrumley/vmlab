@@ -227,6 +227,41 @@ func eventually(_ condition: () async -> Bool) async -> Bool {
     await channel.stop()
   }
 
+  /// CX-13: a guest that takes no input fails a large write with `timeout`, and reads go on
+  /// meanwhile.
+  @Test func writeToAGuestThatStopsReadingTimesOut() async throws {
+    let (server, channel) = try await connected()
+    defer { server.cleanUp() }
+    let big = String(repeating: "x", count: 8 << 20)
+    let write = Task { try await channel.write(big, stallTimeout: .milliseconds(300)) }
+    server.send("still here")
+    #expect(await eventually { await channel.endOffset == 10 })
+    do {
+      _ = try await write.value
+      Issue.record("expected timeout")
+    } catch let error as VMLabError {
+      #expect(error.code == .timeout)
+    }
+    await channel.stop()
+  }
+
+  /// CX-13: `stop` proceeds while a write is stuck on a guest that stopped reading, and the
+  /// write then fails.
+  @Test(.timeLimit(.minutes(1))) func stopProceedsDuringAStuckWrite() async throws {
+    let (server, channel) = try await connected()
+    defer { server.cleanUp() }
+    let big = String(repeating: "x", count: 8 << 20)
+    let write = Task { try await channel.write(big, stallTimeout: .seconds(120)) }
+    try await Task.sleep(for: .milliseconds(200))
+    await channel.stop()
+    do {
+      _ = try await write.value
+      Issue.record("expected guest_unreachable")
+    } catch let error as VMLabError {
+      #expect(error.code == .guestUnreachable)
+    }
+  }
+
   @Test func lineObserverSeesCompletedLines() async throws {
     let server = try FakeSerialServer()
     defer { server.cleanUp() }

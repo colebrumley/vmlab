@@ -90,6 +90,18 @@ import VMLabVZ
     } throws: { ($0 as? VMLabError)?.code == .invalidRequest }
   }
 
+  /// P3: a completed line over the limit is refused too, not only an unfinished one.
+  @Test func lineBufferRefusesOverlongCompletedLines() {
+    var buffer = LineBuffer()
+    let line = [UInt8](repeating: UInt8(ascii: "a"), count: ControlCodec.maxLineBytes + 1)
+    #expect {
+      try buffer.feed(line + [UInt8(ascii: "\n")])
+    } throws: { ($0 as? VMLabError)?.code == .invalidRequest }
+    var exact = LineBuffer()
+    let fits = [UInt8](repeating: UInt8(ascii: "a"), count: ControlCodec.maxLineBytes)
+    #expect((try? exact.feed(fits + [UInt8(ascii: "\n")]))?.count == 1)
+  }
+
   @Test func configRoundTrips() throws {
     let record = VMRecord(
       id: "vm-abcdef", profile: .vzLinux, guest: GuestSpec(os: .linux, arch: .arm64), features: [],

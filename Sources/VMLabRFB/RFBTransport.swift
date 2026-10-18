@@ -26,11 +26,18 @@ public final class SocketTransport: RFBTransport, @unchecked Sendable {
 
   deinit { Darwin.close(fd) }
 
-  /// Opens a connection to `endpoint`.
-  public static func connect(_ endpoint: RFBEndpoint) async throws -> SocketTransport {
+  /// How long a TCP connect may take before it fails: an unreachable guest address would
+  /// otherwise hold the caller for the kernel's own timeout (75 s and more).
+  public static let defaultConnectTimeout = Duration.seconds(10)
+
+  /// Opens a connection to `endpoint`, failing with `connectFailed` after `timeout`.
+  public static func connect(
+    _ endpoint: RFBEndpoint, timeout: Duration = defaultConnectTimeout
+  ) async throws -> SocketTransport {
     try await withCheckedThrowingContinuation { cont in
       DispatchQueue.global().async {
-        cont.resume(with: Result { try SocketTransport(fd: openSocket(endpoint)) })
+        cont.resume(
+          with: Result { try SocketTransport(fd: openSocket(endpoint, timeout: timeout)) })
       }
     }
   }
@@ -40,7 +47,7 @@ public final class SocketTransport: RFBTransport, @unchecked Sendable {
     setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, socklen_t(MemoryLayout<Int32>.size))
   }
 
-  private static func openSocket(_ endpoint: RFBEndpoint) throws -> Int32 {
+  private static func openSocket(_ endpoint: RFBEndpoint, timeout: Duration) throws -> Int32 {
     switch endpoint {
     case .unix(let path):
       var addr = sockaddr_un()
@@ -84,14 +91,49 @@ public final class SocketTransport: RFBTransport, @unchecked Sendable {
         cursor = ai.pointee.ai_next
         let fd = socket(ai.pointee.ai_family, ai.pointee.ai_socktype, ai.pointee.ai_protocol)
         if fd < 0 { continue }
-        if Darwin.connect(fd, ai.pointee.ai_addr, ai.pointee.ai_addrlen) == 0 {
+        let failure = connect(fd, to: ai.pointee.ai_addr, length: ai.pointee.ai_addrlen, timeout)
+        if failure == nil {
           configure(fd)
           return fd
         }
-        lastError = String(cString: strerror(errno))
+        lastError = failure ?? ""
         Darwin.close(fd)
       }
       throw RFBError.connectFailed("\(host):\(port): \(lastError)")
+    }
+  }
+
+  /// Connects `fd` within `timeout`: non-blocking, waited for with `poll`, then blocking again.
+  /// Nil on success, else why it failed.
+  private static func connect(
+    _ fd: Int32, to address: UnsafeMutablePointer<sockaddr>, length: socklen_t,
+    _ timeout: Duration
+  ) -> String? {
+    let flags = fcntl(fd, F_GETFL)
+    guard flags >= 0, fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0 else {
+      return String(cString: strerror(errno))
+    }
+    defer { _ = fcntl(fd, F_SETFL, flags) }
+    if Darwin.connect(fd, address, length) == 0 { return nil }
+    guard errno == EINPROGRESS else { return String(cString: strerror(errno)) }
+    let deadline = ContinuousClock.now.advanced(by: timeout)
+    while true {
+      let left = ContinuousClock.now.duration(to: deadline)
+      guard left > .zero else { return "no answer within \(timeout)" }
+      let ms = Int32(
+        clamping: left.components.seconds * 1000 + left.components.attoseconds
+          / 1_000_000_000_000_000 + 1)
+      var pfd = pollfd(fd: fd, events: Int16(POLLOUT), revents: 0)
+      let ready = poll(&pfd, 1, ms)
+      if ready < 0 && errno == EINTR { continue }
+      if ready < 0 { return String(cString: strerror(errno)) }
+      if ready == 0 { continue }
+      var error: Int32 = 0
+      var size = socklen_t(MemoryLayout<Int32>.size)
+      guard getsockopt(fd, SOL_SOCKET, SO_ERROR, &error, &size) == 0 else {
+        return String(cString: strerror(errno))
+      }
+      return error == 0 ? nil : String(cString: strerror(error))
     }
   }
 

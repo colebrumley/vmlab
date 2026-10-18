@@ -21,6 +21,9 @@ public actor DisplaySessions {
 
   public let connectors: DisplayConnectorRegistry
   private var entries: [String: Entry] = [:]
+  /// The VMs with a `vm_computer` call in progress, and the calls waiting their turn.
+  private var busy: Set<String> = []
+  private var waiting: [String: [CheckedContinuation<Void, Never>]] = [:]
 
   public init(connectors: DisplayConnectorRegistry = Displays.shared) {
     self.connectors = connectors
@@ -48,6 +51,29 @@ public actor DisplaySessions {
   public func setCursor(vm: String, x: Int, y: Int) { entries[vm]?.cursor = (x, y) }
   public func frame(vm: String) -> Frame? { entries[vm]?.frame }
   public func setFrame(vm: String, _ frame: Frame) { entries[vm]?.frame = frame }
+
+  /// Runs `body` as the only `vm_computer` call on `vm`: two calls on one display would
+  /// interleave their gestures (a click inside a drag) and their modifiers. Calls on other VMs
+  /// run alongside; waiting callers go in arrival order.
+  func exclusive<T: Sendable>(
+    vm: String, _ body: () async throws(VMLabError) -> T
+  ) async throws(VMLabError) -> T {
+    if busy.contains(vm) {
+      await withCheckedContinuation { waiting[vm, default: []].append($0) }
+    } else {
+      busy.insert(vm)
+    }
+    defer {
+      if var queue = waiting[vm], !queue.isEmpty {
+        let next = queue.removeFirst()
+        waiting[vm] = queue.isEmpty ? nil : queue
+        next.resume()
+      } else {
+        busy.remove(vm)
+      }
+    }
+    return try await body()
+  }
 
   /// Closes and drops `vm`'s session.
   public func forget(vm: String) async {
@@ -88,11 +114,14 @@ struct VMComputerHandler: ToolHandler {
       try context.store.find(try arguments.string("vm") ?? ""))
     let endpoint = try DisplayEndpoint.resolve(
       record, vmDirectory: context.store.directory(of: record.id))
-    let session = try await context.displays.session(vm: record.id, endpoint: endpoint)
-    let computer = Computer(
-      vm: record.id, profile: record.profile, session: session, sessions: context.displays,
-      arguments: arguments)
-    return try await computer.perform(action)
+    let displays = context.displays
+    return try await displays.exclusive(vm: record.id) { () throws(VMLabError) -> ToolResult in
+      let session = try await displays.session(vm: record.id, endpoint: endpoint)
+      let computer = Computer(
+        vm: record.id, profile: record.profile, session: session, sessions: displays,
+        arguments: arguments)
+      return try await computer.perform(action)
+    }
   }
 }
 
@@ -156,6 +185,19 @@ struct Computer {
         )
       }
       return ToolResult(["x": .number(Double(cursor.x)), "y": .number(Double(cursor.y))])
+    default:
+      break
+    }
+    // An acting action answers with a fresh screenshot once the guest has had time to react. Its
+    // arguments are checked before any input goes out, so a refused call has done nothing and a
+    // retry does not type twice.
+    let settle = try arguments.int("settleMs") ?? 300
+    guard settle >= 0 else {
+      throw VMLabError.invalidRequest(
+        field: "settleMs", reason: "settleMs must be at least 0", hint: "Pass 0 or more.")
+    }
+    let answer = try screenshotRequest(region: nil, diffFrom: nil)
+    switch action {
     case "mouse_move":
       let point = try await requiredPoint("coordinate")
       try await move(to: point, buttons: [])
@@ -193,14 +235,8 @@ struct Computer {
         field: "action", reason: "\(action) is not a vm_computer action",
         hint: "Use one of: \(VMComputerHandler.actions.joined(separator: ", ")).")
     }
-    // Every acting action answers with a fresh screenshot once the guest has had time to react.
-    let settle = try arguments.int("settleMs") ?? 300
-    guard settle >= 0 else {
-      throw VMLabError.invalidRequest(
-        field: "settleMs", reason: "settleMs must be at least 0", hint: "Pass 0 or more.")
-    }
     if action != "wait" { await pause(.milliseconds(settle)) }
-    return try await shoot(try screenshotRequest(region: nil, diffFrom: nil), remember: true)
+    return try await shoot(answer, remember: true)
   }
 
   // MARK: Input
@@ -288,12 +324,14 @@ struct Computer {
     -> ToolResult
   {
     let capture = try await session.screenshot(request)
-    if remember {
-      let region = request.region
+    // The image shows the changed region of a diff, else the requested region; an unchanged diff
+    // has no image, so the model still looks at the last one and its frame stands.
+    if remember, !capture.unchanged {
+      let shown = capture.changedRegion ?? request.region
       await sessions.setFrame(
         vm: vm,
         .init(
-          originX: max(0, region?.x ?? 0), originY: max(0, region?.y ?? 0), scale: capture.scale))
+          originX: max(0, shown?.x ?? 0), originY: max(0, shown?.y ?? 0), scale: capture.scale))
     }
     var object: [String: JSONValue] = [
       "id": .string(capture.id), "width": .number(Double(capture.width)),
@@ -316,10 +354,18 @@ struct Computer {
       throw VMLabError.invalidRequest(
         field: "format", reason: "format must be png or jpeg", hint: "Use png or jpeg.")
     }
+    let quality = try arguments.int("quality") ?? ScreenshotRequest.defaultQuality
+    guard (1...100).contains(quality) else {
+      throw VMLabError.invalidRequest(
+        field: "quality", reason: "quality must be 1 to 100", hint: "Pass 1 to 100, or omit it.")
+    }
+    let maxEdge = try arguments.int("maxEdge") ?? ScreenshotRequest.defaultMaxEdge
+    guard maxEdge >= 1 else {
+      throw VMLabError.invalidRequest(
+        field: "maxEdge", reason: "maxEdge must be at least 1", hint: "Pass 1 or more, or omit it.")
+    }
     return ScreenshotRequest(
-      format: format, quality: try arguments.int("quality") ?? ScreenshotRequest.defaultQuality,
-      maxEdge: try arguments.int("maxEdge") ?? ScreenshotRequest.defaultMaxEdge, region: region,
-      diffFrom: diffFrom)
+      format: format, quality: quality, maxEdge: maxEdge, region: region, diffFrom: diffFrom)
   }
 
   // MARK: Arguments

@@ -78,7 +78,8 @@ public actor ExecJobs {
       try? FileManager.default.removeItem(at: paths.record)
       try? FileManager.default.removeItem(at: paths.log)
       if result.status == 255, SSHExecChannel.isSSHFailure(result.stderr) {
-        throw SSHExecChannel.unreachable(channel.target, result.stderr)
+        throw SSHExecChannel.unreachable(
+          channel.target, result.stderr, started: result.stdout.contains("vmlab-started"))
       }
       throw VMLabError(
         code: .guestUnreachable, message: "The guest did not start the background job",

@@ -52,6 +52,38 @@ private func connectedClient() async throws -> (RFBClient, ReplayTransport, Int)
         == ev(0xffeb, true) + ev(0x20, true) + ev(0x20, false) + ev(0xffeb, false))
   }
 
+  /// Codex CX-33: cancelling a held chord between its events skipped the releases, leaving
+  /// modifiers held on the guest. Whatever was pressed is released.
+  @Test func cancelledHeldChordReleasesWhatItPressed() async throws {
+    let (client, transport, start) = try await connectedClient()
+    let pressing = Task { try await client.press("cmd+shift+4", hold: .milliseconds(200)) }
+    try await Task.sleep(for: .milliseconds(300))
+    pressing.cancel()
+    await #expect(throws: CancellationError.self) { try await pressing.value }
+    // How far the chord got depends on the machine's load; whatever went down came up.
+    let written = Array(await transport.written[start...])
+    #expect(written.starts(with: ev(0xffeb, true)))
+    #expect(!written.contains(ev(0x34, true)[...]) || written.count == 6 * 8)
+    #expect(Self.held(after: written).isEmpty, "\(written)")
+    // A cancelled type releases its Shift too.
+    let (typer, typed, from) = try await connectedClient()
+    let typing = Task { try await typer.type("A", hold: .milliseconds(200)) }
+    try await Task.sleep(for: .milliseconds(100))
+    typing.cancel()
+    _ = try? await typing.value
+    #expect(Self.held(after: Array(await typed.written[from...])).isEmpty)
+  }
+
+  /// The keys still down after a stream of key events.
+  static func held(after bytes: [UInt8]) -> [UInt32] {
+    var down: [UInt32] = []
+    for offset in stride(from: 0, to: bytes.count - 7, by: 8) where bytes[offset] == 4 {
+      let keysym = bytes[(offset + 4)..<(offset + 8)].reduce(UInt32(0)) { $0 << 8 | UInt32($1) }
+      if bytes[offset + 1] != 0 { down.append(keysym) } else { down.removeAll { $0 == keysym } }
+    }
+    return down
+  }
+
   @Test func chordCtrlAltDelete() throws {
     let chord = try KeyChord(parsing: "ctrl+alt+Delete")
     #expect(chord == KeyChord(modifiers: [0xffe3, 0xffe9], key: 0xffff))

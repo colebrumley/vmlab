@@ -236,3 +236,74 @@ import VMLabCore
     #expect(heard?.1.contains("m2000") == true)
   }
 }
+
+/// Codex CX-32: thread selection and the access it scopes, and resume error replies.
+@Suite struct GDBThreadScopeTests {
+  /// A stub whose `g` and `m` answers depend on the thread `Hg` selected: x0 and the bytes read
+  /// are the thread's number.
+  static func threadAware() throws -> FakeGDBStub {
+    let base = try GDBDebugTargetTests.qemuLike()
+    let selected = Mutex<UInt64>(1)
+    return FakeGDBStub { packet in
+      if packet.hasPrefix("Hg") {
+        let number = packet.split(separator: ".").last.flatMap { UInt64($0, radix: 16) } ?? 0
+        selected.withLock { $0 = number }
+        return ["OK"]
+      }
+      let thread = selected.withLock { $0 }
+      if packet == "g" {
+        var block = Array(base("g")[0])
+        block.replaceSubrange(0..<16, with: Array(GDBFixtures.littleEndian(thread)))
+        return [String(block)]
+      }
+      if packet == "m1000,1" { return [Hex.byte(UInt8(thread))] }
+      return base(packet)
+    }
+  }
+
+  @Test func concurrentThreadScopedCallsReadTheirOwnThread() async throws {
+    let stub = try Self.threadAware()
+    let client = GDBClient(transport: stub, options: .init(fallbackArchitecture: .arm64))
+    let target = GDBDebugTarget(
+      client: client, endpoint: GDBEndpoint(host: "127.0.0.1", port: 1), architecture: .arm64)
+    defer { Task { await target.close() } }
+    _ = try await client.registerMap()
+    let wrong = try await withThrowingTaskGroup(of: Int.self) { group in
+      for n in 1...24 {
+        let thread = "p01." + String(n, radix: 16)
+        group.addTask {
+          var misses = 0
+          let x0 = try await target.registers(thread: thread).first { $0.name == "x0" }?.value
+          if x0 != "0x" + String(repeating: "0", count: 14) + Hex.byte(UInt8(n)) { misses += 1 }
+          let byte = try await target.readMemory(address: 0x1000, length: 1, thread: thread)
+          if byte != [UInt8(n)] { misses += 1 }
+          return misses
+        }
+      }
+      return try await group.reduce(0, +)
+    }
+    #expect(wrong == 0)
+  }
+
+  /// A stub that refuses a resume (`E22`, a thread it does not know) has not resumed: the client
+  /// reads the CPU as stopped again once the refusal arrives, not running forever.
+  @Test func refusedResumeLeavesTheTargetStopped() async throws {
+    let base = try GDBDebugTargetTests.qemuLike()
+    // QEMU ignores the interrupt byte while the CPU is stopped.
+    let stub = FakeGDBStub { packet in
+      packet == "vCont;c:p01.09" ? ["E22"] : packet == "^C" ? [] : base(packet)
+    }
+    let client = GDBClient(transport: stub, options: .init(fallbackArchitecture: .arm64))
+    let target = GDBDebugTarget(
+      client: client, endpoint: GDBEndpoint(host: "127.0.0.1", port: 1), architecture: .arm64)
+    defer { Task { await target.close() } }
+    try await target.resume(thread: "p01.09")
+    let error = await #expect(throws: VMLabError.self) {
+      _ = try await target.waitForStop(timeout: .seconds(2))
+    }
+    #expect(error?.code == .engineError)
+    #expect(await target.isRunning == false)
+    let registers = try await target.registers(thread: nil)
+    #expect(registers.first { $0.name == "pc" } != nil)
+  }
+}
