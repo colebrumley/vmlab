@@ -95,7 +95,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   `scripts/bootstrap.sh` leaves `qemu-system-aarch64 --version` and `tart --version` working.
   `git log` has an initial commit.
 
-- [ ] **R-001 Directory layout and module boundaries**
+- [x] **R-001 Directory layout and module boundaries**
   ```
   Sources/VMLabCore/       features, profiles, selector, VM store, Backend protocol, errors (no engine imports)
   Sources/VMLabQEMU/       QEMU process, QMP, serial, GDB endpoint, qcow2 snapshots
