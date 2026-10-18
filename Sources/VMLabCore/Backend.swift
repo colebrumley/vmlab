@@ -130,10 +130,97 @@ public protocol ExecChannel: Sendable {
   func run(_ request: ExecRequest) async throws(VMLabError) -> ExecResult
 }
 
-/// Read-only queries of the engine's view of a guest (R-311): `query` names one (`status`, `pci`,
-/// ...) and `arguments` refine it.
+/// One read-only question about the machine (R-311, `vm_introspect`): the named queries, or a raw
+/// QMP `query-*` command or HMP `info ...` command. The engine refuses any raw command outside
+/// that allowlist with `invalid_request`.
+public enum IntrospectionQuery: Sendable, Hashable {
+  case status, block, pci, cpus, memoryTree, registers, devices
+  /// A read-only QMP command, `query-<name>`.
+  case qmp(String)
+  /// A read-only HMP command, `info <what>`.
+  case hmp(String)
+
+  /// The `vm_introspect` names, `raw` for the two raw forms.
+  public static let names = [
+    "status", "block", "pci", "cpus", "memory_tree", "registers", "devices", "raw",
+  ]
+
+  public var name: String {
+    switch self {
+    case .status: "status"
+    case .block: "block"
+    case .pci: "pci"
+    case .cpus: "cpus"
+    case .memoryTree: "memory_tree"
+    case .registers: "registers"
+    case .devices: "devices"
+    case .qmp, .hmp: "raw"
+    }
+  }
+
+  /// The named query `name`; nil for `raw` and unknown names.
+  public init?(name: String) {
+    switch name {
+    case "status": self = .status
+    case "block": self = .block
+    case "pci": self = .pci
+    case "cpus": self = .cpus
+    case "memory_tree": self = .memoryTree
+    case "registers": self = .registers
+    case "devices": self = .devices
+    default: return nil
+    }
+  }
+}
+
+/// What the engine answered: structured JSON (QMP) or the monitor's text (HMP).
+public enum IntrospectionAnswer: Sendable, Hashable {
+  case json(JSONValue)
+  case text(String)
+}
+
+/// Read-only queries of the engine's view of a guest (R-311). They go to the engine, not the
+/// guest, so they answer while the guest is hung.
 public protocol Introspection: Sendable {
-  func query(_ query: String, arguments: [String: JSONValue]) async throws(VMLabError) -> JSONValue
+  func query(_ query: IntrospectionQuery) async throws(VMLabError) -> IntrospectionAnswer
+}
+
+/// What `vm_memory_dump` writes: a raw byte range, or all of memory as an ELF core.
+public enum MemoryDumpFormat: String, Codable, Sendable, CaseIterable {
+  case raw, elf
+}
+
+/// One dump: `size` bytes of guest physical memory from `address` (raw), or with no range all of
+/// it (ELF), written by the engine to `path` on the host.
+public struct MemoryDumpRequest: Sendable, Hashable {
+  public var address: UInt64?
+  public var size: UInt64?
+  public var path: URL
+
+  public init(address: UInt64? = nil, size: UInt64? = nil, path: URL) {
+    self.address = address
+    self.size = size
+    self.path = path
+  }
+
+  public var format: MemoryDumpFormat { size == nil ? .elf : .raw }
+}
+
+public struct MemoryDumpResult: Sendable, Hashable {
+  public var path: URL
+  public var bytes: UInt64
+  public var format: MemoryDumpFormat
+
+  public init(path: URL, bytes: UInt64, format: MemoryDumpFormat) {
+    self.path = path
+    self.bytes = bytes
+    self.format = format
+  }
+}
+
+/// Writes guest physical memory to a host file (R-311).
+public protocol MemoryDumper: Sendable {
+  func dump(_ request: MemoryDumpRequest) async throws(VMLabError) -> MemoryDumpResult
 }
 
 /// How a checkpoint is taken: the disk only, or the disk and the running guest's memory.
@@ -191,6 +278,12 @@ extension Channel where Value == any Introspection {
   }
 }
 
+extension Channel where Value == any MemoryDumper {
+  public static var memoryDump: Self {
+    Self(name: "memory_dump", features: [.memoryDump]) { $0.memoryDump }
+  }
+}
+
 extension Channel where Value == any ExecChannel {
   public static var exec: Self { Self(name: "exec", features: [.execSSH, .execAgent]) { $0.exec } }
 }
@@ -215,6 +308,12 @@ public protocol RunningVM: Sendable {
   var introspection: (any Introspection)? { get }
   var exec: any ExecChannel { get }
   var checkpoints: any CheckpointProvider { get }
+  /// Nil (the default) when the engine cannot dump memory.
+  var memoryDump: (any MemoryDumper)? { get }
+}
+
+extension RunningVM {
+  public var memoryDump: (any MemoryDumper)? { nil }
 }
 
 extension RunningVM {

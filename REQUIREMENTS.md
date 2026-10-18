@@ -416,7 +416,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   **Verify:** command-line snapshot per arch; integration: boot `debian-13-amd64` under TCG to
   `login:` on serial within 10 minutes (this is slow; the test is tagged `slow`).
 
-- [ ] **R-311 Memory dump and QMP introspection**
+- [x] **R-311 Memory dump and QMP introspection**
   `Introspection` for QEMU: `status`, `block` (`query-block`), `pci` (`query-pci`), `cpus`
   (`query-cpus-fast`), `memory_tree` (`human-monitor-command info mtree`), `registers` (`info
   registers -a`), `devices` (`info qtree`), and `raw` for an allowlist of read-only QMP commands

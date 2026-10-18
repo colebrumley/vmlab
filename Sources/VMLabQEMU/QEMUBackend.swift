@@ -207,19 +207,8 @@ public struct QEMURunningVM: RunningVM {
   }
   public var gdb: GDBEndpoint? { machine.runtime.gdbEndpoint.flatMap(GDBEndpoint.init(runtime:)) }
   public var introspection: (any Introspection)? { QMPIntrospection(qmp: machine.qmp) }
+  public var memoryDump: (any MemoryDumper)? { QMPMemoryDumper(qmp: machine.qmp) }
   public var exec: any ExecChannel { NotYetBuilt(vm: id, channel: "exec", item: "R-400") }
-}
-
-/// `query` runs QMP `query-<query>` (R-311 widens this).
-struct QMPIntrospection: Introspection {
-  let qmp: QMPClient
-
-  func query(_ query: String, arguments: [String: JSONValue]) async throws(VMLabError) -> JSONValue
-  {
-    try await QEMUBackend.lift {
-      try await qmp.execute("query-\(query)", arguments: arguments.isEmpty ? nil : arguments)
-    }
-  }
 }
 
 /// A channel the QEMU backend does not provide yet; every call is `guest_unreachable`.

@@ -156,6 +156,7 @@ public enum ToolHandlers {
   public static let all: [any ToolHandler] = [
     HostFactsHandler(), HostDoctorHandler(), VMPlanHandler(), VMCreateHandler(), VMListHandler(),
     VMInspectHandler(), VMLifecycleHandler(), VMLogsHandler(), ImagesHandler(),
+    VMIntrospectHandler(), VMMemoryDumpHandler(),
   ]
 
   private static let byName: [String: any ToolHandler] = Dictionary(

@@ -17,7 +17,7 @@ import VMLabCore
   static let channelFeatures: [(String, [Feature])] = [
     ("serial", [.serial]), ("display", [.gui, .guiPreboot, .guiDesktop]), ("gdb", [.gdb]),
     ("introspection", [.introspection]), ("exec", [.execSSH, .execAgent]),
-    ("checkpoints", [.checkpointDisk, .checkpointLive]),
+    ("checkpoints", [.checkpointDisk, .checkpointLive]), ("memory_dump", [.memoryDump]),
   ]
 
   static func request(_ name: String, on vm: FakeRunningVM) throws(VMLabError) {
@@ -27,6 +27,7 @@ import VMLabCore
     case "gdb": _ = try vm.channel(.gdb)
     case "introspection": _ = try vm.channel(.introspection)
     case "exec": _ = try vm.channel(.exec)
+    case "memory_dump": _ = try vm.channel(.memoryDump)
     default: _ = try vm.channel(.checkpoints)
     }
   }
@@ -55,7 +56,8 @@ import VMLabCore
     #expect(try vm.channel(.display).hostSide == false)
     let result = try await vm.channel(.exec).run(ExecRequest(command: "true"))
     #expect(result.exitCode == 0)
-    #expect(try await vm.channel(.introspection).query("pci", arguments: [:]) != .null)
+    #expect(
+      try await vm.channel(.introspection).query(.pci) == .json(.object(["query": .string("pci")])))
   }
 
   @Test func grantedButAbsentChannelIsGuestUnreachable() {
