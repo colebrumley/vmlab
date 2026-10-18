@@ -20,12 +20,16 @@ public enum SegmentHosts {
   }
 
   /// The guest script (run as root, the lines on stdin): drop the old block, append the new one.
+  /// The lock is `/var/run/vmlab-hosts.lock`, a root-only directory both Linux (where it is
+  /// /run) and macOS (which has no /run) have (CX-17); a lock that cannot be opened, or a guest
+  /// without `flock` (macOS), only loses the serialization, never the update. (The braces keep
+  /// the `2>/dev/null` off the rest of the script, whose stderr is the error's text.)
   public static func script(_ segment: Segment) -> String {
     let begin = RemoteShell.quote(begin(segment.name))
     let end = RemoteShell.quote(end(segment.name))
     return """
       set -e
-      exec 9>/run/vmlab-hosts.lock
+      { command exec 9>/var/run/vmlab-hosts.lock; } 2>/dev/null || true
       flock 9 2>/dev/null || true
       t=$(mktemp)
       awk -v b=\(begin) -v e=\(end) '$0==b{s=1;next} $0==e{s=0;next} !s' /etc/hosts > "$t"

@@ -13,13 +13,15 @@ import VMLabCore
     return segment
   }
 
-  /// Runs the guest script on the host against a copy of an `/etc/hosts`.
-  static func apply(_ segment: Segment, to hosts: URL) throws -> String {
+  /// Runs the guest script on the host against a copy of an `/etc/hosts`. The lock path is left
+  /// as it is (CX-17): this macOS host has no /run, as a macOS guest has none, and a non-root
+  /// run cannot create the lock at all; the names must be published regardless.
+  static func apply(_ segment: Segment, to hosts: URL, shell: String = "/bin/sh") throws -> String
+  {
     let script = SegmentHosts.script(segment)
       .replacingOccurrences(of: "/etc/hosts", with: hosts.path)
-      .replacingOccurrences(of: "/run/vmlab-hosts.lock", with: hosts.path + ".lock")
     let process = Process()
-    process.executableURL = URL(filePath: "/bin/sh")
+    process.executableURL = URL(filePath: shell)
     process.arguments = ["-c", script]
     let input = Pipe()
     process.standardInput = input
@@ -59,6 +61,21 @@ import VMLabCore
           # vmlab segment cluster end
 
           """)
+  }
+
+  /// CX-17: the lock lives where both Linux and macOS have a directory, and a lock that cannot
+  /// be made never stops the update; checked with macOS's /bin/sh and, when present, dash.
+  @Test func scriptRunsWhereThereIsNoRun() throws {
+    #expect(!SegmentHosts.script(Self.segment([])).contains(" 9>/run/"))
+    #expect(FileManager.default.fileExists(atPath: "/var/run"))
+    for shell in ["/bin/sh", "/bin/zsh", "/bin/dash"]
+    where FileManager.default.isExecutableFile(atPath: shell) {
+      let hosts = FileManager.default.temporaryDirectory.appending(path: "hosts-\(UUID())")
+      defer { try? FileManager.default.removeItem(at: hosts) }
+      try "127.0.0.1 localhost\n".write(to: hosts, atomically: true, encoding: .utf8)
+      let text = try Self.apply(Self.segment([("a", "10.3.0.10")]), to: hosts, shell: shell)
+      #expect(text.contains("10.3.0.10 a a.cluster"), "\(shell)")
+    }
   }
 
   @Test func publishRunsAsRootWithTheLinesOnStdin() async {
