@@ -24,6 +24,8 @@ final class FakeDisplay: DisplaySession, DisplayConnector {
   private let counter = Mutex(0)
   /// Thrown by the next screenshot, when set.
   let failure = Mutex<VMLabError?>(nil)
+  /// When set, a `diffFrom` screenshot reports this changed region and returns its image.
+  let changed = Mutex<DisplayRect?>(nil)
 
   init(width: Int = 2560, height: Int = 1600, scale: Double = 0.5) {
     self.width = width
@@ -57,11 +59,12 @@ final class FakeDisplay: DisplaySession, DisplayConnector {
     if request.diffFrom == "nope" {
       throw VMLabError.invalidRequest(field: "diffFrom", reason: "no screenshot nope", hint: "")
     }
-    let unchanged = request.diffFrom != nil
+    let changedRegion = request.diffFrom == nil ? nil : changed.withLock { $0 }
+    let unchanged = request.diffFrom != nil && changedRegion == nil
     return ScreenCapture(
       id: "s-\(n)", width: width, height: height, scale: request.maxEdge == nil ? 1 : scale,
       image: unchanged ? nil : Data([0x89, 0x50]), mimeType: unchanged ? nil : "image/png",
-      unchanged: unchanged)
+      changedRegion: changedRegion, unchanged: unchanged)
   }
 
   func pointer(x: Int, y: Int, buttons: DisplayButtons) async throws(VMLabError) {
@@ -220,6 +223,46 @@ final class FakeDisplay: DisplaySession, DisplayConnector {
     #expect(
       Computer.unscale((x: 3, y: 3), frame: .init(originX: 10, originY: 20, scale: 0.5)) == (16, 26)
     )
+  }
+
+  /// Codex CX-21: a diff screenshot's image shows `changedRegion`, so scaled coordinates in it
+  /// start there, not at the screen's corner; an unchanged diff has no image and keeps the frame.
+  @Test func scaledCoordinatesFollowADiffsChangedRegion() async throws {
+    let f = try Fixture()
+    defer { f.cleanUp() }
+    _ = try await f.call(["action": .string("screenshot")])
+    _ = try await f.call(["action": .string("screenshot"), "diffFrom": .string("s-1")])
+    f.display.changed.withLock { $0 = DisplayRect(x: 100, y: 200, width: 50, height: 50) }
+    let diff = try await f.call(["action": .string("screenshot"), "diffFrom": .string("s-1")])
+    #expect(diff.value["changedRegion"] != nil)
+    _ = try await f.call([
+      "action": .string("mouse_move"), "coordinate": Self.point(10, 10), "scaled": .bool(true),
+      "settleMs": .number(0),
+    ])
+    #expect(f.display.inputs == [.pointer(120, 220, [])])
+  }
+
+  /// Codex CX-21: every argument is checked before any input goes out, so a refused call can be
+  /// retried without typing twice.
+  @Test func badResultArgumentsAreRefusedBeforeInput() async throws {
+    let f = try Fixture()
+    defer { f.cleanUp() }
+    let bad: [(String, JSONValue)] = [
+      ("settleMs", .number(-1)), ("format", .string("gif")), ("quality", .number(0)),
+      ("quality", .number(101)), ("maxEdge", .number(0)),
+    ]
+    for (field, value) in bad {
+      for action in ["type", "left_click", "key", "scroll"] {
+        let error = await #expect(throws: VMLabError.self) {
+          try await f.call([
+            "action": .string(action), "text": .string("hi"), "coordinate": Self.point(1, 1),
+            "scrollDirection": .string("up"), field: value,
+          ])
+        }
+        #expect(error?.data["field"] == .string(field), "\(action) \(field)")
+      }
+    }
+    #expect(f.display.inputs.isEmpty)
   }
 
   @Test func coordinatesOutsideTheScreenAreRefused() async throws {
