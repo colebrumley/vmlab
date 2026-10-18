@@ -16,8 +16,7 @@ import VMLabCore
   /// Runs the guest script on the host against a copy of an `/etc/hosts`. The lock path is left
   /// as it is (CX-17): this macOS host has no /run, as a macOS guest has none, and a non-root
   /// run cannot create the lock at all; the names must be published regardless.
-  static func apply(_ segment: Segment, to hosts: URL, shell: String = "/bin/sh") throws -> String
-  {
+  static func apply(_ segment: Segment, to hosts: URL, shell: String = "/bin/sh") throws -> String {
     let script = SegmentHosts.script(segment)
       .replacingOccurrences(of: "/etc/hosts", with: hosts.path)
     let process = Process()

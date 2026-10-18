@@ -223,7 +223,8 @@ import VMLabCore
     #expect(partial["failed"]?.arrayValue?.count == 1)
     let kept = try FleetStore(home: f.context.home).load("lab")
     #expect(kept.members.count == 1)
-    #expect(try kept.members.allSatisfy { try f.context.store.load(id: $0.vm ?? "").fleet == "lab" })
+    #expect(
+      try kept.members.allSatisfy { try f.context.store.load(id: $0.vm ?? "").fleet == "lab" })
     #expect(!f.context.manager.segments.list().isEmpty)
     let rest = try await f.call(["action": .string("destroy"), "name": .string("lab")])
     #expect(rest["destroyed"]?.arrayValue?.count == 1)

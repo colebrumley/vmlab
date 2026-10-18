@@ -497,7 +497,8 @@ public actor ImageStore {
   nonisolated func checkUnused(_ name: String, _ verb: String) throws(VMLabError) {
     guard let users = users(of: name) else {
       throw VMLabError.invalidRequest(
-        field: "name", reason: "cannot \(verb) \(name): a VM record cannot be read, so the VMs "
+        field: "name",
+        reason: "cannot \(verb) \(name): a VM record cannot be read, so the VMs "
           + "using it are unknown",
         hint: "Run vmlab doctor or fix the unreadable record under vms/, then retry.")
     }
