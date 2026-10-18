@@ -101,7 +101,9 @@ extension UnixSocket {
     guard sent == 1 else { throw SwitchError.system(call: "sendmsg", errno: errno) }
   }
 
-  /// Receives one descriptor sent by `sendDescriptor`; nil when the peer sent none.
+  /// Receives one descriptor sent by `sendDescriptor`; nil when the peer sent none. Any other
+  /// descriptors in the message (more in the first `SCM_RIGHTS` header, or further headers) are
+  /// closed, so a peer cannot make the switch leak them.
   public static func receiveDescriptor(from socket: Int32) throws -> Int32? {
     var byte: UInt8 = 0
     var control = [UInt8](repeating: 0, count: controlLength + 16)
@@ -118,11 +120,32 @@ extension UnixSocket {
       }
     }
     guard received >= 0 else { throw SwitchError.system(call: "recvmsg", errno: errno) }
-    guard length >= controlLength else { return nil }
-    return control.withUnsafeBytes { raw in
-      let header = raw.load(as: cmsghdr.self)
-      guard header.cmsg_level == SOL_SOCKET, header.cmsg_type == SCM_RIGHTS else { return nil }
-      return raw.load(fromByteOffset: controlHeader, as: Int32.self)
+    let descriptors = control.withUnsafeBytes { raw in
+      rights(in: UnsafeRawBufferPointer(rebasing: raw[0..<min(length, raw.count)]))
     }
+    for extra in descriptors.dropFirst() { close(extra) }
+    return descriptors.first
+  }
+
+  /// Every descriptor in the `SCM_RIGHTS` headers of `control`, in order.
+  static func rights(in control: UnsafeRawBufferPointer) -> [Int32] {
+    var found: [Int32] = []
+    var offset = 0
+    while offset + controlHeader <= control.count {
+      let header = control.loadUnaligned(fromByteOffset: offset, as: cmsghdr.self)
+      let length = Int(header.cmsg_len)
+      guard length >= controlHeader else { break }
+      let end = min(offset + length, control.count)
+      if header.cmsg_level == SOL_SOCKET, header.cmsg_type == SCM_RIGHTS {
+        var at = offset + controlHeader
+        while at + MemoryLayout<Int32>.size <= end {
+          found.append(control.loadUnaligned(fromByteOffset: at, as: Int32.self))
+          at += MemoryLayout<Int32>.size
+        }
+      }
+      // Headers are 4-byte aligned on Darwin (`__DARWIN_ALIGN32`).
+      offset += (length + 3) & ~3
+    }
+    return found
   }
 }
