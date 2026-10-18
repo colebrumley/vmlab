@@ -9,10 +9,17 @@ public struct VMLabConfig: Codable, Sendable, Hashable {
   /// Lets a guest start although the host is under memory pressure or short of available memory
   /// (the owner's escape hatch; `VMLAB_IGNORE_MEMORY_PRESSURE=1` does the same).
   public var ignoreMemoryPressure: Bool
+  /// Lets `extra.qemuArgs` name options that run host code or pass host hardware through
+  /// (`-plugin`, `-semihosting`, `usb-host`, `vfio-*`, ...; `ExtraSpec.hostCodeUses`). Their host
+  /// paths still follow the path policy. Only the owner sets it; no tool argument can.
+  public var allowHostCode: Bool
 
-  public init(allowAnyPath: Bool = false, ignoreMemoryPressure: Bool = false) {
+  public init(
+    allowAnyPath: Bool = false, ignoreMemoryPressure: Bool = false, allowHostCode: Bool = false
+  ) {
     self.allowAnyPath = allowAnyPath
     self.ignoreMemoryPressure = ignoreMemoryPressure
+    self.allowHostCode = allowHostCode
   }
 
   public init(from decoder: any Decoder) throws {
@@ -20,6 +27,7 @@ public struct VMLabConfig: Codable, Sendable, Hashable {
     allowAnyPath = (try? c.decodeIfPresent(Bool.self, forKey: .allowAnyPath)) ?? false
     ignoreMemoryPressure =
       (try? c.decodeIfPresent(Bool.self, forKey: .ignoreMemoryPressure)) ?? false
+    allowHostCode = (try? c.decodeIfPresent(Bool.self, forKey: .allowHostCode)) ?? false
   }
 
   public static func url(home: URL) -> URL { home.appending(path: "config.json") }

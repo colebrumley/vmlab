@@ -208,11 +208,15 @@ enum Schema {
           [
             "qemuArgs": array(
               string("One QEMU command-line argument."),
-              "Arguments appended verbatim after vmlab's own (implies custom_devices, so QEMU), "
-                + "e.g. [\"-device\", \"virtio-rng-pci\"]. Only -device, -global, -drive, "
-                + "-blockdev, -object, -chardev, -netdev, -nic, -rtc, -boot, -smbios, -fw_cfg, "
-                + "-action, -usb, -no-reboot and -no-shutdown are allowed; host paths must be "
-                + "absolute, under the home or /tmp, and outside VMLAB_HOME."
+              "QEMU arguments after vmlab's own (implies custom_devices, so QEMU), e.g. "
+                + "[\"-device\", \"virtio-rng-pci\"]. Devices, drives, objects, chardevs, "
+                + "user-mode netdevs, -cpu (replaces vmlab's; host or max under qemu-hvf), "
+                + "-machine properties (merged into vmlab's; no accel=), -icount, -d, -D, -trace, "
+                + "-numa, -overcommit and more are allowed. Refused: monitors, -serial (vmlab's "
+                + "console; add -chardev plus -device pci-serial), -incoming, -add-fd, -set, "
+                + "-readconfig, exec:/mon:/cmd:, fd/script/helper keys, tap/bridge/vmnet; "
+                + "-plugin, -semihosting and passthrough devices need the owner's allowHostCode. "
+                + "Host paths must be absolute, under the home or /tmp, and outside VMLAB_HOME."
             )
           ], description: "Engine-specific additions."),
         "provision": object(
