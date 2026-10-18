@@ -1,0 +1,63 @@
+import Foundation
+import Testing
+import VMLabCore
+
+@testable import VMLabMCP
+
+/// `images` list, pull and remove over the fixture catalogue.
+@Suite struct ImagesHandlerTests {
+  typealias Fixture = VMCreateHandlerTests.Fixture
+
+  static func images(_ arguments: [String: JSONValue], in f: Fixture) async throws(VMLabError)
+    -> ToolResult
+  {
+    try await ToolHandlers.call("images", arguments: .object(arguments), context: f.context)
+  }
+
+  @Test func pullListRemove() async throws {
+    let f = try Fixture()
+    defer { f.cleanUp() }
+    let before = try await Self.images(["action": .string("list")], in: f)
+    let rows = before.value["images"]?.arrayValue ?? []
+    #expect(rows.map { $0["name"]?.stringValue } == ["tiny-arm64", "tiny-mac"])
+    #expect(rows.first?["pulled"] == .bool(false))
+    #expect(rows.first?["arch"] == .string("arm64"))
+
+    let pulled = try await Self.images(
+      ["action": .string("pull"), "name": .string("tiny-arm64")], in: f)
+    #expect(pulled.value["cached"] == .bool(false))
+    #expect((pulled.value["bytes"]?.numberValue ?? 0) > 0)
+    #expect(f.progress.messages.first == "pulling image tiny-arm64")
+    let again = try await Self.images(
+      ["action": .string("pull"), "name": .string("tiny-arm64")], in: f)
+    #expect(again.value["cached"] == .bool(true))
+
+    let after = try await Self.images(["action": .string("list")], in: f)
+    #expect(after.value["images"]?.arrayValue?.first?["pulled"] == .bool(true))
+
+    let removed = try await Self.images(
+      ["action": .string("remove"), "name": .string("tiny-arm64")], in: f)
+    #expect(removed.value["removed"] == .array([.string("tiny-arm64")]))
+    #expect((removed.value["bytesFreed"]?.numberValue ?? 0) > 0)
+    let none = try await Self.images(
+      ["action": .string("remove"), "name": .string("tiny-arm64")], in: f)
+    #expect(none.value["removed"] == .array([]))
+  }
+
+  @Test func refusals() async throws {
+    let f = try Fixture()
+    defer { f.cleanUp() }
+    let unknown = await #expect(throws: VMLabError.self) {
+      try await Self.images(["action": .string("pull"), "name": .string("nope")], in: f)
+    }
+    #expect(unknown?.code == .imageNotFound)
+    let unnamed = await #expect(throws: VMLabError.self) {
+      try await Self.images(["action": .string("pull")], in: f)
+    }
+    #expect(unnamed?.data["field"] == .string("name"))
+    let unbuilt = await #expect(throws: VMLabError.self) {
+      try await Self.images(["action": .string("prune")], in: f)
+    }
+    #expect(unbuilt?.code == .invalidRequest)
+  }
+}

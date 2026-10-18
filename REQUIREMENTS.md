@@ -305,7 +305,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   **Verify:** JSON-RPC test over pipes with the fake backend: `vm_plan` for an impossible request
   returns suggestions; `vm_list` lists a fixture VM.
 
-- [ ] **R-205 Long operations and cancellation**
+- [x] **R-205 Long operations and cancellation**
   Calls that may exceed 10 s (`vm_create` with a pull, `vm_lifecycle start`, `vm_checkpoint restore`,
   `images pull`, `fleet create`) send progress notifications at least every 5 s and honour MCP
   cancellation by cancelling the Swift task; a cancelled create destroys what it made.

@@ -5,7 +5,8 @@ import VMLabMCP
 
 /// A subcommand that mirrors one MCP tool: it builds the tool's JSON arguments from its flags and
 /// calls the same handler `tools/call` does. `--json` prints the result object; otherwise
-/// `render` prints a short human summary and any warnings go to stderr.
+/// `render` prints a short human summary and any warnings go to stderr. Progress of a long call
+/// is printed to stderr.
 protocol ToolCommand: AsyncParsableCommand {
   static var toolName: String { get }
   var json: Bool { get }
@@ -17,8 +18,13 @@ protocol ToolCommand: AsyncParsableCommand {
 
 extension ToolCommand {
   func run() async throws {
+    var context = ToolContext.live()
+    // A long call's progress messages go to stderr, so stdout stays the result.
+    context.progress = ToolProgress { _, _, message in
+      if let message { FileHandle.standardError.write(Data("\(message)...\n".utf8)) }
+    }
     let result = try await ToolHandlers.call(
-      Self.toolName, arguments: try arguments(), context: .live())
+      Self.toolName, arguments: try arguments(), context: context)
     if json {
       print(ToolRendering.json(result.value, pretty: true))
     } else {
