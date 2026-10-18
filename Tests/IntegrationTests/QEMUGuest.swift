@@ -3,7 +3,7 @@ import Foundation
 import VMLabCore
 import VMLabQEMU
 
-/// A `debian-13-arm64` guest under `qemu-hvf`, created through `VMManager` and `QEMUBackend` in a
+/// A `debian-13-arm64` guest under `qemu-hvf` (or another image and QEMU profile), created through `VMManager` and `QEMUBackend` in a
 /// throwaway `VMLAB_HOME` under /tmp (short, so socket paths fit `sockaddr_un`). The home links
 /// `~/.vmlab/images` instead of pulling again. `shutdown()` kills the guest and removes the home.
 struct QEMUGuest {
@@ -13,11 +13,14 @@ struct QEMUGuest {
   let home: URL
   let manager: VMManager
   let backend: QEMUBackend
+  let backends: BackendRegistry
   let record: VMRecord
   let machine: QEMUMachine
 
   static func boot(
-    features: [Feature] = [.serial, .gui, .netNAT], memoryGB: Int = 2
+    features: [Feature] = [.serial, .gui, .netNAT], memoryGB: Int = 2,
+    profile: Profile = .qemuHVF, image: String = "debian-13-arm64",
+    arch: GuestSpec.Arch = .arm64
   ) async throws -> QEMUGuest {
     let n = counterLock.withLock {
       counter += 1
@@ -31,26 +34,27 @@ struct QEMUGuest {
       withDestinationURL: FileManager.default.homeDirectoryForCurrentUser.appending(
         path: ".vmlab/images"))
     let store = Store(home: home)
-    let backend = QEMUBackend(profile: .qemuHVF, store: store)
+    let backend = QEMUBackend(profile: profile, store: store)
     let registry = BackendRegistry()
     registry.register(backend)
     let manager = VMManager(store: store, backends: registry)
-    let guest = GuestSpec(os: .linux, arch: .arm64)
+    let guest = GuestSpec(os: .linux, arch: arch)
     let plan = Plan(
-      profile: .qemuHVF, guest: guest,
+      profile: profile, guest: guest,
       resources: ResourceSpec(cpus: 2, memoryGB: memoryGB, diskGB: 8), features: features,
       estimatedStartupSeconds: 15)
     let created = try await manager.create(
       VMRecord(
-        id: "", name: "it-\(n)", profile: .qemuHVF, guest: guest, features: features,
-        image: "debian-13-arm64"), plan: plan)
+        id: "", name: "it-\(n)", profile: profile, guest: guest, features: features,
+        image: image), plan: plan)
     do {
       guard let running = try await manager.perform(.start, on: created.id) else {
         throw VMLabError(code: .internal, message: "start returned no record", hint: "")
       }
       let machine = try await backend.machine(for: running)
       return QEMUGuest(
-        home: home, manager: manager, backend: backend, record: running, machine: machine)
+        home: home, manager: manager, backend: backend, backends: registry, record: running,
+        machine: machine)
     } catch {
       try? await backend.kill(created)
       try? FileManager.default.removeItem(at: home)

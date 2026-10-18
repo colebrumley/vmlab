@@ -114,6 +114,9 @@ public struct ToolContext: Sendable {
   public var images: ImageStore
   /// Admission to guest starts (`vm_lifecycle start`, `vm_create` autostart).
   public var startGate: any StartGating
+  /// The debug sessions `vm_debug` keeps per VM: process-wide, so the GDB connection outlives
+  /// the call that opened it (R-705).
+  public var debug: DebugSessions = .shared
   /// This call's progress reporter; the MCP server sets it per `tools/call`.
   public var progress: ToolProgress = .none
   /// How often a long call reports while it waits (R-205: at least every 5 s).
@@ -155,7 +158,7 @@ public protocol ToolHandler: Sendable {
 public enum ToolHandlers {
   public static let all: [any ToolHandler] = [
     HostFactsHandler(), HostDoctorHandler(), VMPlanHandler(), VMCreateHandler(), VMListHandler(),
-    VMInspectHandler(), VMLifecycleHandler(), VMLogsHandler(), ImagesHandler(),
+    VMInspectHandler(), VMLifecycleHandler(), VMLogsHandler(), VMDebugHandler(), ImagesHandler(),
   ]
 
   private static let byName: [String: any ToolHandler] = Dictionary(

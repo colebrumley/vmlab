@@ -635,7 +635,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   **Verify:** unit tests against fixture transcripts for every packet; a fake stub in tests serves
   `target.xml` and a `g` reply, and the client names `pc`, `sp`, `x0` with the right values.
 
-- [ ] **R-701 `vm_debug` tool**
+- [x] **R-701 `vm_debug` tool**
   Actions of Appendix C: `info` (endpoint for a human's lldb or gdb, attached state), `halt`,
   `continue`, `step`, `wait(timeout)` (block until stop), `breakpoint_add(address|symbol?,
   hardware)`, `breakpoint_remove`, `breakpoints`, `registers`, `read_memory(address, size)` (hex

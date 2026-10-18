@@ -341,7 +341,7 @@ The guest's serial console, captured from the first byte of boot. read returns t
 
 ## `vm_debug`
 
-Debug the guest CPU through its GDB stub. info gives the endpoint a human can attach to and whether vmlab is attached; halt stops the CPU; continue resumes; step executes one instruction; wait blocks until the CPU stops (breakpoint, watchpoint) or timeoutSeconds; breakpoint_add sets one at address (kind software, hardware, or a watch_* watchpoint over size bytes); breakpoint_remove clears it; breakpoints lists them; registers reads them; read_memory returns size bytes at address as hex (with ASCII up to 256 bytes); write_memory writes hex data. Addresses are numbers in 0x hex; no symbols. Needs gdb; require halt_at_start to debug from the first instruction.
+Debug the guest CPU through its GDB stub. info gives the endpoint a human can attach to and whether vmlab is attached; halt stops the CPU; continue resumes; step executes one instruction; wait blocks until the CPU stops (breakpoint, watchpoint) or timeoutSeconds; breakpoint_add sets one at address (kind software, hardware, or a watch_* watchpoint over size bytes); breakpoint_remove clears it; breakpoints lists them; registers reads them; read_memory returns size bytes at address as hex (with ASCII up to 256 bytes); write_memory writes hex data. Addresses are numbers in 0x hex; no symbols. Needs gdb; require halt_at_start to debug from the first instruction. The first action that needs the stub attaches, and QEMU stops the guest when a debugger attaches; continue resumes it. Breakpoints set on a running CPU leave it running.
 
 **Errors:** `vm_not_found`, `wrong_state`, `capability_missing`, `invalid_request`, `debug_busy`, `timeout`, `engine_error`
 
@@ -355,14 +355,16 @@ Debug the guest CPU through its GDB stub. info gives the endpoint a human can at
 | `data` | string |  | write_memory: the bytes as hex, e.g. 1f2003d5. |
 | `kind` | `software` \| `hardware` \| `watch_write` \| `watch_read` \| `watch_access`, default `software` |  | breakpoint_add, breakpoint_remove: the kind of stop point. |
 | `size` | integer, ≥ 1 |  | read_memory: bytes to read; watchpoints: bytes to watch. |
-| `thread` | string |  | The thread (CPU) to act on, as registers or info names it. |
+| `symbolFile` | string |  | A host path to the guest's symbol file (vmlinux, a kernel .debug), recorded for the info output so a human can load it; vmlab resolves no symbols. |
+| `thread` | string |  | step, continue, registers, read_memory, write_memory: the thread (CPU) to act on, as a stop reports it (e.g. p01.02). |
 | `timeoutSeconds` | integer, ≥ 1, default `30` |  | wait: the longest to block. |
 
 **Result**
 
 ```
 { stopped, reason?, pc?, registers?: { <name>: hex }, bytes?: hex, ascii?,
-  breakpoints?: [ { address, kind, size? } ], endpoint, attached }
+  breakpoints?: [ { address, kind, size? } ], endpoint, attached,
+  info: connect: { gdb, lldb }, symbolFile, note }
 ```
 
 ## `vm_introspect`
