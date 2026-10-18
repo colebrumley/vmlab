@@ -53,6 +53,11 @@ public final class QEMUBackend: Backend {
   }
 
   public func stop(_ record: VMRecord) async throws(VMLabError) {
+    try await stop(record, grace: nil)
+  }
+
+  /// ACPI power button, then up to `grace` (default 60 s, Appendix G) for QEMU to exit.
+  public func stop(_ record: VMRecord, grace: Duration?) async throws(VMLabError) {
     // A guest whose process is already gone is stopped.
     guard let pid = QEMUMachine.readPID(layout(of: record.id)) ?? record.runtime?.pid,
       QEMUMachine.isAlive(pid)
@@ -63,7 +68,7 @@ public final class QEMUBackend: Backend {
       return
     }
     let machine = try await machine(for: record)
-    try await Self.lift { try await machine.powerdown() }
+    try await Self.lift { try await machine.powerdown(timeout: grace ?? .seconds(60)) }
     machines.withLock { _ = $0.removeValue(forKey: record.id) }
   }
 

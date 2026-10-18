@@ -62,7 +62,9 @@ enum LongOperation {
   /// while it boots and, for an `exec_ssh` guest, until SSH answers (R-400). A legal-state check
   /// comes first, so a running VM is `wrong_state`, not a limit refusal. Returns the record and
   /// the start's warnings (`ssh_unreachable`).
-  static func start(_ record: VMRecord, context: ToolContext) async throws(VMLabError)
+  static func start(
+    _ record: VMRecord, context: ToolContext, sshTimeout: Duration? = nil
+  ) async throws(VMLabError)
     -> (record: VMRecord, warnings: [String])
   {
     _ = try Lifecycle.transition(.start, from: record.state, vm: record.id)
@@ -76,7 +78,7 @@ enum LongOperation {
       try await typed("start", vm: record.id) {
         try await gate.withStart(
           Inventory.Guest(record: record), running: { store.inventory() }, host: host
-        ) { try await manager.run(.start, on: record.id) }
+        ) { try await manager.run(.start, on: record.id, timeout: sshTimeout) }
       }
     }
     if let after = started.record { return (after, started.warnings) }

@@ -53,7 +53,9 @@ public struct SSHFileTransfer: Sendable {
         field: "local", reason: "\(local.path) does not exist",
         hint: "Give the absolute path of a host file or directory to push.")
     }
-    try await copy(source: local.path, destination: remoteSpec(remote), timeout: timeout)
+    try await copy(source: local.path, destination: remoteSpec(remote), timeout: timeout) {
+      ["bytesTotal": .number(Double(Self.bytes(at: local))), "path": .string(remote)]
+    }
     return FileTransferResult(bytes: Self.bytes(at: local), path: remote)
   }
 
@@ -85,13 +87,21 @@ public struct SSHFileTransfer: Sendable {
       // A fresh copy, so a directory pulled twice does not land inside the first copy.
       try? files.removeItem(at: destination)
     }
-    try await copy(source: remoteSpec(remote), destination: destination.path, timeout: timeout)
+    try await copy(source: remoteSpec(remote), destination: destination.path, timeout: timeout) {
+      // Partial data (R-1101): what had landed when the copy was stopped; it is left in place.
+      [
+        "bytesCopied": .number(Double(Self.bytes(at: destination))),
+        "path": .string(destination.path),
+      ]
+    }
     return FileTransferResult(bytes: Self.bytes(at: destination), path: destination.path)
   }
 
-  private func copy(source: String, destination: String, timeout: Duration)
-    async throws(VMLabError)
-  {
+  /// Runs scp; on a timeout the refusal's `data` adds what `partial` reports.
+  private func copy(
+    source: String, destination: String, timeout: Duration,
+    partial: () -> [String: JSONValue] = { [:] }
+  ) async throws(VMLabError) {
     let errors = target.vmDirectory.appending(path: "exec/scp-\(UUID().uuidString).stderr")
     try? FileManager.default.createDirectory(
       at: errors.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -108,7 +118,9 @@ public struct SSHFileTransfer: Sendable {
         code: .timeout,
         message: "The copy did not finish within \(Int(timeout / .seconds(1))) s and was stopped",
         hint: "Copy less at once, or use a shared directory (share) for large trees.",
-        data: ["vm": .string(target.vm), "timeoutSeconds": .number(Double(timeout / .seconds(1)))])
+        data: partial().merging(
+          ["vm": .string(target.vm), "timeoutSeconds": .number(Double(timeout / .seconds(1)))],
+          uniquingKeysWith: { $1 }))
     }
     guard outcome.status != 0 else { return }
     if SSHExecChannel.isSSHFailure(stderr) || SSHExecChannel.isConnectFailure(stderr) {

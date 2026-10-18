@@ -99,9 +99,9 @@ public actor VMManager {
   /// engine, leaving the VM `suspended`; starting a suspended VM restores that checkpoint.
   @discardableResult
   public func perform(
-    _ action: LifecycleAction, on vm: String, force: Bool = false
+    _ action: LifecycleAction, on vm: String, force: Bool = false, timeout: Duration? = nil
   ) async throws(VMLabError) -> VMRecord? {
-    try await run(action, on: vm, force: force).record
+    try await run(action, on: vm, force: force, timeout: timeout).record
   }
 
   /// `perform`, with the warnings the action produced. A start of a VM granted `exec_ssh` records
@@ -111,8 +111,13 @@ public actor VMManager {
   /// `ssh_unreachable` warning. `destroy` refuses (`invalid_request`, field `force`) while
   /// another VM's backing chain reads a file of this one, unless `force`, which destroys it all
   /// the same and warns that those VMs can no longer boot.
+  ///
+  /// `timeout` (`vm_lifecycle timeoutSeconds`) is, for `start`, how long to wait for SSH (default
+  /// the Appendix G boot timeout) and, for `stop`, the grace period after the power button
+  /// (default the engine's, Appendix G: 60 s for QEMU): a guest still up then is killed, the VM
+  /// ends `stopped` and a warning says so. Other actions ignore it.
   public func run(
-    _ action: LifecycleAction, on vm: String, force: Bool = false
+    _ action: LifecycleAction, on vm: String, force: Bool = false, timeout: Duration? = nil
   ) async throws(VMLabError) -> Outcome {
     let id = try store.find(vm).id
     await acquire(id)
@@ -140,9 +145,11 @@ public actor VMManager {
       }
     }
     do {
-      let updated = try await apply(action, target: target, to: record, with: backend)
+      let updated = try await apply(
+        action, target: target, to: record, with: backend, timeout: timeout,
+        warnings: &warnings)
       if action == .start, let updated {
-        let ready = await waitForSSH(updated, backend: backend)
+        let ready = await waitForSSH(updated, backend: backend, timeout: timeout)
         if let warning = ready.warning {
           warnings.append(warning)
           if warning != Self.noEndpoint(id) { await log(id, warning, level: .warning) }
@@ -165,7 +172,7 @@ public actor VMManager {
 
   private func apply(
     _ action: LifecycleAction, target: LifecycleTarget, to record: VMRecord,
-    with backend: any Backend
+    with backend: any Backend, timeout: Duration? = nil, warnings: inout [String]
   ) async throws(VMLabError) -> VMRecord? {
     var runtime = record.runtime
     switch action {
@@ -174,7 +181,18 @@ public actor VMManager {
       if record.state == .suspended, let started = runtime {
         try await resumeSuspended(record, runtime: started, with: backend)
       }
-    case .stop: try await backend.stop(record)
+    case .stop:
+      do {
+        try await backend.stop(record, grace: timeout)
+      } catch  where error.code == .timeout && error.data["cancelled"] == nil && !Task.isCancelled {
+        // The grace period is over: kill, as the tool promises (ACPI, then kill).
+        try await backend.kill(record)
+        let warning =
+          "stop: the guest did not shut down within its grace period "
+          + "(\(Self.seconds(timeout))), so it was killed"
+        warnings.append(warning)
+        await log(record.id, warning, level: .warning)
+      }
     case .kill: try await backend.kill(record)
     case .pause: try await backend.pause(record)
     case .resume: try await backend.resume(record)
@@ -204,18 +222,25 @@ public actor VMManager {
   /// The target when the guest answered SSH; neither when it is not one to wait for (no
   /// `exec_ssh`, networking off); otherwise the warning.
   private func waitForSSH(
-    _ record: VMRecord, backend: any Backend
+    _ record: VMRecord, backend: any Backend, timeout requested: Duration? = nil
   ) async -> (target: SSHTarget?, warning: String?) {
     guard record.features.contains(.execSSH), record.network.mode != .disabled else {
       return (nil, nil)
     }
-    let timeout = ResourceLimits.bootTimeout(profile: record.profile, os: record.guest.os)
+    let timeout =
+      requested ?? ResourceLimits.bootTimeout(profile: record.profile, os: record.guest.os)
     guard let endpoint = await backend.sshEndpoint(record, timeout: timeout) else {
       return (nil, Self.noEndpoint(record.id))
     }
     let target = SSHTarget(record: record, endpoint: endpoint, store: store)
     if let warning = await readiness.wait(for: target, timeout: timeout) { return (nil, warning) }
     return (target, nil)
+  }
+
+  /// "60 s", or "the engine's default" for nil.
+  static func seconds(_ duration: Duration?) -> String {
+    guard let duration else { return "the engine's default" }
+    return "\(duration.components.seconds) s"
   }
 
   static func noEndpoint(_ id: String) -> String {

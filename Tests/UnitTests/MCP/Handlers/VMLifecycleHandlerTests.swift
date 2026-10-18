@@ -150,3 +150,28 @@ import VMLabCore
     #expect(forced.warnings.contains { $0.hasPrefix("destroyed with force") })
   }
 }
+
+@Suite struct VMLifecycleTimeoutHandlerTests {
+  typealias Fixture = VMCreateHandlerTests.Fixture
+
+  @Test func timeoutSecondsIsHonouredOrNamedAsIgnored() async throws {
+    let f = try Fixture()
+    defer { f.cleanUp() }
+    _ = try await f.create(["autostart": .bool(false)])
+    func act(_ action: String, _ seconds: Int) async throws(VMLabError) -> ToolResult {
+      try await ToolHandlers.call(
+        "vm_lifecycle",
+        arguments: .object([
+          "vm": .string("web"), "action": .string(action),
+          "timeoutSeconds": .number(Double(seconds)),
+        ]), context: f.context)
+    }
+    #expect(try await act("start", 30).warnings.allSatisfy { !$0.contains("timeoutSeconds") })
+    let paused = try await act("pause", 30)
+    #expect(paused.warnings.contains("timeoutSeconds applies to start and stop; pause ignores it"))
+    _ = try await act("resume", 30)
+    #expect(try await act("stop", 9).value["state"] == .string("stopped"))
+    let zero = await #expect(throws: VMLabError.self) { try await act("start", 0) }
+    #expect(zero?.data["field"] == .string("timeoutSeconds"))
+  }
+}

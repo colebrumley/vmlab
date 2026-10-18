@@ -109,3 +109,21 @@ import Testing
     #expect(unreachable?.code == .guestUnreachable)
   }
 }
+
+@Suite struct FileTransferTimeoutTests {
+  /// R-1101: a pull stopped by its timeout reports what had landed.
+  @Test func aTimedOutPullCarriesTheBytesSoFar() async throws {
+    let f = try FileTransferTests.Fixture(
+      scpBody: """
+        for a; do dst=$a; done
+        printf 'partial' > "$dst"
+        exec sleep 30
+        """)
+    let error = await #expect(throws: VMLabError.self) {
+      try await f.transfer.pull(remote: "/big", local: nil, timeout: .milliseconds(500))
+    }
+    #expect(error?.code == .timeout)
+    #expect(error?.data["bytesCopied"] == .number(7))
+    #expect(error?.data["path"] == .string(f.dir.appending(path: "pulled/big").path))
+  }
+}

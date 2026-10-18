@@ -183,6 +183,9 @@ public struct VZMacBackend: Backend {
   }
 
   public func stop(_ record: VMRecord) async throws(VMLabError) { try await runner.stop(record) }
+  public func stop(_ record: VMRecord, grace: Duration?) async throws(VMLabError) {
+    try await runner.stop(record, grace: grace)
+  }
   public func kill(_ record: VMRecord) async throws(VMLabError) { try await runner.kill(record) }
   public func pause(_ record: VMRecord) async throws(VMLabError) { try await runner.pause(record) }
   public func resume(_ record: VMRecord) async throws(VMLabError) {

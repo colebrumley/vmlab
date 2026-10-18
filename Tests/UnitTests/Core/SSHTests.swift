@@ -133,12 +133,16 @@ import VMLabCore
 final class FakeReadiness: GuestReadiness {
   let warning: String?
   private let asked = Mutex<[SSHTarget]>([])
+  private let limits = Mutex<[Duration]>([])
   var targets: [SSHTarget] { asked.withLock { $0 } }
+  /// The timeout of every wait.
+  var timeouts: [Duration] { limits.withLock { $0 } }
 
   init(warning: String? = nil) { self.warning = warning }
 
   func wait(for target: SSHTarget, timeout: Duration) async -> String? {
     asked.withLock { $0.append(target) }
+    limits.withLock { $0.append(timeout) }
     return warning
   }
 }

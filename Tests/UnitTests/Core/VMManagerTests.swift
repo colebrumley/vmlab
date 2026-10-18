@@ -222,3 +222,42 @@ import VMLabCore
     #expect(readiness.targets.isEmpty)
   }
 }
+
+/// `vm_lifecycle timeoutSeconds` (R-1101): the SSH wait of a start and the grace of a stop.
+@Suite struct LifecycleTimeoutTests {
+  @Test func stopPassesTheGraceAndKillsAGuestThatOutlastsIt() async throws {
+    let f = try VMManagerTests.Fixture()
+    let vm = try await f.create()
+    try await f.manager.perform(.start, on: vm.id)
+    f.backend.fail(
+      .stop, with: VMLabError(code: .timeout, message: "did not shut down", hint: "kill it"))
+    let outcome = try await f.manager.run(.stop, on: vm.id, timeout: .seconds(7))
+    #expect(outcome.record?.state == .stopped)
+    #expect(outcome.record?.runtime == nil)
+    #expect(f.backend.graces == [.seconds(7)])
+    #expect(f.backend.operations.suffix(2) == [.stop, .kill])
+    #expect(outcome.warnings.contains { $0.contains("within its grace period (7 s)") })
+  }
+
+  @Test func aStopThatFailsOtherwiseStillFails() async throws {
+    let f = try VMManagerTests.Fixture()
+    let vm = try await f.create()
+    try await f.manager.perform(.start, on: vm.id)
+    f.backend.fail(.stop)
+    await #expect(throws: VMLabError.self) { try await f.manager.perform(.stop, on: vm.id) }
+    #expect(try f.store.load(id: vm.id).state == .running)
+    #expect(!f.backend.operations.contains(.kill))
+  }
+
+  @Test func startWaitsForSSHAsLongAsAsked() async throws {
+    let readiness = FakeReadiness()
+    let f = try VMManagerTests.Fixture(readiness: readiness)
+    f.backend.reportSSHPort(2222)
+    let vm = try await f.create()
+    try await f.manager.run(.start, on: vm.id, timeout: .seconds(42))
+    #expect(readiness.timeouts == [.seconds(42)])
+    try await f.manager.perform(.stop, on: vm.id)
+    try await f.manager.perform(.start, on: vm.id)
+    #expect(readiness.timeouts.last == .seconds(180))  // Appendix G, Linux under HVF
+  }
+}
