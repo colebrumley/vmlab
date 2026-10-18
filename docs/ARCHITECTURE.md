@@ -43,6 +43,15 @@ under the VM's lock up to `ResourceLimits.bootTimeout` (180/300/900 s) and retur
 `warnings` carry `ssh_unreachable` when it never answered. `SSHExec.swift` holds `SSHExecChannel`
 (`ExecChannel.ssh(target)`), which runs a command with output streamed to scratch files under
 `<vm>/exec/` and maps an `ssh` failure (status 255 with ssh's own message) to `guest_unreachable`.
+`ExecRequest` (R-401) carries `cwd`, `env`, `user`, `via` (`ExecVia`) and the timeout;
+`ExecResult` adds `durationMs`, `truncated`, `logPath`. `RemoteShell.swift` writes the POSIX text
+sent to the guest: every model value single-quoted, the command (`cd`, `export`, then the user's
+`$SHELL -c`) run in a process group of its own (`setsid -w`, else `perl` `setpgrp` for macOS
+guests) that records its id in `/tmp/vmlab-exec-<uid>/<job>/pgid`, under `sudo -n -u <user> -H`
+when `user` is not the login user; at the deadline the channel ends the local `ssh` and a second
+connection runs `RemoteShell.kill` (TERM, then KILL, of the group), and the refusal is `timeout`
+with the partial output. `ExecOutput` keeps each stream inline up to 64 KB, else its first 16 KB
+and last 48 KB around a marker, with the whole output moved to `<vm>/exec/<job>.log`.
 `HostProcess` runs one host subprocess asynchronously (stdin bytes, output to file handles, a
 deadline that sends `SIGTERM` then `SIGKILL`, cancellation likewise).
 `Capabilities` is the Appendix B matrix: `Capabilities.entry(feature, on: profile)` gives the unresolved cell (`Availability.yes`, `.no(reason)` or `.conditional(Condition)`, where a `Condition` names a fast fact such as `root` or a `SlowProbe`, plus the note and the item that verifies a `?`), and `capabilities(of:host:allowUnverified:)` resolves every cell to yes or no against `HostFacts` (an `unknown` probe is no unless `allowUnverified`); `unverifiedProbes` says which probes a plan reports as unverified, and `supports(_:on:)` is the guest OS and arch filter.
@@ -151,8 +160,11 @@ entitlement, the probes with owner and date; `probe: true` runs `SlowProbeRunner
 `vm_logs` (events rendered one per line, tails of `serial.log` and `provision.log`; `all` is each
 source in turn, prefixed), `vm_create` (plan, pull the image if missing, `VMManager.create`, then
 start unless `autostart: false`; all or nothing: a cancelled or failed call destroys the VM),
-`vm_lifecycle` (start/stop/kill/pause/resume/reset/destroy; clone waits for R-803) and `images`
-(list/pull/remove). Long calls (R-205) go through `Handlers/LongOperation.swift`: an image pull and
+`vm_lifecycle` (start/stop/kill/pause/resume/reset/destroy; clone waits for R-803; a start's
+`ssh_unreachable` warning comes from `VMManager.Outcome`), `vm_exec` (R-401: validates the
+request into an `ExecRequest`, picks the channel by `via` (`Channel.execSSH`, `.execAgent`,
+`.exec`) on `VMManager.attach`, runs it under a heartbeat and returns `exitCode`, `stdout`,
+`stderr`, `durationMs`, `truncated`, `logPath`) and `images` (list/pull/remove). Long calls (R-205) go through `Handlers/LongOperation.swift`: an image pull and
 a start under `StartGate.withStart`, each wrapped in `ToolProgress.during`, which reports a step
 when the work begins and a heartbeat every `ToolContext.heartbeat` (5 s) until it ends; a
 cancelled task becomes `timeout` with `data.cancelled: true`. `VMLabMCP.version` is the package version.
@@ -175,7 +187,8 @@ it turns its flags into the tool's JSON arguments and calls the same `ToolHandle
 to stderr (the Appendix D object with `--json`) with exit status 1; a long call's progress messages
 go to stderr. Built: `facts`, `doctor`, `plan`, `create` (the `plan` flags plus `--name`,
 `--no-start`), `list`, `inspect`, `logs`, `start`, `stop`, `kill`, `pause`, `resume`, `reset`,
-`destroy`, `images pull|list|remove`, `serve`, `--version`. It bootstraps logging and hands off to Core and `VMLabMCP`.
+`destroy`, `exec` (`Sources/vmlab/ExecCommands.swift`: stdout to stdout, stderr and a non-zero
+status to stderr), `images pull|list|remove`, `serve`, `--version`. It bootstraps logging and hands off to Core and `VMLabMCP`.
 
 **`VMLabEngines`** (library). The engine wiring, and the only module that imports both Core and the
 backends for that purpose: `Engines.registerAll(store:into:)` registers `QEMUBackend` for `qemu-hvf`

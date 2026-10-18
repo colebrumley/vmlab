@@ -18,38 +18,60 @@ public struct SSHExecChannel: ExecChannel {
 
   public var execDirectory: URL { target.vmDirectory.appending(path: "exec") }
 
+  /// Runs `request` (R-401). Output past `ExecOutput.inlineLimit` is cut to its head and tail and
+  /// the whole is kept at `<vm>/exec/<job>.log`. At the deadline the local `ssh` is ended and a
+  /// second connection kills the command's remote process group; the refusal is `timeout` with
+  /// the partial output in `data`.
   public func run(_ request: ExecRequest) async throws(VMLabError) -> ExecResult {
     let job = Self.newJobID()
     let files = try ExecFiles(directory: execDirectory, job: job)
     defer { files.removeScratch() }
+    let remote = RemoteShell.foreground(request, job: job, loginUser: target.user)
     let started = ContinuousClock.now
     let outcome = try await HostProcess.run(
-      ssh, target.arguments(remote: request.command), stdin: request.stdin,
+      ssh, target.arguments(remote: remote), stdin: request.stdin,
       stdout: files.stdout, stderr: files.stderr, timeout: request.timeout)
-    let duration = ContinuousClock.now - started
+    let durationMs = Int((ContinuousClock.now - started) / .milliseconds(1))
     files.close()
-    let stdout = files.read(files.stdoutURL)
-    let stderr = files.read(files.stderrURL)
     if outcome.timedOut {
+      // Not under the caller's task: a cancelled call still kills what it started.
+      let (ssh, target) = (ssh, target)
+      await Task.detached {
+        _ = try? await HostProcess.run(
+          ssh,
+          target.arguments(
+            remote: RemoteShell.kill(job: job, user: request.user, loginUser: target.user),
+            connectTimeoutSeconds: 5),
+          timeout: .seconds(15))
+      }.value
+    }
+    let output = ExecOutput.collect(
+      stdout: files.stdoutURL, stderr: files.stderrURL,
+      log: execDirectory.appending(path: "\(job).log"))
+    if outcome.timedOut {
+      let seconds = Double(request.timeout / .milliseconds(1)) / 1000
+      var data: [String: JSONValue] = [
+        "vm": .string(target.vm), "timeoutSeconds": .number(seconds),
+        "stdout": .string(output.stdout), "stderr": .string(output.stderr),
+        "truncated": .bool(output.truncated), "durationMs": .number(Double(durationMs)),
+      ]
+      if let log = output.logPath { data["logPath"] = .string(log) }
       throw VMLabError(
         code: .timeout,
-        message: "The command did not finish within \(request.timeout.components.seconds) s",
+        message: "The command did not finish within \(Self.format(seconds)) s and was killed",
         hint: "Raise timeoutSeconds, or run it with background: true and poll vm_job.",
-        data: [
-          "vm": .string(target.vm),
-          "timeoutSeconds": .number(Double(request.timeout.components.seconds)),
-          "stdout": .string(String(decoding: stdout, as: UTF8.self)),
-          "stderr": .string(String(decoding: stderr, as: UTF8.self)),
-        ])
+        data: data)
     }
-    let errorText = String(decoding: stderr, as: UTF8.self)
-    if outcome.status == 255, Self.isSSHFailure(errorText) {
-      throw Self.unreachable(target, errorText)
+    if outcome.status == 255, Self.isSSHFailure(output.stderr) {
+      throw Self.unreachable(target, output.stderr)
     }
     return ExecResult(
-      exitCode: outcome.status, stdout: String(decoding: stdout, as: UTF8.self), stderr: errorText,
-      durationMs: Int(duration.components.seconds * 1000)
-        + Int(duration.components.attoseconds / 1_000_000_000_000_000))
+      exitCode: outcome.status, stdout: output.stdout, stderr: output.stderr,
+      durationMs: durationMs, truncated: output.truncated, logPath: output.logPath)
+  }
+
+  static func format(_ seconds: Double) -> String {
+    seconds == seconds.rounded() ? String(Int(seconds)) : String(seconds)
   }
 
   // MARK: Helpers
@@ -116,11 +138,72 @@ struct ExecFiles {
     try? stderr.close()
   }
 
-  func read(_ url: URL) -> Data { (try? Data(contentsOf: url)) ?? Data() }
-
   func removeScratch() {
     close()
     try? FileManager.default.removeItem(at: stdoutURL)
     try? FileManager.default.removeItem(at: stderrURL)
+  }
+}
+
+/// Output kept inline (Appendix G): up to 64 KB per stream as is; past that the first 16 KB and
+/// the last 48 KB around a marker line saying how much was left out.
+public enum ExecOutput {
+  public static let inlineLimit = 64 * 1024
+  public static let headBytes = 16 * 1024
+  public static let tailBytes = 48 * 1024
+
+  public struct Collected: Sendable, Hashable {
+    public var stdout: String
+    public var stderr: String
+    public var truncated: Bool
+    public var logPath: String?
+  }
+
+  /// Reads both scratch files; when either is over the limit, the whole output moves to `log`
+  /// (stdout, then stderr after a `==> stderr <==` line when it was cut too).
+  static func collect(stdout: URL, stderr: URL, log: URL) -> Collected {
+    let out = excerpt(of: stdout)
+    let err = excerpt(of: stderr)
+    guard out.cut || err.cut else {
+      return Collected(stdout: out.text, stderr: err.text, truncated: false, logPath: nil)
+    }
+    let files = FileManager.default
+    try? files.removeItem(at: log)
+    if out.cut {
+      try? files.moveItem(at: stdout, to: log)
+    } else {
+      files.createFile(atPath: log.path, contents: nil)
+    }
+    if err.cut, let handle = try? FileHandle(forWritingTo: log),
+      let source = try? FileHandle(forReadingFrom: stderr)
+    {
+      _ = try? handle.seekToEnd()
+      try? handle.write(contentsOf: Data(((out.cut ? "\n" : "") + "==> stderr <==\n").utf8))
+      while let chunk = try? source.read(upToCount: 1 << 20), !chunk.isEmpty {
+        try? handle.write(contentsOf: chunk)
+      }
+      try? handle.close()
+      try? source.close()
+    }
+    return Collected(stdout: out.text, stderr: err.text, truncated: true, logPath: log.path)
+  }
+
+  /// The file's text, or its head and tail around a marker when it is over the limit.
+  static func excerpt(of url: URL) -> (text: String, cut: Bool) {
+    guard let handle = try? FileHandle(forReadingFrom: url) else { return ("", false) }
+    defer { try? handle.close() }
+    let size = (try? handle.seekToEnd()) ?? 0
+    try? handle.seek(toOffset: 0)
+    guard size > UInt64(inlineLimit) else {
+      return (String(decoding: (try? handle.readToEnd()) ?? Data(), as: UTF8.self), false)
+    }
+    let head = (try? handle.read(upToCount: headBytes)) ?? Data()
+    try? handle.seek(toOffset: size - UInt64(tailBytes))
+    let tail = (try? handle.readToEnd()) ?? Data()
+    let omitted = size - UInt64(headBytes) - UInt64(tailBytes)
+    let text =
+      String(decoding: head, as: UTF8.self) + "\n[... \(omitted) bytes omitted; see logPath ...]\n"
+      + String(decoding: tail, as: UTF8.self)
+    return (text, true)
   }
 }

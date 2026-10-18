@@ -440,7 +440,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   **Verify:** unit test of the argument vector; integration: `vm_exec "uname -a"` on Debian returns
   the kernel line with exit 0.
 
-- [ ] **R-401 `vm_exec`**
+- [x] **R-401 `vm_exec`**
   Runs a command with `timeout` (default 120 s), optional `cwd`, `env`, `stdin`, `user` (sudo when
   not the login user), `via: auto|ssh|agent`. Returns `exitCode`, `stdout`, `stderr`, `durationMs`,
   `truncated`. Output over 64 KB keeps the head 16 KB and tail 48 KB and sets `truncated` with the
