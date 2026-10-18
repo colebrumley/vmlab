@@ -56,7 +56,8 @@ import VMLabCore
     #expect(checks["qemu_hvf"]?["status"] == .string("unknown"))
     #expect(
       checks["rosetta"]?["fix"] == .string("softwareupdate --install-rosetta --agree-to-license"))
-    #expect(checks["runner_entitlement"]?["fix"]?.stringValue?.hasPrefix("scripts/build.sh") == true)
+    let buildFix = checks["runner_entitlement"]?["fix"]?.stringValue
+    #expect(buildFix?.hasPrefix("scripts/build.sh") == true)
     // Built but unsigned: the fix is the signing step.
     let unsigned = Self.checks(HostDoctorHandler.report(facts, runner: Self.built))
     #expect(unsigned["runner_entitlement"]?["fix"] == .string("scripts/sign.sh"))
