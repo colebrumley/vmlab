@@ -80,7 +80,7 @@ import Testing
     let into = f.dir.appending(path: "dest")
     try FileManager.default.createDirectory(at: into, withIntermediateDirectories: true)
     let inside = try await f.transfer.pull(remote: file.path, local: into)
-    #expect(inside.path == into.appending(path: "data.txt").path)
+    #expect(inside.path == PathPolicy.canonical(into.appending(path: "data.txt").path))
   }
 
   @Test func errorsAreMapped() async throws {
@@ -125,5 +125,96 @@ import Testing
     #expect(error?.code == .timeout)
     #expect(error?.data["bytesCopied"] == .number(7))
     #expect(error?.data["path"] == .string(f.dir.appending(path: "pulled/big").path))
+  }
+}
+
+/// A pull to a model-named host path: the destination passes the write policy, and the copy is
+/// renamed into place without following a symlink put there after the check.
+@Suite struct FileTransferWriteTests {
+  @Test func aDotfileDestinationIsRefused() async throws {
+    let f = try FileTransferTests.Fixture()
+    defer { try? FileManager.default.removeItem(at: f.dir) }
+    let home = f.dir.appending(path: "home")
+    let files = home.appending(path: "vmlab-files")
+    try FileManager.default.createDirectory(at: files, withIntermediateDirectories: true)
+    let policy = PathPolicy(
+      roots: [home.path], writeRoots: [files.path], userHome: home.path)
+    let guestFile = try f.write("guest/.zshrc", bytes: 10)
+    // Into the write root, but under the remote's dot name.
+    let error = await #expect(throws: VMLabError.self) {
+      try await f.transfer.pull(remote: guestFile.path, local: files, policy: policy)
+    }
+    #expect(error?.data["field"] == .string("local"))
+    #expect(!FileManager.default.fileExists(atPath: files.appending(path: ".zshrc").path))
+    let ok = try await f.transfer.pull(
+      remote: guestFile.path, local: files.appending(path: "zshrc.txt"), policy: policy)
+    #expect(ok.bytes == 10)
+    #expect(ok.path == PathPolicy.canonical(files.appending(path: "zshrc.txt").path))
+  }
+
+  @Test func aSymlinkPutAtTheDestinationIsReplacedNotFollowed() async throws {
+    let base = try FileTransferTests.Fixture()
+    defer { try? FileManager.default.removeItem(at: base.dir) }
+    let dest = base.dir.appending(path: "dest")
+    let victim = base.dir.appending(path: "victim")
+    try FileManager.default.createDirectory(at: dest, withIntermediateDirectories: true)
+    try Data("keep".utf8).write(to: victim)
+    // The stand-in scp plants the link while it copies, after the policy check.
+    let f = try FileTransferTests.Fixture(
+      scpBody: """
+        ln -s '\(victim.path)' '\(dest.path)/data.txt'
+        for a; do src=$dst; dst=$a; done
+        exec cp -R "${src#*@127.0.0.1:}" "$dst"
+        """)
+    defer { try? FileManager.default.removeItem(at: f.dir) }
+    let guestFile = try f.write("guest/data.txt", bytes: 42)
+    let pulled = try await f.transfer.pull(
+      remote: guestFile.path, local: dest, policy: PathPolicy(roots: [base.dir.path]))
+    #expect(pulled.bytes == 42)
+    #expect(try String(contentsOf: victim, encoding: .utf8) == "keep")
+    let attributes = try FileManager.default.attributesOfItem(
+      atPath: dest.appending(path: "data.txt").path)
+    #expect(attributes[.type] as? FileAttributeType == .typeRegular)
+    #expect(
+      try FileManager.default.contentsOfDirectory(atPath: f.dir.appending(path: "pulled").path)
+        .isEmpty)
+  }
+
+  @Test func aDirectorySwappedForASymlinkIsNotWrittenThrough() async throws {
+    let base = try FileTransferTests.Fixture()
+    defer { try? FileManager.default.removeItem(at: base.dir) }
+    let dest = base.dir.appending(path: "dest")
+    let outside = base.dir.appending(path: "outside")
+    for dir in [dest, outside] {
+      try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    }
+    let f = try FileTransferTests.Fixture(
+      scpBody: """
+        mv '\(dest.path)' '\(dest.path).moved' && ln -s '\(outside.path)' '\(dest.path)'
+        for a; do src=$dst; dst=$a; done
+        exec cp -R "${src#*@127.0.0.1:}" "$dst"
+        """)
+    defer { try? FileManager.default.removeItem(at: f.dir) }
+    let guestFile = try f.write("guest/data.txt", bytes: 7)
+    _ = try await f.transfer.pull(
+      remote: guestFile.path, local: dest.appending(path: "data.txt"),
+      policy: PathPolicy(roots: [base.dir.path]))
+    #expect(try FileManager.default.contentsOfDirectory(atPath: outside.path).isEmpty)
+    #expect(FileManager.default.fileExists(atPath: dest.path + ".moved/data.txt"))
+  }
+
+  @Test func anExistingDirectoryAtTheDestinationIsRefused() async throws {
+    let f = try FileTransferTests.Fixture()
+    defer { try? FileManager.default.removeItem(at: f.dir) }
+    let dest = f.dir.appending(path: "dest")
+    try FileManager.default.createDirectory(
+      at: dest.appending(path: "tree/keep"), withIntermediateDirectories: true)
+    _ = try f.write("guest/tree/a", bytes: 1)
+    let error = await #expect(throws: VMLabError.self) {
+      try await f.transfer.pull(
+        remote: f.dir.appending(path: "guest/tree").path, local: dest,
+        policy: PathPolicy(roots: [f.dir.path]))
+    }
+    #expect(error?.data["field"] == .string("local"))
   }
 }

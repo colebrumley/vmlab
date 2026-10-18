@@ -3,8 +3,10 @@ import VMLabCore
 
 /// `vm_file`: copies between the host and a running guest over the VM's SSH channel (R-404),
 /// recursively, with `scp` in SFTP mode. `push` needs `local`; `pull` without `local` lands in
-/// `<vm>/pulled/`. Host paths must be absolute and pass the `PathPolicy` (R-1102: under the user's
-/// home or `/tmp` unless `allowAnyPath`). A heartbeat is reported while the copy runs.
+/// `<vm>/pulled/`. Host paths must be absolute and pass the `PathPolicy` (R-1102): `push` reads
+/// under the user's home, `/tmp` or `$TMPDIR`; `pull` writes only under `/tmp`, `$TMPDIR`,
+/// `~/vmlab-files` or the owner's `writeRoots`, never a dotfile in the home, `~/Library` or
+/// `VMLAB_HOME`. A heartbeat is reported while the copy runs.
 struct VMFileHandler: ToolHandler {
   var spec: ToolSpec { .vmFile }
 
@@ -18,8 +20,9 @@ struct VMFileHandler: ToolHandler {
         field: "action", reason: "action must be push or pull", hint: "Pick push or pull.")
     }
     let remote = try arguments.string("remote") ?? ""
+    let policy = PathPolicy.load(home: context.home)
     let local = try Self.localPath(
-      try arguments.string("local"), policy: PathPolicy.load(home: context.home))
+      try arguments.string("local"), policy: policy, access: action == "push" ? .read : .write)
     if action == "push", local == nil {
       throw VMLabError.invalidRequest(
         field: "local", reason: "push needs the host path to copy",
@@ -33,7 +36,7 @@ struct VMFileHandler: ToolHandler {
       if action == "push", let local {
         return try await transfer.push(local: local, remote: remote)
       }
-      return try await transfer.pull(remote: remote, local: local)
+      return try await transfer.pull(remote: remote, local: local, policy: policy)
     }
     return ToolResult([
       "vm": .object(["id": .string(record.id), "name": .string(record.name)]),
@@ -42,10 +45,12 @@ struct VMFileHandler: ToolHandler {
     ])
   }
 
-  /// An absolute host path, canonicalised and checked against `policy`; `invalid_request` for a
-  /// relative one or one outside the policy's roots.
-  static func localPath(_ value: String?, policy: PathPolicy) throws(VMLabError) -> URL? {
+  /// An absolute host path, canonicalised and checked against `policy` for `access` (a pull
+  /// writes it); `invalid_request` for a relative one or one the policy refuses.
+  static func localPath(_ value: String?, policy: PathPolicy, access: PathPolicy.Access)
+    throws(VMLabError) -> URL?
+  {
     guard let value else { return nil }
-    return try policy.check(value, field: "local")
+    return try policy.check(value, field: "local", access: access)
   }
 }

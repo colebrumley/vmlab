@@ -374,10 +374,10 @@ public final class QEMUBackend: Backend {
     // The key is R-400's; until it exists the guest boots without a seed.
     let publicKey = layout.directory.appending(path: "id_ed25519.pub")
     let share = SharedDirSpec.of(record)
-    try share?.checkHostDirectory(vmDirectory: layout.directory)
-    // BH-1: host paths in extra.qemuArgs pass the path policy again at start (a symlink may have
-    // moved since create).
+    // BH-1: host paths in extra.qemuArgs and the share pass the path policy again at start (a
+    // symlink may have moved since create).
     let policy = PathPolicy.load(home: store.home)
+    try share?.checkHostDirectory(vmDirectory: layout.directory, policy: policy)
     try record.extra?.checkHostPaths(
       policy: policy, vmlabHome: store.home,
       allowHostCode: VMLabConfig.load(home: store.home).allowHostCode)
@@ -427,17 +427,19 @@ public final class QEMUBackend: Backend {
         let value = try? JSONDecoder().decode(JSONValue.self, from: Data(output.utf8))
       else { continue }
       let images = value.arrayValue ?? [value]
-      var referenced: [String] = []
+      // Backing files are opened read-only; the top image's data file is written with it.
+      var referenced: [(String, PathPolicy.Access)] = []
       for (index, image) in images.enumerated() {
-        if index > 0, let name = image["filename"]?.stringValue { referenced.append(name) }
+        if index > 0, let name = image["filename"]?.stringValue { referenced.append((name, .read)) }
         if let dataFile = image["format-specific"]?["data"]?["data-file"]?.stringValue {
-          referenced.append(dataFile)
+          referenced.append((dataFile, index == 0 ? hostPath.access : .read))
         }
       }
-      for name in referenced {
+      for (name, access) in referenced {
         // A relative name is relative to the image that names it; qemu-img prints it resolved.
         _ = try ExtraSpec.checkHostPath(
-          name, field: "extra.qemuArgs[\(hostPath.index)]", policy: policy, vmlabHome: vmlabHome)
+          name, field: "extra.qemuArgs[\(hostPath.index)]", policy: policy, vmlabHome: vmlabHome,
+          access: access)
       }
     }
   }

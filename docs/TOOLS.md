@@ -90,7 +90,7 @@ Manage the guest image cache in ~/.vmlab/images. list shows pulled and available
 | `initrd` | string |  | register: host path of an initrd for that kernel. |
 | `kernel` | string |  | register: host path of a kernel image. |
 | `name` | string |  | Image name (pull, remove, register, template_create, extract_kernel). |
-| `path` | string |  | register: host path (under your home or /tmp) of a raw or qcow2 disk, or an .ipsw. |
+| `path` | string |  | register: host path (under your home or /tmp; only read) of a raw or qcow2 disk, or an .ipsw. |
 | `vm` | string |  | template_create: the stopped VM to turn into a template. |
 
 **Result**
@@ -280,7 +280,7 @@ Copy files between the host and the guest over SSH. push copies the host path lo
 | `vm` | string, ≤ 64 characters | yes | The VM's id (vm-xxxxxx) or name, as vm_list or vm_create returned it. |
 | `action` | `push` \| `pull` | yes | Direction of the copy. |
 | `remote` | string | yes | Path in the guest. |
-| `local` | string |  | Absolute path on the host, under your home or /tmp (push: required; pull: optional). |
+| `local` | string |  | Absolute path on the host (push: required, under your home or /tmp; pull: optional, under /tmp, $TMPDIR or ~/vmlab-files, never a home dotfile or ~/Library). |
 
 **Result**
 
@@ -565,7 +565,7 @@ The `requirements` object of `vm_plan`, `vm_create` and `fleet` (`Requirements` 
 | `boot.loadAddress` | string |  | Guest physical address for binary, hex such as 0x40080000 (mode binary). |
 | `boot.mode` | `disk` \| `kernel` \| `firmware` \| `binary`, default `disk` |  | disk boots the image; kernel boots kernel/initrd directly; firmware boots a supplied firmware image; binary loads a raw image at loadAddress and starts the CPU there. |
 | `extra` | object |  | Engine-specific additions. |
-| `extra.qemuArgs` | array of string |  | QEMU arguments after vmlab's own (implies custom_devices, so QEMU), e.g. ["-device", "virtio-rng-pci"]. Devices, drives, objects, chardevs, user-mode netdevs, -cpu (replaces vmlab's; host or max under qemu-hvf), -machine properties (merged into vmlab's; no accel=), -icount, -d, -D, -trace, -numa, -overcommit and more are allowed. Refused: monitors, -serial (vmlab's console; add -chardev plus -device pci-serial), -incoming, -add-fd, -set, -readconfig, exec:/mon:/cmd:, fd/script/helper keys, tap/bridge/vmnet; -plugin, -semihosting and passthrough devices need the owner's allowHostCode. Host paths must be absolute, under the home or /tmp, and outside VMLAB_HOME. |
+| `extra.qemuArgs` | array of string |  | QEMU arguments after vmlab's own (implies custom_devices, so QEMU), e.g. ["-device", "virtio-rng-pci"]. Devices, drives, objects, chardevs, user-mode netdevs, -cpu (replaces vmlab's; host or max under qemu-hvf), -machine properties (merged into vmlab's; no accel=), -icount, -d, -D, -trace, -numa, -overcommit and more are allowed. Refused: monitors, -serial (vmlab's console; add -chardev plus -device pci-serial), -incoming, -add-fd, -set, -readconfig, exec:/mon:/cmd:, fd/script/helper keys, tap/bridge/vmnet; -plugin, -semihosting and passthrough devices need the owner's allowHostCode. Host paths must be absolute and outside VMLAB_HOME; paths QEMU only reads (-cdrom, romfile=, readonly=on disks) may be under the home or /tmp, paths it writes (-D, -trace file=, chardev path=, writable disks, shared dirs) only under /tmp, $TMPDIR or ~/vmlab-files (never a home dotfile or ~/Library). |
 | `image` | string |  | Image or template name (images list). Omitted: the default image for the guest. |
 | `network` | object |  | Networking; omitted means NAT. |
 | `network.forwards` | array of object |  | Guest ports to make reachable from the host. |
@@ -586,4 +586,4 @@ The `requirements` object of `vm_plan`, `vm_create` and `fleet` (`Requirements` 
 | `resources.memoryGB` | integer, 1–4096 |  | Guest memory in GB. |
 | `share` | object |  | A host directory mounted read-write in the guest (implies shared_dir): 9p under QEMU (the guest kernel needs 9p; Debian's cloud kernel has none), virtiofs under VZ. |
 | `share.guest` | string, default `/mnt/host` |  | Absolute guest path it is mounted at. macOS: default /Volumes/My Shared Files (automounted); any other path is mounted at every boot by a LaunchDaemon that first boot installs with sudo, so the image must record the login password or provision.sudoPassword must give it. |
-| `share.host` | string |  | Absolute host path of an existing directory under your home or /tmp. Omitted: the VM's own shared/ directory (vm_inspect endpoints.share). |
+| `share.host` | string |  | Absolute host path of an existing directory under /tmp, $TMPDIR or ~/vmlab-files (the guest writes it; never the home itself, a home dotfile or ~/Library). Omitted: the VM's own shared/ directory (vm_inspect endpoints.share). |

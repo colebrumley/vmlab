@@ -257,3 +257,88 @@ import Testing
     }
   }
 }
+
+/// Host paths QEMU writes are held to the write roots; paths it only reads to the read roots.
+@Suite struct ExtraSpecWritePathTests {
+  /// `H` is a fake user home (a read root), `W` a write root.
+  struct Sandbox {
+    let root = URL(filePath: PathPolicy.canonical(FileManager.default.temporaryDirectory.path))
+      .appending(path: "vmlab-qw-\(UUID())")
+    var home: URL { root.appending(path: "home") }
+    var writable: URL { root.appending(path: "w") }
+    var vmlabHome: URL { root.appending(path: "vmlab") }
+    var policy: PathPolicy {
+      PathPolicy(
+        roots: [home.path, writable.path], writeRoots: [writable.path], userHome: home.path)
+    }
+
+    init() throws {
+      for dir in [home.appending(path: "project"), writable, vmlabHome] {
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+      }
+    }
+
+    func check(_ args: [String]) throws {
+      let spec = ExtraSpec(
+        qemuArgs: args.map {
+          $0.replacingOccurrences(of: "H/", with: home.path + "/")
+            .replacingOccurrences(of: "W/", with: writable.path + "/")
+        })
+      try spec.validate()
+      try spec.checkHostPaths(policy: policy, vmlabHome: vmlabHome, allowHostCode: false)
+    }
+  }
+
+  static let writes: [[String]] = [
+    ["-D", "H/.zshrc"], ["-D", "H/project/qemu.log"],
+    ["-chardev", "file,id=c,path=H/.ssh/authorized_keys"],
+    ["-chardev", "file,id=c,path=W/ok.log,logfile=H/Library/LaunchAgents/x.plist"],
+    ["-chardev", "socket,id=c,path=H/.zshrc,server=on,wait=off"],
+    ["-trace", "enable=x,file=H/.zprofile"],
+    ["-drive", "if=none,id=d,file=H/project/disk.img"], ["-hda", "H/project/disk.img"],
+    ["-blockdev", "driver=file,node-name=f,filename=H/project/disk.img"],
+    ["-machine", "dumpdtb=H/project/virt.dtb"], ["-mem-path", "H/project/huge"],
+    ["-audiodev", "wav,id=a,path=H/project/out.wav"],
+    ["-virtfs", "local,path=H/project,mount_tag=t,security_model=none"],
+    ["-icount", "shift=7,rr=record,rrfile=H/project/replay.bin"],
+  ]
+
+  @Test(arguments: writes) func writesUnderTheHomeAreRefused(args: [String]) throws {
+    let sandbox = try Sandbox()
+    defer { try? FileManager.default.removeItem(at: sandbox.root) }
+    let error = #expect(throws: VMLabError.self) { try sandbox.check(args) }
+    #expect(error?.code == .invalidRequest)
+    #expect(error?.data["access"] == .string("write"), "\(args)")
+  }
+
+  static let allowed: [[String]] = [
+    ["-D", "W/qemu.log"], ["-chardev", "file,id=c,path=W/serial.log"],
+    ["-cdrom", "H/project/install.iso"],
+    ["-drive", "if=none,id=d,file=H/project/disk.img,readonly=on"],
+    ["-drive", "if=none,id=d,file=H/project/disk.img,snapshot=on"],
+    ["-drive", "if=none,id=d,file=H/project/x.iso,media=cdrom"],
+    ["-blockdev", "driver=file,node-name=f,filename=H/project/disk.img,read-only=on"],
+    ["-option-rom", "H/project/opt.rom"], ["-device", "loader,file=H/project/blob.bin,addr=0"],
+    ["-acpitable", "file=H/project/a.aml"], ["-trace", "events=H/project/events.txt"],
+    ["-drive", "if=none,id=d,file=W/disk.img"],
+  ]
+
+  @Test(arguments: allowed) func readsUnderTheHomeAndWritesUnderAWriteRootPass(args: [String])
+    throws
+  {
+    let sandbox = try Sandbox()
+    defer { try? FileManager.default.removeItem(at: sandbox.root) }
+    try sandbox.check(args)
+  }
+
+  @Test func accessIsReportedPerPath() throws {
+    let spec = ExtraSpec(qemuArgs: [
+      "-chardev", "file,id=c,path=/tmp/o.log,input-path=/tmp/i.txt", "-cdrom", "/tmp/a.iso",
+    ])
+    try spec.validate()
+    #expect(
+      spec.hostPaths.map { "\($0.key):\($0.access.rawValue)" } == [
+        "path:write", "input-path:read", "file:read",
+      ])
+  }
+}

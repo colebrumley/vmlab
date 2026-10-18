@@ -10,7 +10,8 @@ import Foundation
 /// descriptor, a helper or a script (`fd`, `script`, `smb`, ...), and a type off its option's
 /// list. A host path (`file=`, `path=`, `romfile=`, ..., matched on the last dotted component, so
 /// `file.filename=` too, and the bare value of `-D`, `-cdrom`, `-mem-path`, ...) must be absolute,
-/// and `checkHostPaths` holds it to the R-1102 `PathPolicy` and out of vmlab's own home.
+/// and `checkHostPaths` holds it to the R-1102 `PathPolicy` and out of vmlab's own home: a path
+/// QEMU only reads to the read roots, one it writes (`HostPath.access`) to the write roots.
 ///
 /// `-cpu` replaces vmlab's own CPU model and `-machine` (`-M`) properties merge into vmlab's
 /// `-machine`; `QEMUCommandLine` holds both to the profile. Options and types that run host code
@@ -255,7 +256,21 @@ public struct ExtraSpec: Codable, Sendable, Hashable {
   /// Keys whose value is a host path (matched on the last dotted component).
   public static let hostPathKeys: Set<String> = [
     "file", "filename", "path", "mem-path", "dir", "romfile", "splash", "evdev", "tftp", "logfile",
-    "rrfile", "events", "dumpdtb", "cancel-path",
+    "rrfile", "events", "dumpdtb", "cancel-path", "input-path",
+  ]
+
+  /// Path keys QEMU only reads, whatever the option.
+  static let readPathKeys: Set<String> = [
+    "romfile", "splash", "evdev", "tftp", "events", "input-path", "dir", "data",
+  ]
+  /// Options whose host paths QEMU only reads.
+  static let readPathOptions: Set<String> = [
+    "cdrom", "acpitable", "smbios", "fw_cfg", "plugin", "option-rom",
+  ]
+  /// `-object` types whose host paths QEMU only reads (keys, certificates, entropy, ACLs).
+  static let readPathObjects: Set<String> = [
+    "secret", "rng-random", "rng-egd", "authz-list-file", "tls-creds-x509", "tls-creds-psk",
+    "tls-creds-anon", "tls-cipher-suites", "input-linux",
   ]
 
   /// Substrings refused anywhere in an argument: a command QEMU runs (`exec:` migration,
@@ -341,6 +356,9 @@ public struct ExtraSpec: Codable, Sendable, Hashable {
     public var index: Int
     public var key: String
     public var path: String
+    /// Whether QEMU writes, creates or replaces the path (a log, a trace, a chardev file or
+    /// socket, a writable disk, a shared directory) rather than only reading it.
+    public var access: PathPolicy.Access = .write
   }
 
   /// Every host path the arguments name (they have passed `validate()`).
@@ -348,14 +366,19 @@ public struct ExtraSpec: Codable, Sendable, Hashable {
     options.flatMap { option -> [HostPath] in
       guard let value = option.value else { return [] }
       if option.rule.value == .hostPath {
-        return [HostPath(index: option.valueIndex, key: option.rule.pathKey, path: value)]
+        return [
+          HostPath(
+            index: option.valueIndex, key: option.rule.pathKey, path: value,
+            access: Self.readPathOptions.contains(option.name) ? .read : .write)
+        ]
       }
       guard option.rule.value == .options else { return [] }
-      return Self.pairs(option: option.name, value: value, rule: option.rule).flatMap {
-        pair -> [HostPath] in
+      let pairs = Self.pairs(option: option.name, value: value, rule: option.rule)
+      return pairs.flatMap { pair -> [HostPath] in
         guard let key = pair.key else { return [] }
+        let access = Self.access(option: option.name, key: key, pairs: pairs, rule: option.rule)
         return Self.paths(option: option.name, key: key, value: pair.value).map {
-          HostPath(index: option.valueIndex, key: key, path: $0)
+          HostPath(index: option.valueIndex, key: key, path: $0, access: access)
         }
       }
     }
@@ -422,6 +445,33 @@ public struct ExtraSpec: Codable, Sendable, Hashable {
     options.filter { !["cpu", "machine", "M"].contains($0.name) }.flatMap { option in
       [qemuArgs[option.index]] + (option.value.map { [$0] } ?? [])
     }
+  }
+
+  /// Whether QEMU only reads the path under `key` of an option, or may write it. Anything not
+  /// known to be read is a write: `-D`, `-trace file=`, chardev `path=` and `logfile=`, sockets
+  /// QEMU creates (it unlinks what is there first), `-mem-path`, `dumpdtb=`, `rrfile=`, a wav
+  /// `path=`, a shared directory, and a disk unless `readonly=on`, `read-only=on`, `snapshot=on`
+  /// or `media=cdrom`.
+  static func access(option: String, key: String, pairs: Pairs, rule: OptionRule)
+    -> PathPolicy.Access
+  {
+    if readPathKeys.contains(lastComponent(key)) || readPathOptions.contains(option) {
+      return .read
+    }
+    let type = Self.type(of: pairs, rule: rule)
+    if option == "object", let type, readPathObjects.contains(type) { return .read }
+    if option == "device", type == "loader" { return .read }
+    if option == "drive" || option == "blockdev" {
+      let on: Set<String> = ["on", "true", "yes"]
+      let readOnly = pairs.contains { pair in
+        guard let key = pair.key else { return false }
+        let last = lastComponent(key)
+        return (["readonly", "read-only", "snapshot"].contains(last) && on.contains(pair.value))
+          || (last == "media" && pair.value == "cdrom")
+      }
+      if readOnly { return .read }
+    }
+    return .write
   }
 
   static func lastComponent(_ key: String) -> String {
@@ -606,14 +656,17 @@ public struct ExtraSpec: Codable, Sendable, Hashable {
     }
   }
 
-  /// One host path through `policy` and out of vmlab's own home (whose VM directories hold
-  /// every guest's QMP, serial and VNC sockets and disks); its canonical form.
+  /// One host path through `policy` for `access` and out of vmlab's own home (whose VM
+  /// directories hold every guest's QMP, serial and VNC sockets and disks); its canonical form.
   public static func checkHostPath(
-    _ path: String, field: String, policy: PathPolicy, vmlabHome: URL
+    _ path: String, field: String, policy: PathPolicy, vmlabHome: URL,
+    access: PathPolicy.Access = .read
   ) throws(VMLabError) -> String {
     let protected = PathPolicy.canonical(vmlabHome.path)
-    let resolved = try policy.check(path, field: field).path
-    if PathPolicy.isInside(resolved, protected) {
+    var policy = policy
+    if policy.vmlabHome == nil { policy.vmlabHome = protected }
+    let resolved = try policy.check(path, field: field, access: access).path
+    if PathPolicy.contains(protected, resolved) {
       throw .invalidRequest(
         field: field, reason: "\(path) is inside vmlab's own home (\(protected))",
         hint: "Use a path outside VMLAB_HOME; vmlab's VM directories are its own.")
@@ -623,7 +676,8 @@ public struct ExtraSpec: Codable, Sendable, Hashable {
 
   /// Throws `invalid_request` for a host-code option or type unless `allowHostCode` (the owner's
   /// `VMLAB_HOME/config.json`, never a tool argument), then for a host path the arguments name
-  /// that `policy` refuses, that lies inside `vmlabHome`, or that is an existing unix socket.
+  /// that `policy` refuses for its access (a path QEMU writes is held to the write roots), that
+  /// lies inside `vmlabHome`, or that is an existing unix socket.
   public func checkHostPaths(
     policy: PathPolicy, vmlabHome: URL, allowHostCode: Bool
   ) throws(VMLabError) {
@@ -637,7 +691,8 @@ public struct ExtraSpec: Codable, Sendable, Hashable {
     for hostPath in hostPaths where !Self.harmlessHostPaths.contains(hostPath.path) {
       let field = "extra.qemuArgs[\(hostPath.index)]"
       let resolved = try Self.checkHostPath(
-        hostPath.path, field: field, policy: policy, vmlabHome: vmlabHome)
+        hostPath.path, field: field, policy: policy, vmlabHome: vmlabHome,
+        access: hostPath.access)
       // A chardev or netdev client on an existing unix socket would hand the guest a host
       // service (an ssh or Docker agent); a server socket QEMU creates does not exist yet.
       var info = stat()
