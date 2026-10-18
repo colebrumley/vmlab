@@ -136,7 +136,9 @@ public struct ToolContext: Sendable {
     self.probe = probe ?? HostProbe(home: home, runningGuests: { store.runningGuests() })
     self.limits = limits
     self.backends = backends
-    self.manager = VMManager(store: store, backends: backends)
+    self.manager = VMManager(
+      store: store, backends: backends,
+      manifests: CheckpointManifests(store: store, backends: backends))
     self.images = images ?? ImageStore(home: home)
     self.startGate = startGate
     self.displays = displays ?? DisplaySessions()
@@ -163,7 +165,7 @@ public enum ToolHandlers {
     HostFactsHandler(), HostDoctorHandler(), VMPlanHandler(), VMCreateHandler(), VMListHandler(),
     VMInspectHandler(), VMLifecycleHandler(), VMExecHandler(), VMJobHandler(), VMLogsHandler(),
     ImagesHandler(), VMComputerHandler(), VMDebugHandler(), VMIntrospectHandler(),
-    VMMemoryDumpHandler(),
+    VMMemoryDumpHandler(), VMCheckpointHandler(), VMManifestHandler(),
   ]
 
   private static let byName: [String: any ToolHandler] = Dictionary(

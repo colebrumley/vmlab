@@ -677,7 +677,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
 
 ## Phase 8 — Checkpoints and manifests
 
-- [ ] **R-800 Checkpoint tree**
+- [x] **R-800 Checkpoint tree**
   `<vm>/checkpoints.json`: nodes with `id`, `name`, `parent`, `mode: disk|live`, `createdAt`,
   `state at creation`, `manifestPath?`, `note`. `vm_checkpoint create(name, mode: auto|disk|live,
   manifest: bool, note)`: `auto` picks `live` if granted and the guest is running, else `disk`
@@ -688,7 +688,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   **Verify:** unit tests of the tree with the fake provider; integration on QEMU and VZ Linux:
   create A, change, create B, restore A, state matches A, restore B, matches B.
 
-- [ ] **R-801 Guest manifests**
+- [x] **R-801 Guest manifests**
   `vm_manifest(profile: linux|macos|custom, paths)` runs a script over SSH that writes a JSON
   manifest: files under the given roots (path, size, mode, mtime, sha256 for files ≤ 8 MB), and
   per profile: Linux: `dpkg -l`/`rpm -qa`, `systemctl list-unit-files --state=enabled`, users,
@@ -699,7 +699,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   **Verify:** unit test parses fixture outputs for both profiles; integration: a Debian manifest
   lists `/etc/hostname` with the expected hash; a macOS manifest lists `com.apple.dock`.
 
-- [ ] **R-802 Checkpoint and manifest diff**
+- [x] **R-802 Checkpoint and manifest diff**
   `vm_checkpoint diff(from, to)` where each side is a checkpoint with a manifest, `@now` (take a
   manifest now), or a manifest id: returns added, removed and changed files (with what changed:
   size, mode, hash), packages, services, defaults keys (old and new values), users, login items.
