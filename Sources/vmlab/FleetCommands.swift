@@ -63,3 +63,129 @@ struct SegmentCommand: ParsableCommand {
     func render(_ result: ToolResult) -> String { "Destroyed segment \(name)" }
   }
 }
+
+/// `vmlab fleet create|list|status|exec|destroy`: the `fleet` tool (R-903, R-904).
+struct FleetCommand: ParsableCommand {
+  static let configuration = CommandConfiguration(
+    commandName: "fleet", abstract: "Run groups of identical VMs on a segment (the fleet tool).",
+    subcommands: [Create.self, List.self, Status.self, Destroy.self])
+
+  static func render(_ value: JSONValue) -> String {
+    var lines = [
+      "fleet \(value["name"]?.stringValue ?? "?") on segment \(value["segment"]?.stringValue ?? "?")"
+        + (value["subnet"]?.stringValue.map { " (\($0))" } ?? "")
+    ]
+    for member in value["members"]?.arrayValue ?? [] {
+      var line =
+        "  " + Human.pad(member["vm"]?.stringValue ?? "?", 20)
+        + Human.pad(member["state"]?.stringValue ?? "?", 10)
+        + (member["ip"]?.stringValue ?? "-")
+      if let error = member["error"]?["message"]?.stringValue { line += "  error: \(error)" }
+      lines.append(line)
+    }
+    return lines.joined(separator: "\n")
+  }
+
+  struct Create: ToolCommand {
+    static let configuration = CommandConfiguration(
+      abstract: "Create <name>-1..<count> from one plan, on one segment, and wait for SSH.")
+    static let toolName = "fleet"
+
+    @Argument(help: "The fleet name ([a-z0-9-], at most 28 characters).") var name: String
+    @Option(help: "How many members.") var count: Int
+    @Option(help: "Image or template the members boot.") var image: String?
+    @Option(help: "Segment to join, or auto to make one named after the fleet.") var segment:
+      String?
+    @Option(help: "Guest operating system.") var guest = "linux"
+    @Option(help: "Guest architecture.") var arch = "arm64"
+    @Option(help: "Required features, comma-separated or repeated.") var require: [String] = []
+    @Option(help: "Virtual CPUs per member.") var cpus: Int?
+    @Option(name: .customLong("memory-gb"), help: "Memory per member in GB.") var memoryGB: Int?
+    @Option(name: .customLong("disk-gb"), help: "Disk per member in GB.") var diskGB: Int?
+    @Option(help: "The whole requirements object as JSON, instead of the flags above.")
+    var requirements: String?
+    @Option(name: .customLong("timeout"), help: "Seconds each member waits for SSH.")
+    var timeoutSeconds: Int?
+    @Flag(help: "Print the result object as JSON.") var json = false
+
+    func arguments() throws -> JSONValue {
+      var object: [String: JSONValue] = [
+        "action": .string("create"), "name": .string(name), "count": .number(Double(count)),
+      ]
+      if let requirements {
+        do {
+          object["requirements"] = try JSONDecoder().decode(
+            JSONValue.self, from: Data(requirements.utf8))
+        } catch {
+          throw ValidationError("--requirements is not valid JSON: \(error)")
+        }
+      } else {
+        var r: [String: JSONValue] = [
+          "guest": .object(["os": .string(guest), "arch": .string(arch)])
+        ]
+        let required = splitList(require)
+        if !required.isEmpty { r["require"] = .array(required.map { .string($0) }) }
+        var resources: [String: JSONValue] = [:]
+        if let cpus { resources["cpus"] = .number(Double(cpus)) }
+        if let memoryGB { resources["memoryGB"] = .number(Double(memoryGB)) }
+        if let diskGB { resources["diskGB"] = .number(Double(diskGB)) }
+        if !resources.isEmpty { r["resources"] = .object(resources) }
+        object["requirements"] = .object(r)
+      }
+      if let image { object["image"] = .string(image) }
+      if let segment { object["segment"] = .string(segment) }
+      if let timeoutSeconds { object["timeoutSeconds"] = .number(Double(timeoutSeconds)) }
+      return .object(object)
+    }
+
+    func render(_ result: ToolResult) -> String { FleetCommand.render(result.value) }
+  }
+
+  struct List: ToolCommand {
+    static let configuration = CommandConfiguration(abstract: "Show the fleets.")
+    static let toolName = "fleet"
+
+    @Flag(help: "Print the result object as JSON.") var json = false
+
+    func arguments() throws -> JSONValue { .object(["action": .string("list")]) }
+
+    func render(_ result: ToolResult) -> String {
+      let rows = (result.value["fleets"]?.arrayValue ?? []).map {
+        Human.pad($0["name"]?.stringValue ?? "?", 20)
+          + Human.pad($0["profile"]?.stringValue ?? "", 10) + Human.list($0["members"])
+      }
+      return rows.isEmpty ? "no fleets" : rows.joined(separator: "\n")
+    }
+  }
+
+  struct Status: ToolCommand {
+    static let configuration = CommandConfiguration(abstract: "Show each member of a fleet.")
+    static let toolName = "fleet"
+
+    @Argument(help: "The fleet name.") var name: String
+    @Flag(help: "Print the result object as JSON.") var json = false
+
+    func arguments() throws -> JSONValue {
+      .object(["action": .string("status"), "name": .string(name)])
+    }
+
+    func render(_ result: ToolResult) -> String { FleetCommand.render(result.value) }
+  }
+
+  struct Destroy: ToolCommand {
+    static let configuration = CommandConfiguration(
+      abstract: "Destroy a fleet's VMs, its own segment and its record.")
+    static let toolName = "fleet"
+
+    @Argument(help: "The fleet name.") var name: String
+    @Flag(help: "Print the result object as JSON.") var json = false
+
+    func arguments() throws -> JSONValue {
+      .object(["action": .string("destroy"), "name": .string(name)])
+    }
+
+    func render(_ result: ToolResult) -> String {
+      "Destroyed \(name): \(Human.list(result.value["destroyed"]))"
+    }
+  }
+}

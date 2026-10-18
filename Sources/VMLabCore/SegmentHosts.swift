@@ -84,13 +84,17 @@ public struct SSHSegmentHosts: SegmentNaming {
 }
 
 extension VMManager {
-  /// Rewrites the names block of `name` on every running member that has an SSH endpoint now.
+  /// Rewrites the names block of `name` on every running member that has an SSH endpoint now and
+  /// is not busy with another lifecycle action in this process.
   /// Returns warnings for `focus` (the VM whose start or destroy caused it) only: another member
   /// that does not answer yet gets the block when its own start publishes it.
   func publishNames(_ name: String, focus: String) async -> [String] {
     guard let segment = try? segments.load(name) else { return [] }
     var targets: [SSHTarget] = []
     for member in segment.members {
+      // A member busy with its own start or destroy is left alone: its start publishes the block
+      // itself, and an SSH session into a VM being destroyed would recreate its directory.
+      if member.vm != focus, busy.contains(member.vm) { continue }
       guard let record = try? store.load(id: member.vm), record.state == .running,
         record.features.contains(.execSSH),
         let backend = try? backends.backend(for: record.profile),

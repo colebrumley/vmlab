@@ -758,7 +758,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   addresses.
   **Verify:** integration: `ping node-2.cluster` resolves on node-1.
 
-- [ ] **R-903 `fleet create`**
+- [x] **R-903 `fleet create`**
   `fleet(action: create, name, count, requirements, image|template, segment: name|auto)`: runs the
   selector once (one plan for the fleet), checks the memory budget for all members at once and
   the macOS limit, creates `<name>-1..n` from the template in parallel under the start gate,

@@ -25,7 +25,7 @@ public actor VMManager {
   /// What a first start does once SSH answers (R-1001: `provision`).
   public nonisolated let provisioner: any GuestProvisioning
 
-  private var busy: Set<String> = []
+  var busy: Set<String> = []
   private var waiters: [String: [CheckedContinuation<Void, Never>]] = [:]
 
   public init(
@@ -119,7 +119,7 @@ public actor VMManager {
   /// another VM's backing chain reads a file of this one, unless `force`, which destroys it all
   /// the same and warns that those VMs can no longer boot.
   public func run(
-    _ action: LifecycleAction, on vm: String, force: Bool = false
+    _ action: LifecycleAction, on vm: String, force: Bool = false, sshTimeout: Duration? = nil
   ) async throws(VMLabError) -> Outcome {
     let id = try store.find(vm).id
     await acquire(id)
@@ -149,7 +149,7 @@ public actor VMManager {
     do {
       let updated = try await apply(action, target: target, to: record, with: backend)
       if action == .start, let updated {
-        let ready = await waitForSSH(updated, backend: backend)
+        let ready = await waitForSSH(updated, backend: backend, timeout: sshTimeout)
         if let warning = ready.warning {
           warnings.append(warning)
           if warning != Self.noEndpoint(id) { await log(id, warning, level: .warning) }
@@ -214,12 +214,13 @@ public actor VMManager {
   /// The target when the guest answered SSH; neither when it is not one to wait for (no
   /// `exec_ssh`, networking off); otherwise the warning.
   private func waitForSSH(
-    _ record: VMRecord, backend: any Backend
+    _ record: VMRecord, backend: any Backend, timeout limit: Duration? = nil
   ) async -> (target: SSHTarget?, warning: String?) {
     guard record.features.contains(.execSSH), record.network.mode != .disabled else {
       return (nil, nil)
     }
-    let timeout = ResourceLimits.bootTimeout(profile: record.profile, os: record.guest.os)
+    let timeout =
+      limit ?? ResourceLimits.bootTimeout(profile: record.profile, os: record.guest.os)
     guard let endpoint = await backend.sshEndpoint(record, timeout: timeout) else {
       return (nil, Self.noEndpoint(record.id))
     }

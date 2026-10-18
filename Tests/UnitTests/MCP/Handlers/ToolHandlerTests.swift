@@ -54,7 +54,7 @@ import VMLabMCP
       ToolHandlers.specs.map(\.name) == [
         "host_facts", "host_doctor", "images", "vm_plan", "vm_create", "vm_list", "vm_inspect",
         "vm_lifecycle", "vm_exec", "vm_job", "vm_file", "vm_computer", "vm_debug", "vm_introspect",
-        "vm_memory_dump", "vm_checkpoint", "vm_manifest", "vm_logs", "net_segment",
+        "vm_memory_dump", "vm_checkpoint", "vm_manifest", "vm_logs", "net_segment", "fleet",
       ])
     for handler in ToolHandlers.all {
       #expect(ToolCatalog.spec(named: handler.spec.name) == handler.spec)
