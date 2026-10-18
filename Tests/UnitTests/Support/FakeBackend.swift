@@ -87,6 +87,13 @@ final class FakeBackend: Backend {
   }
 
   func stop(_ record: VMRecord) async throws(VMLabError) { try self.record(.stop, record) }
+  /// The grace of every `stop(_:grace:)` (nil: the default).
+  var graces: [Duration?] { graceLog.withLock { $0 } }
+  private let graceLog = Mutex<[Duration?]>([])
+  func stop(_ record: VMRecord, grace: Duration?) async throws(VMLabError) {
+    graceLog.withLock { $0.append(grace) }
+    try self.record(.stop, record)
+  }
   func kill(_ record: VMRecord) async throws(VMLabError) { try self.record(.kill, record) }
   func pause(_ record: VMRecord) async throws(VMLabError) { try self.record(.pause, record) }
   func resume(_ record: VMRecord) async throws(VMLabError) { try self.record(.resume, record) }

@@ -19,8 +19,19 @@ struct VMLifecycleHandler: ToolHandler {
         hint: "Use one of: start, stop, kill, pause, resume, reset, destroy, clone.")
     }
     var warnings: [String] = []
-    if try arguments.int("timeoutSeconds") != nil {
-      warnings.append("timeoutSeconds is not honoured yet; the backend's default applies")
+    // start: the wait for SSH; stop: the grace period before the kill (Appendix G defaults).
+    var timeout: Duration?
+    if let seconds = try arguments.int("timeoutSeconds") {
+      guard seconds > 0 else {
+        throw VMLabError.invalidRequest(
+          field: "timeoutSeconds", reason: "timeoutSeconds must be positive",
+          hint: "Give a number of seconds, or omit it for the default.")
+      }
+      if action == .start || action == .stop {
+        timeout = .seconds(seconds)
+      } else {
+        warnings.append("timeoutSeconds applies to start and stop; \(action.rawValue) ignores it")
+      }
     }
     let force = try arguments.bool("force")
 
@@ -29,7 +40,7 @@ struct VMLifecycleHandler: ToolHandler {
     let after: VMRecord?
     switch action {
     case .start:
-      let started = try await LongOperation.start(record, context: context)
+      let started = try await LongOperation.start(record, context: context, sshTimeout: timeout)
       after = started.record
       warnings += started.warnings
     default:
@@ -37,7 +48,7 @@ struct VMLifecycleHandler: ToolHandler {
       let outcome = try await context.progress.during(
         "\(action.rawValue) \(record.id)", every: context.heartbeat
       ) { () throws(VMLabError) -> VMManager.Outcome in
-        try await manager.run(action, on: record.id, force: force)
+        try await manager.run(action, on: record.id, force: force, timeout: timeout)
       }
       after = outcome.record
       warnings += outcome.warnings

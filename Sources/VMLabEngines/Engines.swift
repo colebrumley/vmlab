@@ -24,7 +24,10 @@ public enum Engines {
     registry.register(VZBackend(store: store))
     registry.register(VZMacBackend(store: store))
     displays.register(RFBDisplayConnector())
-    debug.register(GDBDebugConnector())
+    debug.register(
+      GDBDebugConnector(onDeadPeer: { endpoint, reason in
+        await store.markBroken(gdbEndpoint: endpoint, reason: "gdb: \(reason)")
+      }))
   }
 
   /// Registers the slow probes the engine modules own (`vmlab doctor --probe` runs them): QEMU's,

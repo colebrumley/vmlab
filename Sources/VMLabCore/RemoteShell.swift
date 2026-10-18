@@ -6,7 +6,8 @@ import Foundation
 ///
 /// Each command runs in a process group of its own (`setsid`, else `perl`'s `setpgrp`, so macOS
 /// guests work too) whose id is written to `/tmp/vmlab-exec-<uid>/<job>/pgid`, which is how a
-/// timeout or `vm_job kill` ends the whole group.
+/// timeout or `vm_job kill` ends the whole group; a `cancel` file there, left by a kill that came
+/// first, makes the group exit before the command runs.
 public enum RemoteShell {
   /// `'value'`, with each `'` written as `'\''`.
   public static func quote(_ value: String) -> String {
@@ -40,9 +41,9 @@ public enum RemoteShell {
   /// its status: the shared body of the foreground and background scripts.
   static let inGroup = #"""
     if command -v setsid >/dev/null 2>&1; then
-      setsid -w /bin/sh -c 'echo $$ > "$0/pgid"; eval "$1"' "$d" "$2"
+      setsid -w /bin/sh -c 'echo $$ > "$0/pgid.tmp" && mv "$0/pgid.tmp" "$0/pgid"; [ -f "$0/cancel" ] && exit 143; eval "$1"' "$d" "$2"
     else
-      perl -e 'setpgrp(0, 0); exec @ARGV' /bin/sh -c 'echo $$ > "$0/pgid"; eval "$1"' "$d" "$2"
+      perl -e 'setpgrp(0, 0); exec @ARGV' /bin/sh -c 'echo $$ > "$0/pgid.tmp" && mv "$0/pgid.tmp" "$0/pgid"; [ -f "$0/cancel" ] && exit 143; eval "$1"' "$d" "$2"
     fi
     """#
 
@@ -57,9 +58,16 @@ public enum RemoteShell {
     """
 
   /// Ends the job's process group (`TERM`, then `KILL` a second later) and, for a background job,
-  /// records `signal` as its status when it has none.
+  /// records `signal` as its status when it has none. A job whose group has not written its id
+  /// yet (ssh timed out before the guest got that far) is cancelled: the `cancel` file makes the
+  /// group exit before it runs the command, whenever it starts, and the kill waits up to 3 s for
+  /// the id in case the group started first.
   static let kill = """
     \(jobDirectory)
+    mkdir -p "$d" 2>/dev/null && chmod 700 "$d" 2>/dev/null
+    : > "$d/cancel"
+    i=0
+    while [ ! -f "$d/pgid" ] && [ $i -lt 30 ]; do sleep 0.1; i=$((i + 1)); done
     [ -f "$d/pgid" ] || exit 0
     pg=$(cat "$d/pgid")
     kill -TERM "-$pg" 2>/dev/null
@@ -83,9 +91,9 @@ public enum RemoteShell {
   static let backgroundRunner = """
     d=$1
     if command -v setsid >/dev/null 2>&1; then
-      setsid -w /bin/sh -c 'echo $$ > "$0/pgid"; . "$0/cmd.sh"' "$d"
+      setsid -w /bin/sh -c 'echo $$ > "$0/pgid.tmp" && mv "$0/pgid.tmp" "$0/pgid"; [ -f "$0/cancel" ] && exit 143; . "$0/cmd.sh"' "$d"
     else
-      perl -e 'setpgrp(0, 0); exec @ARGV' /bin/sh -c 'echo $$ > "$0/pgid"; . "$0/cmd.sh"' "$d"
+      perl -e 'setpgrp(0, 0); exec @ARGV' /bin/sh -c 'echo $$ > "$0/pgid.tmp" && mv "$0/pgid.tmp" "$0/pgid"; [ -f "$0/cancel" ] && exit 143; . "$0/cmd.sh"' "$d"
     fi
     echo $? > "$d/rc.tmp" && mv "$d/rc.tmp" "$d/rc"
     """

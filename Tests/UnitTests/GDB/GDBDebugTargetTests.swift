@@ -217,7 +217,11 @@ import VMLabCore
     let base = try GDBDebugTargetTests.qemuLike()
     // Reads at 0x2000 are acknowledged and never answered: QEMU's main loop is hung.
     let stub = try LoopbackGDBStub { packet in packet.hasPrefix("m2000") ? [] : base(packet) }
-    let target = try await GDBDebugConnector(replyTimeout: .milliseconds(300)).connect(
+    let reported = Mutex<(GDBEndpoint, String)?>(nil)
+    let connector = GDBDebugConnector(
+      replyTimeout: .milliseconds(300),
+      onDeadPeer: { endpoint, reason in reported.withLock { $0 = (endpoint, reason) } })
+    let target = try await connector.connect(
       to: GDBDebugTargetTests.endpoint(stub), arch: .arm64)
     defer { Task { await target.close() } }
     let error = await #expect(throws: VMLabError.self) {
@@ -226,5 +230,9 @@ import VMLabCore
     #expect(error.map(DeadPeer.isDeadPeer) == true)
     #expect(error?.data["channel"] == .string("gdb"))
     #expect(await target.isConnected == false)
+    // The connector's handler heard it, with the stub, so the VM can be marked broken.
+    let heard = reported.withLock { $0 }
+    #expect(heard?.0 == GDBDebugTargetTests.endpoint(stub))
+    #expect(heard?.1.contains("m2000") == true)
   }
 }

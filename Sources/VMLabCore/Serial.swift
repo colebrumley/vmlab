@@ -75,7 +75,9 @@ public actor SerialChannel {
   private var socket: SocketBox?
   private var readerTask: Task<Void, Never>?
   private var closed = false
-  private var lineObserver: (@Sendable (SerialLine) -> Void)?
+  /// Every line observer, by key; key 0 is `setLineObserver`'s slot.
+  private var lineObservers: [UInt64: @Sendable (SerialLine) -> Void] = [:]
+  private var nextObserverKey: UInt64 = 1
   private var partialLine: [UInt8] = []
   private var partialLineStart: UInt64 = 0
   private var waiters: [UInt64: Waiter] = [:]
@@ -110,10 +112,29 @@ public actor SerialChannel {
       logURL: vmDirectory.appending(path: "serial.log"))
   }
 
-  /// Called on the channel's executor with every completed line, in order. R-304 hangs panic
-  /// detection here.
+  /// Called on the channel's executor with every completed line, in order. Sets (or clears) one
+  /// observer slot; the observers `addLineObserver` adds are kept.
   public func setLineObserver(_ observer: (@Sendable (SerialLine) -> Void)?) {
-    lineObserver = observer
+    lineObservers[0] = observer
+  }
+
+  /// Adds an observer of every completed line, in order, beside any others (R-304 hangs panic
+  /// detection here); the key removes it. The channel keeps the observer while it lives.
+  @discardableResult
+  public func addLineObserver(_ observer: @escaping @Sendable (SerialLine) -> Void) -> UInt64 {
+    let key = nextObserverKey
+    nextObserverKey += 1
+    lineObservers[key] = observer
+    return key
+  }
+
+  public func removeLineObserver(_ key: UInt64) { lineObservers[key] = nil }
+
+  /// Hangs a `PanicDetector` writing to `<vmDirectory>/events.jsonl` on this channel's lines
+  /// (R-304); call it once per channel, before `start`, so no line is missed.
+  public func watchForPanics(vmDirectory: URL) {
+    let detector = PanicDetector(vmDirectory: vmDirectory)
+    addLineObserver { line in detector.observe(line) }
   }
 
   /// Connects to the socket (retrying while it does not exist or refuses, up to `connectTimeout`),
@@ -281,7 +302,11 @@ public actor SerialChannel {
   }
 
   private func emitLines(_ chunk: [UInt8], startingAt chunkStart: UInt64) {
-    guard let observer = lineObserver else { return }
+    guard !lineObservers.isEmpty else { return }
+    let observers = lineObservers.keys.sorted().compactMap { lineObservers[$0] }
+    let observer: @Sendable (SerialLine) -> Void = { line in
+      for each in observers { each(line) }
+    }
     var offset = chunkStart
     if partialLine.isEmpty { partialLineStart = chunkStart }
     for byte in chunk {

@@ -18,6 +18,9 @@ public struct QEMULayout: Sendable, Hashable {
   public var seedSource: URL { directory.appending(path: "seed") }
   public var efiVars: URL { directory.appending(path: "efi-vars.bin") }
   public var qmpSocket: URL { directory.appending(path: "qmp.sock") }
+  /// A second QMP monitor: QEMU's QMP socket serves one client at a time, and the server that
+  /// started the guest holds `qmp.sock`, so another `vmlab` process attaches here (R-1100).
+  public var secondaryQMPSocket: URL { directory.appending(path: "qmp2.sock") }
   public var serialSocket: URL { directory.appending(path: "serial.sock") }
   public var vncSocket: URL { directory.appending(path: "vnc.sock") }
   /// The host end of the `org.qemu.guest_agent.0` virtio-serial port (R-403).
@@ -25,8 +28,14 @@ public struct QEMULayout: Sendable, Hashable {
   public var pidFile: URL { directory.appending(path: "qemu.pid") }
   public var log: URL { directory.appending(path: "qemu.log") }
   public var serialLog: URL { directory.appending(path: "serial.log") }
+  /// Everything the guest writes to its serial port, written by QEMU itself (chardev `logfile`),
+  /// whether or not a vmlab process holds the serial socket. Appended across boots, never
+  /// rotated by vmlab.
+  public var consoleLog: URL { directory.appending(path: "console.log") }
 
-  public var sockets: [URL] { [qmpSocket, serialSocket, vncSocket, agentSocket] }
+  public var sockets: [URL] {
+    [qmpSocket, secondaryQMPSocket, serialSocket, vncSocket, agentSocket]
+  }
 
   /// Throws `invalid_request` when a socket path is too long for `sockaddr_un`.
   public func validate() throws(VMLabError) {

@@ -102,6 +102,19 @@ public final class PeerClock: Sendable {
 }
 
 extension Store {
+  /// Marks broken the live VM whose GDB stub is `endpoint` (R-1101: the GDB client's dead-peer
+  /// handler knows only the stub). Returns whether one was marked.
+  @discardableResult
+  public func markBroken(gdbEndpoint endpoint: GDBEndpoint, reason: String) async -> Bool {
+    let records = (try? list().records) ?? []
+    guard
+      let record = records.first(where: {
+        $0.state.isLive && $0.runtime?.gdbEndpoint.flatMap(GDBEndpoint.init(runtime:)) == endpoint
+      })
+    else { return false }
+    return await markBroken(id: record.id, reason: reason)
+  }
+
   /// Marks a running or paused VM `broken` with `reason` (R-1101), under its lock, and logs a
   /// `lifecycle` warning. Returns false when the VM is gone or in another state, which it leaves
   /// as it is (a VM stopped meanwhile is not broken).

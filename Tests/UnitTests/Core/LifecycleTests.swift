@@ -230,3 +230,37 @@ import VMLabCore
     #expect(!LivenessProbe.canConnect(unixSocket: String(repeating: "x", count: 200)))
   }
 }
+
+/// A guest that powers itself off: the engine exited, so the record follows at once.
+@Suite struct EngineExitTests {
+  @Test func aLiveVMWhoseEngineExitedIsStopped() async throws {
+    let f = try VMManagerTests.Fixture()
+    let vm = try await f.create()
+    let running = try #require(try await f.manager.perform(.start, on: vm.id))
+    let pid = try #require(running.runtime?.pid)
+    #expect(await f.store.recordEngineExit(id: vm.id, pid: pid + 1, reason: "x") == false)
+    #expect(
+      await f.store.recordEngineExit(
+        id: vm.id, pid: pid, reason: "the guest powered off (QMP SHUTDOWN, reason guest-shutdown)"))
+    let record = try f.store.load(id: vm.id)
+    #expect(record.state == .stopped && record.runtime == nil)
+    #expect(
+      try await f.events(vm.id).last
+        == "running -> stopped: the guest powered off (QMP SHUTDOWN, reason guest-shutdown)")
+    // Once stopped, nothing more changes; start works again.
+    #expect(await f.store.recordEngineExit(id: vm.id, pid: pid, reason: "x") == false)
+    #expect(try await f.manager.perform(.start, on: vm.id)?.state == .running)
+  }
+
+  @Test func itWaitsForAnActionInFlight() async throws {
+    let f = try VMManagerTests.Fixture()
+    let vm = try await f.create()
+    let pid = try #require(try await f.manager.perform(.start, on: vm.id)?.runtime?.pid)
+    let lock = try #require(FileLock.tryLock(f.store.operationLockPath(of: vm.id)))
+    let exit = Task { await f.store.recordEngineExit(id: vm.id, pid: pid, reason: "off") }
+    try await Task.sleep(for: .milliseconds(200))
+    #expect(try f.store.load(id: vm.id).state == .running)
+    lock.unlock()
+    #expect(await exit.value)
+  }
+}

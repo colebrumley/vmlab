@@ -21,6 +21,10 @@ public protocol Backend: Sendable {
   func start(_ record: VMRecord) async throws(VMLabError) -> VMRuntime
   /// Asks the guest to shut down and waits for the engine process to exit.
   func stop(_ record: VMRecord) async throws(VMLabError)
+  /// `stop`, waiting at most `grace` (nil: the engine's default, Appendix G) for the guest to
+  /// power off; `timeout` when it has not, with the engine left running (the manager kills it).
+  /// The default ignores `grace`.
+  func stop(_ record: VMRecord, grace: Duration?) async throws(VMLabError)
   /// Ends the engine process at once.
   func kill(_ record: VMRecord) async throws(VMLabError)
   func pause(_ record: VMRecord) async throws(VMLabError)
@@ -50,6 +54,10 @@ public protocol Backend: Sendable {
 }
 
 extension Backend {
+  public func stop(_ record: VMRecord, grace: Duration?) async throws(VMLabError) {
+    try await stop(record)
+  }
+
   public func clone(
     _ source: VMRecord, checkpoint: CheckpointNode?, into target: VMRecord
   ) async throws(VMLabError) -> [URL] {

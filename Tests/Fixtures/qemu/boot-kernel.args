@@ -52,8 +52,12 @@ virtio-serial-pci,id=vser0
 virtserialport,bus=vser0.0,chardev=qga0,name=org.qemu.guest_agent.0
 -qmp
 unix:/Users/someone/.vmlab/vms/vm-hvf234/qmp.sock,server,wait=off
+-qmp
+unix:/Users/someone/.vmlab/vms/vm-hvf234/qmp2.sock,server,wait=off
+-chardev
+socket,id=serial0,path=/Users/someone/.vmlab/vms/vm-hvf234/serial.sock,server=on,wait=off,logfile=/Users/someone/.vmlab/vms/vm-hvf234/console.log,logappend=on
 -serial
-unix:/Users/someone/.vmlab/vms/vm-hvf234/serial.sock,server,wait=off
+chardev:serial0
 -vnc
 unix:/Users/someone/.vmlab/vms/vm-hvf234/vnc.sock
 -gdb

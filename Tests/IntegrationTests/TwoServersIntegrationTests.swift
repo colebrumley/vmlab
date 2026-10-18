@@ -98,6 +98,47 @@ struct TwoServersIntegrationTests {
     #expect(try store.list().records.isEmpty)
   }
 
+  /// QEMU's QMP serves one client per monitor: server A holds `qmp.sock` of the guest it
+  /// started, and server B reaches the same guest through `qmp2.sock`.
+  @Test func secondServerUsesQMPOnTheFirstServersGuest() async throws {
+    let home = URL(filePath: "/tmp/vmlab-test-\(getpid())-qm")
+    try? FileManager.default.removeItem(at: home)
+    try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+    try FileManager.default.createSymbolicLink(
+      at: home.appending(path: "images"),
+      withDestinationURL: FileManager.default.homeDirectoryForCurrentUser.appending(
+        path: ".vmlab/images"))
+    let binary = try Self.vmlabURL()
+    let a = try StdioMCPClient(binary: binary, home: home, tag: "a")
+    let b = try StdioMCPClient(binary: binary, home: home, tag: "b")
+    defer {
+      a.terminate()
+      b.terminate()
+      for pid in Self.qemuPIDs(in: home) { kill(pid, SIGKILL) }
+      try? FileManager.default.removeItem(at: home)
+    }
+    try await a.initialize()
+    try await b.initialize()
+    let made = try await a.call(
+      "vm_create", ["requirements": Self.requirements(), "name": "shared", "autostart": true])
+    try #require(made.isError == false, "\(made.text)")
+    // A holds the guest's first monitor (it started it, and its watchdog keeps it).
+    let mine = try await a.call("vm_introspect", ["vm": "shared", "query": "status"])
+    #expect(mine.isError == false, "\(mine.text)")
+    let started = ContinuousClock.now
+    let theirs = try await b.call("vm_introspect", ["vm": "shared", "query": "status"])
+    #expect(theirs.isError == false, "\(theirs.text)")
+    #expect(theirs.text.contains("running"), "\(theirs.text)")
+    #expect(ContinuousClock.now - started < .seconds(20))
+    // B can drive it too: pause and resume through its own monitor.
+    for action in ["pause", "resume"] {
+      let result = try await b.call("vm_lifecycle", ["vm": "shared", "action": .string(action)])
+      #expect(result.isError == false, "\(result.text)")
+    }
+    let gone = try await a.call("vm_lifecycle", ["vm": "shared", "action": "destroy"])
+    #expect(gone.isError == false, "\(gone.text)")
+  }
+
   /// QEMU processes whose command line names a file under `home`.
   static func qemuPIDs(in home: URL) -> [Int32] {
     let vms = home.appending(path: "vms")

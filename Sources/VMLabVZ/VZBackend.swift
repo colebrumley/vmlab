@@ -199,11 +199,16 @@ public struct VZBackend: Backend {
   }
 
   public func stop(_ record: VMRecord) async throws(VMLabError) {
+    try await stop(record, grace: nil)
+  }
+
+  /// The runner's `stop`, then up to `grace` (default `stopTimeout`) for it to exit.
+  public func stop(_ record: VMRecord, grace: Duration?) async throws(VMLabError) {
     let (client, pid) = target(record)
     // A paused guest cannot hear the power button; Lifecycle allows stop from paused.
     if try await client.status().state == .paused { try await client.resume() }
     try await client.stop()
-    try await waitForExit(pid, within: stopTimeout, record: record, action: "stop")
+    try await waitForExit(pid, within: grace ?? stopTimeout, record: record, action: "stop")
     await serialChannels.drop(record.id)
   }
 
@@ -328,6 +333,7 @@ final class VZSerialChannels: Sendable {
         let task = Task {
           let channel = SerialChannel(
             socketPath: socket, logURL: vmDirectory.appending(path: "serial.log"))
+          await channel.watchForPanics(vmDirectory: vmDirectory)  // R-304
           try await channel.start()
           return channel
         }
