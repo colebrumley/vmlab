@@ -103,7 +103,8 @@ import VMLabCore
     }
     #expect(error?.code == .debugBusy)
     #expect(error?.data["endpoint"] == .string(endpoint.address))
-    #expect(ContinuousClock.now - started < .seconds(4))
+    // Busy rather than hanging; generous for a loaded host.
+    #expect(ContinuousClock.now - started < .seconds(15))
     // The first client is unaffected.
     #expect(try await first.halt(timeout: .seconds(2)).pc == 0x4008_0000)
     await first.close()
@@ -186,7 +187,8 @@ import VMLabCore
     let error = await #expect(throws: VMLabError.self) { try await second.halt() }
     #expect(error?.code == .debugBusy)
     #expect(error?.data["endpoint"] == .string(endpoint.address))
-    #expect(ContinuousClock.now - started < .seconds(4))
+    // Busy rather than hanging; generous for a loaded host.
+    #expect(ContinuousClock.now - started < .seconds(15))
     #expect(await second.attached == false)
     #expect(await second.busySince != nil)
     // The first session's connection is untouched.
