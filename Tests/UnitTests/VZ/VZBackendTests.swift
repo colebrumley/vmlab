@@ -59,6 +59,31 @@ import VMLabCore
       try String(contentsOf: dir.appending(path: "id_ed25519.pub"), encoding: .utf8) == publicKey)
   }
 
+  /// R-603: a share whose host directory is missing is refused before anything is built.
+  @Test func missingShareDirectoryIsInvalidRequest() {
+    #expect(throws: Never.self) {
+      try VZBackend.checkShares([ShareSpec(host: FileManager.default.temporaryDirectory.path)])
+    }
+    #expect {
+      try VZBackend.checkShares([ShareSpec(host: "/tmp"), ShareSpec(host: "/no/such/dir")])
+    } throws: { error in
+      (error as? VMLabError)?.code == .invalidRequest
+        && (error as? VMLabError)?.data["field"] == .string("shares[1].host")
+    }
+  }
+
+  /// Rosetta is shared only when the request asked for it, not whenever the profile grants it.
+  @Test func rosettaOnlyWhenRequested() {
+    var record = VMRecord(
+      id: "vm-abc234", profile: .vzLinux, guest: GuestSpec(os: .linux, arch: .arm64),
+      features: [.execSSH, .rosetta])
+    #expect(!VZRunnerConfig.wantsRosetta(record))
+    record.plan = Plan(
+      profile: .vzLinux, guest: record.guest, resources: ResourceSpec(),
+      features: record.features, requested: [.rosetta], estimatedStartupSeconds: 30)
+    #expect(VZRunnerConfig.wantsRosetta(record))
+  }
+
   @Test func hostnameIsADNSLabel() {
     func record(_ name: String) -> VMRecord {
       VMRecord(

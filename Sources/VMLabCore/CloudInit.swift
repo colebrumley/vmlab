@@ -92,6 +92,9 @@ public struct CloudInitConfig: Codable, Sendable, Hashable {
   /// `dhcpd_leases`): `network-config` then matches it and sets `dhcp-identifier: mac`, because
   /// systemd-networkd's default DUID client identifier hides the MAC from the lease file.
   public var dhcpIdentifierMAC: String?
+  /// Rosetta for Linux is shared over virtiofs (VZ, R-603): mount it at `RosettaGuest.mountPoint`
+  /// and register it with `binfmt_misc` for x86_64 ELF binaries.
+  public var rosetta: Bool
   /// User-supplied `user-data`, merged after ours (cloud-config, shell script, boothook or
   /// include). Its cloud-config keys win; lists are appended.
   public var extraUserData: String?
@@ -100,7 +103,7 @@ public struct CloudInitConfig: Codable, Sendable, Hashable {
     instanceID: String, hostname: String, user: String, sshPublicKey: String,
     packages: [String] = [], gui: GUIStack? = nil, segment: SegmentNIC? = nil,
     mounts: [GuestMount] = [], console: ConsoleDevice = .ttyAMA0,
-    dhcpIdentifierMAC: String? = nil, extraUserData: String? = nil
+    dhcpIdentifierMAC: String? = nil, rosetta: Bool = false, extraUserData: String? = nil
   ) {
     self.instanceID = instanceID
     self.hostname = hostname
@@ -112,8 +115,26 @@ public struct CloudInitConfig: Codable, Sendable, Hashable {
     self.mounts = mounts
     self.console = console
     self.dhcpIdentifierMAC = dhcpIdentifierMAC
+    self.rosetta = rosetta
     self.extraUserData = extraUserData
   }
+}
+
+/// How a Linux guest uses the Rosetta share (Apple's "Running Intel binaries in Linux VMs with
+/// Rosetta"): mounted over virtiofs, then registered with `binfmt_misc` for x86_64 ELF executables.
+public enum RosettaGuest {
+  /// The virtiofs tag the VZ runner gives the `VZLinuxRosettaDirectoryShare`.
+  public static let tag = "rosetta"
+  public static let mountPoint = "/mnt/rosetta"
+  public static let binfmtFile = "/etc/binfmt.d/rosetta.conf"
+  /// Orders `systemd-binfmt` after the mount, so the `F` (fix binary) flag finds the interpreter.
+  public static let binfmtDropIn = "/etc/systemd/system/systemd-binfmt.service.d/rosetta.conf"
+  /// The `binfmt_misc` registration: x86_64 ELF executables (`e_machine` 0x3e) run through
+  /// `<mountPoint>/rosetta`; `C` takes credentials from the binary, `F` opens the interpreter now.
+  public static let binfmtLine =
+    ":rosetta:M::\\x7fELF\\x02\\x01\\x01\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x02\\x00\\x3e\\x00:"
+    + "\\xff\\xff\\xff\\xff\\xff\\xfe\\xfe\\x00\\xff\\xff\\xff\\xff\\xff\\xff\\xff\\xff\\xfe\\xff\\xff\\xff:"
+    + "\(mountPoint)/rosetta:CF"
 }
 
 /// Builds the NoCloud seed (`user-data`, `meta-data`, optional `network-config`) and the `cidata`
@@ -160,6 +181,30 @@ public enum CloudInit {
       ]
     }
 
+    var mounts = config.mounts
+    if config.rosetta {
+      mounts.append(
+        GuestMount(
+          tag: RosettaGuest.tag, guestPath: RosettaGuest.mountPoint, kind: .virtiofs,
+          readOnly: true))
+      writeFiles.append(
+        .map([
+          ("path", .string(RosettaGuest.binfmtFile)),
+          ("permissions", "0644"),
+          ("content", .string(RosettaGuest.binfmtLine + "\n")),
+        ]))
+      writeFiles.append(
+        .map([
+          ("path", .string(RosettaGuest.binfmtDropIn)),
+          ("permissions", "0644"),
+          ("content", .string("[Unit]\nRequiresMountsFor=\(RosettaGuest.mountPoint)\n")),
+        ]))
+      // cloud-init's mounts module has mounted the share by runcmd time; register now.
+      runcmd += [
+        .list(["systemctl", "daemon-reload"]),
+        .list(["systemctl", "restart", "systemd-binfmt.service"]),
+      ]
+    }
     if config.console == .hvc0 {
       // The image's kernel command line names consoles VZ does not have; the last console= wins,
       // so kernel messages reach the virtio console from the next boot on (R-602).
@@ -194,12 +239,12 @@ public enum CloudInit {
       ("package_update", true),
       ("packages", .list(packages.map(YAML.string))),
     ]
-    if !config.mounts.isEmpty {
+    if !mounts.isEmpty {
       entries.append(
         (
           "mounts",
           .list(
-            config.mounts.map { mount in
+            mounts.map { mount in
               .list([
                 .string(mount.tag), .string(mount.guestPath), .string(mount.kind.rawValue),
                 .string(mount.options), "0", "0",

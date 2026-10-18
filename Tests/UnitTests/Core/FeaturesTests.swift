@@ -207,6 +207,36 @@ import Testing
     #expect(throws: Never.self) { _ = try Self.decode(mac) }
   }
 
+  /// R-603: shares decode with defaults, imply shared_dir, and bad paths are invalid_request.
+  @Test func sharesImplySharedDirAndValidatePaths() throws {
+    let ok = try Self.decode(
+      #"{"guest":{"os":"linux","arch":"arm64"},"shares":[{"host":"/tmp/a"},{"host":"/tmp/b","guest":"/data","readOnly":true}]}"#
+    )
+    #expect(
+      ok.shares == [
+        ShareSpec(host: "/tmp/a"), ShareSpec(host: "/tmp/b", guest: "/data", readOnly: true),
+      ])
+    #expect(ok.impliedFeatures.map(\.feature) == [.sharedDir])
+    #expect(ok.shares[0].guestPath(index: 0) == "/mnt/share0")
+    #expect(ok.shares[1].guestPath(index: 1) == "/data")
+    #expect(ShareSpec.tag(1) == "share1")
+    #expect(try Self.decode(#"{"guest":{"os":"linux","arch":"arm64"}}"#).shares.isEmpty)
+    for (shares, field) in [
+      (#"[{"host":"relative"}]"#, "shares[0].host"),
+      (#"[{"host":"/a","guest":"mnt"}]"#, "shares[0].guest"),
+      (#"[{"host":"/a","guest":"/"}]"#, "shares[0].guest"),
+      (#"[{"host":"/a","guest":"/x"},{"host":"/b","guest":"/x"}]"#, "shares[1].guest"),
+      ("[" + Array(repeating: #"{"host":"/a"}"#, count: 9).joined(separator: ",") + "]", "shares"),
+    ] {
+      #expect {
+        _ = try Self.decode(#"{"guest":{"os":"linux","arch":"arm64"},"shares":"# + shares + "}")
+      } throws: { error in
+        (error as? VMLabError)?.code == .invalidRequest
+          && (error as? VMLabError)?.data["field"] == .string(field)
+      }
+    }
+  }
+
   @Test func memberwiseInitValidates() {
     #expect(throws: VMLabError.self) {
       try Requirements(guest: GuestSpec(os: .macos, arch: .arm64), require: [.serial])

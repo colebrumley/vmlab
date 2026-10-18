@@ -78,13 +78,15 @@ public struct VMRecord: Codable, Sendable, Hashable {
   public var boot: BootSpec?
   /// The request's `extra` (R-306: `qemuArgs`); nil when it had none. Additive: schema 1 still.
   public var extra: ExtraSpec?
+  /// The request's `shares` (`shared_dir`, R-603/R-404); empty when it had none. Additive.
+  public var shares: [ShareSpec]
 
   public init(
     id: String, name: String? = nil, profile: Profile, guest: GuestSpec, features: [Feature],
     resources: ResourceSpec = ResourceSpec(), image: String? = nil,
     network: NetworkSpec = NetworkSpec(), createdAt: Date = Date(), state: VMState = .created,
     runtime: VMRuntime? = nil, checkpoints: [CheckpointRef] = [], plan: Plan? = nil,
-    boot: BootSpec? = nil, extra: ExtraSpec? = nil
+    boot: BootSpec? = nil, extra: ExtraSpec? = nil, shares: [ShareSpec] = []
   ) {
     self.schemaVersion = Self.currentSchemaVersion
     self.id = id
@@ -102,11 +104,12 @@ public struct VMRecord: Codable, Sendable, Hashable {
     self.plan = plan
     self.boot = boot
     self.extra = extra
+    self.shares = shares
   }
 
   enum CodingKeys: String, CodingKey {
     case schemaVersion, id, name, profile, guest, features, resources, image, network, createdAt
-    case state, runtime, checkpoints, plan, boot, extra
+    case state, runtime, checkpoints, plan, boot, extra, shares
   }
 
   public init(from decoder: any Decoder) throws {
@@ -127,6 +130,7 @@ public struct VMRecord: Codable, Sendable, Hashable {
     plan = try c.decodeIfPresent(Plan.self, forKey: .plan)
     boot = try c.decodeIfPresent(BootSpec.self, forKey: .boot)
     extra = try c.decodeIfPresent(ExtraSpec.self, forKey: .extra)
+    shares = try c.decodeIfPresent([ShareSpec].self, forKey: .shares) ?? []
   }
 
   /// `vm-` plus six lowercase RFC 4648 base32 characters.

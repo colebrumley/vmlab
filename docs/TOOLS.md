@@ -561,3 +561,7 @@ The `requirements` object of `vm_plan`, `vm_create` and `fleet` (`Requirements` 
 | `resources.cpus` | integer, ≥ 1 |  | Virtual CPUs. |
 | `resources.diskGB` | integer, ≥ 1 |  | Disk size in GB. |
 | `resources.memoryGB` | integer, ≥ 1 |  | Guest memory in GB. |
+| `shares` | array of object |  | Host directories mounted in the guest (implies shared_dir): virtiofs under VZ, 9p under QEMU, tagged share0, share1, ... in order. |
+| `shares[].host` | string | yes | Absolute host path of an existing directory. |
+| `shares[].guest` | string |  | Absolute guest mount point; default /mnt/share<N> for the Nth share (from 0). |
+| `shares[].readOnly` | boolean, default `false` |  | Mount it read-only in the guest. |

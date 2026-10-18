@@ -64,6 +64,42 @@ import VMLabVZ
     #expect(try desktopOnly.decisions(limits: Self.limits).graphics == nil)
   }
 
+  /// R-603: shares become virtiofs devices `share0`...; Rosetta only when the plan asked for it.
+  @Test func sharesAndRosettaAreVirtiofsDevices() throws {
+    var record = Self.record(features: [.execSSH, .serial, .sharedDir, .rosetta])
+    record.shares = [
+      ShareSpec(host: "/Users/me/src"), ShareSpec(host: "/tmp/ro", guest: "/ro", readOnly: true),
+    ]
+    #expect(
+      try VZRunnerConfig.linux(record: record, vmDirectory: Self.dir).decisions(limits: Self.limits)
+        .fileSystems == [
+          .init(tag: "share0", path: "/Users/me/src", readOnly: false),
+          .init(tag: "share1", path: "/tmp/ro", readOnly: true),
+        ])
+    record.plan = Plan(
+      profile: .vzLinux, guest: record.guest, resources: record.resources,
+      features: record.features, requested: [.sharedDir, .rosetta], estimatedStartupSeconds: 30)
+    let decisions = try VZRunnerConfig.linux(record: record, vmDirectory: Self.dir)
+      .decisions(limits: Self.limits)
+    try Self.assertSnapshot(decisions, "decisions-linux-shares-rosetta.json")
+    #expect(
+      decisions.fileSystems.last == .init(tag: "rosetta", path: nil, readOnly: true, rosetta: true))
+  }
+
+  /// A config written before R-603 (no share keys) still decodes.
+  @Test func olderConfigDecodes() throws {
+    let config = try VZRunnerConfig.linux(record: Self.record(), vmDirectory: Self.dir)
+    let encoder = JSONEncoder()
+    var object = try #require(
+      try JSONSerialization.jsonObject(with: encoder.encode(config)) as? [String: Any])
+    object["directoryShares"] = nil
+    object["rosetta"] = nil
+    object["serialSocket"] = nil
+    let old = try JSONDecoder().decode(
+      VZRunnerConfig.self, from: JSONSerialization.data(withJSONObject: object))
+    #expect(old.directoryShares.isEmpty && !old.rosetta && old.serialSocket == nil)
+  }
+
   @Test func kernelBootUsesTheLinuxLoader() throws {
     let config = try VZRunnerConfig.linux(
       record: Self.record(), vmDirectory: Self.dir,

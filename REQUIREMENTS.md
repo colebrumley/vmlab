@@ -564,7 +564,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   R-303 so `SerialChannel` is shared; cloud-init sets `console=hvc0` and a getty on it.
   **Verify:** integration: `vm_serial wait "login:"`, `write "root\n"`, and the prompt appears.
 
-- [ ] **R-603 virtiofs shares and Rosetta**
+- [x] **R-603 virtiofs shares and Rosetta**
   `shared_dir` → `VZVirtioFileSystemDeviceConfiguration` with tag `share0`, mounted by cloud-init.
   `rosetta` → `VZLinuxRosettaDirectoryShare` (host fact `rosetta_installed` must be `yes`, else
   the feature is `.no("softwareupdate --install-rosetta")`) plus the binfmt registration lines in
@@ -997,7 +997,8 @@ result also carries `vm` (id and name) where a VM is involved and `warnings: [St
   "image": "debian-13-arm64",
   "boot": { "mode": "kernel", "kernel": "…", "initrd": "…", "cmdline": "console=ttyAMA0", "haltAtStart": false },
   "provision": { "packages": ["jq"], "runCommands": ["…"], "userData": null },
-  "extra": { "qemuArgs": [] }
+  "extra": { "qemuArgs": [] },
+  "shares": [{ "host": "/Users/me/src", "guest": "/mnt/src", "readOnly": false }]
 }
 ```
 

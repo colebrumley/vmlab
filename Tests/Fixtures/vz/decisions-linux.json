@@ -10,6 +10,9 @@
   },
   "cpus" : 2,
   "entropy" : true,
+  "fileSystems" : [
+
+  ],
   "memoryBalloon" : true,
   "memoryBytes" : 4294967296,
   "network" : [

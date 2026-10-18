@@ -133,6 +133,26 @@ enum ConfigurationBuilder {
       machine.serialPorts = [port]
       pipes = console
     }
+    machine.directorySharingDevices = try plan.fileSystems.map { fs throws(VMLabError) in
+      let device = VZVirtioFileSystemDeviceConfiguration(tag: fs.tag)
+      if fs.rosetta {
+        guard VZLinuxRosettaDirectoryShare.availability == .installed else {
+          throw VMLabError(
+            code: .hostMissingTool, message: "Rosetta for Linux is not installed on this host",
+            hint: "Run softwareupdate --install-rosetta, then start the VM again.",
+            data: ["tool": .string("rosetta")])
+        }
+        do {
+          device.share = try VZLinuxRosettaDirectoryShare()
+        } catch {
+          throw engineError("Cannot share Rosetta", error)
+        }
+      } else {
+        device.share = VZSingleDirectoryShare(
+          directory: VZSharedDirectory(url: URL(filePath: fs.path ?? "/"), readOnly: fs.readOnly))
+      }
+      return device
+    }
     if plan.entropy { machine.entropyDevices = [VZVirtioEntropyDeviceConfiguration()] }
     if plan.memoryBalloon {
       machine.memoryBalloonDevices = [VZVirtioTraditionalMemoryBalloonDeviceConfiguration()]

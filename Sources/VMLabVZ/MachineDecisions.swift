@@ -72,6 +72,22 @@ public struct VZMachineDecisions: Codable, Sendable, Hashable {
     }
   }
 
+  /// A `VZVirtioFileSystemDeviceConfiguration`: a `VZSingleDirectoryShare` of `path`, or with
+  /// `rosetta` a `VZLinuxRosettaDirectoryShare` (and no path).
+  public struct FileSystemDevice: Codable, Sendable, Hashable {
+    public var tag: String
+    public var path: String?
+    public var readOnly: Bool
+    public var rosetta: Bool
+
+    public init(tag: String, path: String?, readOnly: Bool, rosetta: Bool = false) {
+      self.tag = tag
+      self.path = path
+      self.readOnly = readOnly
+      self.rosetta = rosetta
+    }
+  }
+
   public var cpus: Int
   /// Rounded down to a whole MiB, then clamped.
   public var memoryBytes: UInt64
@@ -86,6 +102,8 @@ public struct VZMachineDecisions: Codable, Sendable, Hashable {
   /// `VZVirtioTraditionalMemoryBalloonDeviceConfiguration`.
   public var memoryBalloon: Bool
   public var graphics: Graphics?
+  /// virtiofs devices: the shares in order, then Rosetta.
+  public var fileSystems: [FileSystemDevice]
 }
 
 extension VZRunnerConfig {
@@ -121,7 +139,12 @@ extension VZRunnerConfig {
       console: consoleLog.map { .init(log: $0, socket: serialSocket) },
       entropy: true,
       memoryBalloon: memoryBalloon,
-      graphics: graphics.map { .init(width: $0.width, height: $0.height) })
+      graphics: graphics.map { .init(width: $0.width, height: $0.height) },
+      fileSystems: directoryShares.map {
+        .init(tag: $0.tag, path: $0.path, readOnly: $0.readOnly)
+      }
+        + (rosetta
+          ? [.init(tag: VZRunnerConfig.rosettaTag, path: nil, readOnly: true, rosetta: true)] : []))
   }
 }
 

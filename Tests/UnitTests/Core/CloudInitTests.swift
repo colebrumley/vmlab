@@ -88,6 +88,31 @@ enum RubyYAML {
     #expect(autologin["content"]?.contains("autologin-user=debian") == true)
   }
 
+  /// R-603: Rosetta is mounted over virtiofs and registered with binfmt_misc after the mount.
+  @Test(.enabled(if: RubyYAML.available)) func rosettaIsMountedAndRegistered() throws {
+    var config = Self.base()
+    config.rosetta = true
+    config.mounts = [GuestMount(tag: "share0", guestPath: "/mnt/share0", kind: .virtiofs)]
+    let doc = try #require(try RubyYAML.parse(CloudInit.userData(config)) as? [String: Any])
+    #expect(
+      doc["mounts"] as? [[String]] == [
+        ["share0", "/mnt/share0", "virtiofs", "rw,nofail", "0", "0"],
+        ["rosetta", "/mnt/rosetta", "virtiofs", "ro,nofail", "0", "0"],
+      ])
+    let files = try #require(doc["write_files"] as? [[String: String]])
+    let binfmt = try #require(files.first { $0["path"] == RosettaGuest.binfmtFile })
+    #expect(
+      binfmt["content"]
+        == ":rosetta:M::\\x7fELF\\x02\\x01\\x01\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x02\\x00\\x3e\\x00:"
+        + "\\xff\\xff\\xff\\xff\\xff\\xfe\\xfe\\x00\\xff\\xff\\xff\\xff\\xff\\xff\\xff\\xff\\xfe\\xff\\xff\\xff:"
+        + "/mnt/rosetta/rosetta:CF\n")
+    let dropIn = try #require(files.first { $0["path"] == RosettaGuest.binfmtDropIn })
+    #expect(dropIn["content"] == "[Unit]\nRequiresMountsFor=/mnt/rosetta\n")
+    let runcmd = try #require(doc["runcmd"] as? [[String]])
+    #expect(runcmd.contains(["systemctl", "restart", "systemd-binfmt.service"]))
+    #expect(!CloudInit.cloudConfig(Self.base()).contains("rosetta"))
+  }
+
   @Test(.enabled(if: RubyYAML.available)) func segmentNICGetsStaticNetworkConfig() throws {
     var config = Self.base()
     config.segment = SegmentNIC(

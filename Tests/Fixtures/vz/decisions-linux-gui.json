@@ -10,6 +10,9 @@
   },
   "cpus" : 2,
   "entropy" : true,
+  "fileSystems" : [
+
+  ],
   "graphics" : {
     "height" : 800,
     "width" : 1280

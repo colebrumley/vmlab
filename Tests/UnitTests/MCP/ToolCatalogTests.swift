@@ -65,7 +65,9 @@ import VMLabCore
     }
     #expect(
       Set(properties.keys)
-        == ["guest", "require", "prefer", "resources", "network", "image", "boot", "extra"])
+        == [
+          "guest", "require", "prefer", "resources", "network", "image", "boot", "extra", "shares",
+        ])
     guard case .object(let require)? = properties["require"],
       case .object(let items)? = require["items"]
     else {

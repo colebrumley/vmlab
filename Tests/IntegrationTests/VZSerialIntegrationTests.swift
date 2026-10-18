@@ -76,9 +76,10 @@ import VMLabVZ
     var updated = false
     let deadline = ContinuousClock.now + .seconds(420)
     while ContinuousClock.now < deadline, !updated {
-      updated = await Self.ssh(
-        key: dir.appending(path: "id_ed25519"), host: ip,
-        command: "grep -q console=hvc0 /boot/grub/grub.cfg", limit: .seconds(20))
+      updated =
+        await VZGuestSSH.run(
+          key: dir.appending(path: "id_ed25519"), host: ip,
+          command: "grep -q console=hvc0 /boot/grub/grub.cfg", limit: .seconds(20))?.status == 0
       if !updated { try await Task.sleep(for: .seconds(3)) }
     }
     #expect(updated, "cloud-init did not put console=hvc0 in grub.cfg")
@@ -97,30 +98,5 @@ import VMLabVZ
 
     #expect(try await context.manager.perform(.kill, on: created.id)?.state == .stopped)
     #expect(try await context.manager.perform(.destroy, on: created.id) == nil)
-  }
-
-  /// `ssh debian@host command` with the VM's key; true on exit 0. Killed after `limit`.
-  static func ssh(key: URL, host: String, command: String, limit: Duration) async -> Bool {
-    let process = Process()
-    process.executableURL = URL(filePath: "/usr/bin/ssh")
-    process.arguments = [
-      "-i", key.path, "-o", "IdentitiesOnly=yes", "-o", "BatchMode=yes",
-      "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null",
-      "-o", "ConnectTimeout=5", "-o", "LogLevel=ERROR", "debian@\(host)", command,
-    ]
-    process.standardInput = FileHandle.nullDevice
-    process.standardOutput = FileHandle.nullDevice
-    process.standardError = FileHandle.nullDevice
-    guard (try? process.run()) != nil else { return false }
-    let deadline = ContinuousClock.now + limit
-    while process.isRunning, ContinuousClock.now < deadline {
-      try? await Task.sleep(for: .milliseconds(200))
-    }
-    if process.isRunning {
-      process.terminate()
-      process.waitUntilExit()
-      return false
-    }
-    return process.terminationStatus == 0
   }
 }
