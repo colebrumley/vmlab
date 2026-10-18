@@ -509,7 +509,7 @@ list: { segments: [ { name, subnet, members } ] }
 
 ## `fleet`
 
-Run several identical VMs as a group. create makes count members named <name>-1 to <name>-n from one plan of requirements (or image, a template), joins them to segment (auto makes one) and waits for SSH on each; some members may fail and are listed with their error. status reports each member; list shows fleets; exec runs command on every member, or on members, in parallel, with vm_exec's options, and returns each member's result and allSucceeded; destroy removes the fleet and its VMs.
+Run several identical VMs as a group. create makes count members named <name>-1 to <name>-n from one plan of requirements (or image, a template), joins them to segment (auto makes one) and waits for SSH on each; some members may fail and are listed with their error. status reports each member; list shows fleets; exec runs command on every member, or on members, in parallel, with vm_exec's options, and returns each member's result and allSucceeded; destroy removes the fleet and its VMs, keeping (and listing in failed) any member it could not destroy, such as one whose disk backs another VM.
 
 **Errors:** `invalid_request`, `unsatisfiable`, `unverified_capability`, `limit_macos_guests`, `limit_memory`, `image_not_found`, `vm_not_found`, `timeout`, `wrong_state`
 
@@ -539,7 +539,8 @@ Run several identical VMs as a group. create makes count members named <name>-1 
 create, status: { name, segment, subnet, members: [ { vm, id, state, ip?, natIP?,
   forwards?: [ { guest, host, hostReachable } ], error? } ] }
 list: { fleets: [ { name, members } ] }
-exec: { results: { <member>: ExecResult }, allSucceeded }; destroy: { destroyed: [vm] }
+exec: { results: { <member>: ExecResult }, allSucceeded }
+destroy: { destroyed: [vm], failed: [ { vm, id, error } ] }
 ```
 
 ## Requirements

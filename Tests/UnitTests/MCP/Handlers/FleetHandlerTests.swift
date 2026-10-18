@@ -167,6 +167,35 @@ import VMLabCore
     #expect(FleetPlanning.memberNames("x", count: Int.max).count == FleetPlanning.maxMembers)
   }
 
+  /// CX-6: destroy never forces: a member whose disk backs a VM outside the fleet is kept and
+  /// reported with its refusal; the clone still boots. Once the clone is gone, destroy finishes.
+  @Test func destroyKeepsAMemberAnOutsideCloneReadsAndSaysWhy() async throws {
+    let f = try Fixture()
+    defer { f.cleanUp() }
+    _ = try await f.call([
+      "action": .string("create"), "name": .string("node"), "count": .number(2),
+      "requirements": VMCreateHandlerTests.Fixture.requirements, "allowUnverified": .bool(true),
+    ])
+    try await f.context.manager.perform(.stop, on: "node-1")
+    let outside = try await f.context.manager.clone("node-1", name: "outside")
+    let result = try await ToolHandlers.call(
+      "fleet", arguments: .object(["action": .string("destroy"), "name": .string("node")]),
+      context: f.context)
+    #expect(result.value["destroyed"] == .array([.string("node-2")]))
+    let failed = try #require(result.value["failed"]?.arrayValue)
+    #expect(failed.map { $0["vm"] } == [.string("node-1")])
+    #expect(failed.first?["error"]?["data"]?["field"] == .string("force"))
+    #expect(result.warnings.contains { $0.contains("node-1") })
+    #expect(try f.context.store.find("node-1").name == "node-1")
+    #expect(try f.context.store.find(outside.id).name == "outside")
+
+    try await f.context.manager.perform(.destroy, on: outside.id)
+    let rest = try await f.call(["action": .string("destroy"), "name": .string("node")])
+    #expect(rest["destroyed"] == .array([.string("node-1")]))
+    #expect(rest["failed"] == .array([]))
+    #expect(try f.context.store.list().records.isEmpty)
+  }
+
   @Test func netSegmentCreateListDestroy() async throws {
     let f = try Fixture()
     defer { f.cleanUp() }

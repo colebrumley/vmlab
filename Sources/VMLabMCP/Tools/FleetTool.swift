@@ -9,7 +9,8 @@ extension ToolSpec {
       + "(auto makes one) and waits for SSH on each; some members may fail and are listed with "
       + "their error. status reports each member; list shows fleets; exec runs command on every "
       + "member, or on members, in parallel, with vm_exec's options, and returns each member's result "
-      + "and allSucceeded; destroy removes the fleet and its VMs.",
+      + "and allSucceeded; destroy removes the fleet and its VMs, keeping (and listing in failed) any "
+      + "member it could not destroy, such as one whose disk backs another VM.",
     inputSchema: Schema.input(
       [
         "action": Schema.action(["create", "list", "status", "exec", "destroy"], "What to do."),
@@ -37,7 +38,8 @@ extension ToolSpec {
       create, status: { name, segment, subnet, members: [ { vm, id, state, ip?, natIP?,
         forwards?: [ { guest, host, hostReachable } ], error? } ] }
       list: { fleets: [ { name, members } ] }
-      exec: { results: { <member>: ExecResult }, allSucceeded }; destroy: { destroyed: [vm] }
+      exec: { results: { <member>: ExecResult }, allSucceeded }
+      destroy: { destroyed: [vm], failed: [ { vm, id, error } ] }
       """,
     errors: [
       .invalidRequest, .unsatisfiable, .unverifiedCapability, .limitMacOSGuests, .limitMemory,
