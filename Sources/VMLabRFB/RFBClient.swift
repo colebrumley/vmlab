@@ -127,7 +127,7 @@ public actor RFBClient {
       throw RFBError.protocolViolation("desktop name of \(nameLength) bytes")
     }
     let name = String(decoding: try await io.bytes(nameLength), as: UTF8.self)
-    guard width <= Framebuffer.maxEdge, height <= Framebuffer.maxEdge else {
+    guard Framebuffer.accepts(width: width, height: height) else {
       throw RFBError.protocolViolation("framebuffer \(width)x\(height) too large")
     }
 
@@ -270,14 +270,15 @@ public actor RFBClient {
   /// The current screen.
   public func snapshot() throws -> CGImage { try framebuffer.cgImage() }
 
-  private enum Pending {
-    case raw(x: Int, y: Int, w: Int, h: Int, data: [UInt8])
-    case copy(srcX: Int, srcY: Int, x: Int, y: Int, w: Int, h: Int)
-    case resize(w: Int, h: Int)
-  }
+  /// How many times one update's Raw data may cover the screen (the largest size it had during
+  /// the update); more is a protocol violation. Real servers send each pixel at most once.
+  public static let maxScreenCoveragePerUpdate = 8
+  /// Raw rectangles are read and applied this many bytes at a time, at most.
+  static let rawChunkBytes = 1 << 20
 
-  /// Reads and applies one server message. A framebuffer update is applied atomically, after all
-  /// its rectangles have arrived, so `snapshot()` never sees half of one.
+  /// Reads and applies one server message. A framebuffer update is applied to a working copy as
+  /// each rectangle arrives and replaces the screen when the last one has, so `snapshot()` never
+  /// sees half of one and memory stays within two screens and one read chunk.
   @discardableResult
   public func processNextMessage() async throws -> ServerMessage {
     let io = Reader(transport, peer: peer)
@@ -286,13 +287,10 @@ public actor RFBClient {
     case 0:
       _ = try await io.bytes(1)
       let count = Int(try await io.u16())
-      var ops: [Pending] = []
-      // Bounds are checked against the size the framebuffer will have when the op is applied.
-      var width = framebuffer.width
-      var height = framebuffer.height
-      func inside(_ x: Int, _ y: Int, _ w: Int, _ h: Int) -> Bool {
-        x + w <= width && y + h <= height
-      }
+      var working = framebuffer
+      var resized = false
+      var largestArea = working.width * working.height
+      var rawBytes = 0
       for _ in 0..<count {
         let x = Int(try await io.u16())
         let y = Int(try await io.u16())
@@ -301,37 +299,38 @@ public actor RFBClient {
         let encoding = Int32(bitPattern: try await io.u32())
         switch Encoding(rawValue: encoding) {
         case .raw:
-          guard inside(x, y, w, h) else { throw outOfBounds("Raw", x, y, w, h, width, height) }
-          ops.append(.raw(x: x, y: y, w: w, h: h, data: try await io.bytes(w * h * 4)))
+          guard working.contains(x: x, y: y, width: w, height: h) else {
+            throw outOfBounds("Raw", x, y, w, h, working.width, working.height)
+          }
+          rawBytes += w * h * 4
+          guard rawBytes <= Self.maxScreenCoveragePerUpdate * largestArea * 4 else {
+            throw RFBError.protocolViolation(
+              "update carries \(rawBytes) bytes of Raw data for a \(working.width)x"
+                + "\(working.height) screen")
+          }
+          try await readRaw(into: &working, x: x, y: y, w: w, h: h, io: io)
         case .copyRect:
           let srcX = Int(try await io.u16())
           let srcY = Int(try await io.u16())
-          guard inside(x, y, w, h), inside(srcX, srcY, w, h) else {
-            throw outOfBounds("CopyRect", x, y, w, h, width, height)
+          guard working.contains(x: x, y: y, width: w, height: h),
+            working.contains(x: srcX, y: srcY, width: w, height: h)
+          else {
+            throw outOfBounds("CopyRect", x, y, w, h, working.width, working.height)
           }
-          ops.append(.copy(srcX: srcX, srcY: srcY, x: x, y: y, w: w, h: h))
+          working.copyRect(srcX: srcX, srcY: srcY, x: x, y: y, width: w, height: h)
         case .desktopSize:
-          guard w > 0, h > 0, w <= Framebuffer.maxEdge, h <= Framebuffer.maxEdge else {
+          guard w > 0, h > 0, Framebuffer.accepts(width: w, height: h) else {
             throw RFBError.protocolViolation("DesktopSize \(w)x\(h)")
           }
-          width = w
-          height = h
-          ops.append(.resize(w: w, h: h))
+          working = Framebuffer(width: w, height: h)
+          largestArea = max(largestArea, w * h)
+          resized = true
         case nil:
           throw RFBError.protocolViolation("unrequested encoding \(encoding)")
         }
       }
-      for op in ops {
-        switch op {
-        case .raw(let x, let y, let w, let h, let data):
-          framebuffer.applyRaw(x: x, y: y, width: w, height: h, data: data)
-        case .copy(let srcX, let srcY, let x, let y, let w, let h):
-          framebuffer.copyRect(srcX: srcX, srcY: srcY, x: x, y: y, width: w, height: h)
-        case .resize(let w, let h):
-          framebuffer.resize(width: w, height: h)
-          needsFullUpdate = true
-        }
-      }
+      framebuffer = working
+      if resized { needsFullUpdate = true }
       updateCount += 1
       let ready = waiters.filter { $0.target <= updateCount }
       waiters.removeAll { $0.target <= updateCount }
@@ -354,6 +353,22 @@ public actor RFBClient {
       return .serverCutText(String(decoding: text, as: UTF8.self))
     default:
       throw RFBError.protocolViolation("unknown server message type \(type)")
+    }
+  }
+
+  /// Reads a w × h Raw rectangle's pixels a chunk of rows at a time into `fb`.
+  private func readRaw(
+    into fb: inout Framebuffer, x: Int, y: Int, w: Int, h: Int, io: Reader
+  ) async throws {
+    let rowBytes = w * 4
+    guard rowBytes > 0, h > 0 else { return }
+    let rowsPerChunk = max(1, Self.rawChunkBytes / rowBytes)
+    var row = 0
+    while row < h {
+      let rows = min(rowsPerChunk, h - row)
+      let data = try await io.bytes(rows * rowBytes)
+      fb.applyRaw(x: x, y: y + row, width: w, height: rows, data: data)
+      row += rows
     }
   }
 

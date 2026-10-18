@@ -272,8 +272,12 @@ gives both engines a screen to look at and click on. `RFBClient` (an actor) spea
 `RFBTransport`: `SocketTransport` for a unix or TCP socket, `ReplayTransport` for recorded fixture
 streams. It negotiates security None or VNC Authentication (`VNCAuth`, DES via CommonCrypto), sets
 32-bit BGRX, requests Raw, CopyRect and DesktopSize, and a background loop of incremental update
-requests keeps a `Framebuffer` current; `snapshot()` returns a `CGImage` and `Framebuffer.pngData`
-encodes PNG with ImageIO. Input (`RFBInput.swift`, `Keysym.swift`): `pointer(x:y:buttons:)` with a
+requests keeps a `Framebuffer` current; `snapshot()` returns a `CGImage` (reading the pixels in
+place) and `Framebuffer.pngData` encodes PNG with ImageIO. The guest is untrusted: a screen is at
+most `Framebuffer.maxEdge` (8192) a side and `maxPixels` (2^25) in all, an update's rectangles are
+applied to a working copy as they arrive (Raw in 1 MiB chunks) and swapped in at the end, and its
+Raw data may cover the screen at most `maxScreenCoveragePerUpdate` (8) times; past any of these the
+error is `protocolViolation` (`engine_error`). Input (`RFBInput.swift`, `Keysym.swift`): `pointer(x:y:buttons:)` with a
 `PointerButtons` mask, `key(_:down:)`, `press(_:)` for a `KeyChord` parsed from `cmd+shift+4`-style
 text (`cmd` is `Super_L`), and `type(_:gap:)`, which strikes each character with Shift where a US
 layout needs it, 10 ms apart; with a `hold`, `press` and `type` send each key event on its own,
