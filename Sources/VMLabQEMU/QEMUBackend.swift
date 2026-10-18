@@ -217,12 +217,44 @@ public final class QEMUBackend: Backend {
         await store.recordEngineExit(id: id, pid: pid, reason: Self.shutdownReason(event))
       }
     }
-    await machine.qmp.watchPeer { [weak self] reason in
-      self?.machines.withLock { cached in
-        if cached[id] === machine { cached[id] = nil }
-      }
-      await store.markBroken(id: id, reason: "qmp: \(reason)")
+    let layout = machine.layout
+    await machine.qmp.watchPeer(
+      onDead: { [weak self] reason in
+        self?.machines.withLock { cached in
+          if cached[id] === machine { cached[id] = nil }
+        }
+        await store.markBroken(id: id, reason: "qmp: \(reason)")
+      },
+      onClosed: { [weak self] in
+        // CX-15: QEMU closed its monitor (SIGKILL, a crash, an exit after SHUTDOWN).
+        self?.machines.withLock { cached in
+          if cached[id] === machine { cached[id] = nil }
+        }
+        await Self.recordHangUp(
+          store: store, id: id, pid: pid, isAlive: { QEMUMachine.isAlive($0, in: layout) })
+      })
+  }
+
+  /// QEMU closed the QMP connection: once the process is gone (up to `exitWait`) the VM is
+  /// `stopped` (`Store.recordEngineExit`, a no-op when a `SHUTDOWN` or an action recorded it
+  /// first); a QEMU still there after that is `broken`, since it no longer serves its monitor.
+  static func recordHangUp(
+    store: Store, id: String, pid: Int32, isAlive: @Sendable (Int32) -> Bool,
+    exitWait: Duration = .seconds(10), settle: Duration = .milliseconds(500)
+  ) async {
+    let deadline = ContinuousClock.now + exitWait
+    while isAlive(pid), ContinuousClock.now < deadline {
+      try? await Task.sleep(for: .milliseconds(100))
     }
+    guard !isAlive(pid) else {
+      await store.markBroken(
+        id: id, reason: "qmp: QEMU (pid \(pid)) closed its monitor connection but still runs")
+      return
+    }
+    // A SHUTDOWN seen just before names the cause better; let it record first.
+    try? await Task.sleep(for: settle)
+    await store.recordEngineExit(
+      id: id, pid: pid, reason: "QEMU (pid \(pid)) exited; its QMP connection closed")
   }
 
   /// Appends every QMP event `QMPEventLogging` logs to `log` while this connection holds the

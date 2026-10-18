@@ -36,4 +36,31 @@ import VMLabCore
     try await Task.sleep(for: .milliseconds(200))
     #expect(bystander.isRunning, "vmlab SIGKILLed /bin/sleep, which it never started")
   }
+
+  /// CX-15: after QEMU's monitor closes, an exited QEMU leaves the VM stopped with no runtime;
+  /// one still running is broken.
+  @Test func aMonitorHangUpRecordsTheExitOrBreaksTheVM() async throws {
+    let home = FileManager.default.temporaryDirectory.appending(path: "vmlab-qh-\(UUID())")
+    defer { try? FileManager.default.removeItem(at: home) }
+    let store = Store(home: home)
+    var draft = Self.record(state: .running)
+    draft.id = ""
+    draft.runtime = VMRuntime(pid: 4242, controlSocket: "/tmp/x.sock")
+    draft.name = "gone"
+    let gone = try store.create(draft)
+    draft.name = "hung"
+    let hung = try store.create(draft)
+
+    await QEMUBackend.recordHangUp(
+      store: store, id: gone.id, pid: 4242, isAlive: { _ in false }, settle: .zero)
+    let stopped = try store.load(id: gone.id)
+    #expect(stopped.state == .stopped)
+    #expect(stopped.runtime == nil)
+
+    await QEMUBackend.recordHangUp(
+      store: store, id: hung.id, pid: 4242, isAlive: { _ in true }, exitWait: .milliseconds(50))
+    let broken = try store.load(id: hung.id)
+    #expect(broken.state == .broken)
+    #expect(broken.brokenReason?.contains("closed its monitor") == true)
+  }
 }

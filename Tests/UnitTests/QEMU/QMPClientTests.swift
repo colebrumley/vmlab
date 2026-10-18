@@ -258,6 +258,9 @@ actor MutableQMPTransport: QMPTransport {
 
   func mute() { muted = true }
 
+  /// The peer closes the connection (QEMU exited): the stream ends, nothing was closed here.
+  func hangUp() { sink.finish() }
+
   func send(_ line: Data) async throws {
     let message = try JSONDecoder().decode([String: JSONValue].self, from: line)
     received.append(message["execute"]?.stringValue ?? "?")
@@ -336,6 +339,50 @@ actor MutableQMPTransport: QMPTransport {
     }
     #expect(await client.deadPeerReason != nil)
   }
+}
+
+/// CX-15: QEMU exiting (SIGKILL, a crash) only ends the QMP stream; nothing recorded the VM's
+/// exit until the next restart. A hang-up now reaches `onClosed`, once, and a close from this side
+/// never does.
+@Suite struct QMPHangUpTests {
+  @Test func aPeerHangUpCallsOnClosedOnce() async throws {
+    let transport = MutableQMPTransport()
+    let client = try await QMPClient.handshake(over: transport, timeout: .seconds(2))
+    let calls = Counter()
+    await client.watchPeer(
+      window: .seconds(5), interval: .milliseconds(40), onClosed: { await calls.bump() })
+    await transport.hangUp()
+    let deadline = ContinuousClock.now + .seconds(10)
+    while await calls.value == 0, ContinuousClock.now < deadline {
+      try await Task.sleep(for: .milliseconds(20))
+    }
+    #expect(await calls.value == 1)
+    #expect(await client.peerHungUp)
+    #expect(await client.isConnected == false)
+    // Watching a client whose peer already left reports it at once.
+    await client.watchPeer(onClosed: { await calls.bump() })
+    while await calls.value == 1, ContinuousClock.now < deadline {
+      try await Task.sleep(for: .milliseconds(20))
+    }
+    #expect(await calls.value == 2)
+  }
+
+  @Test func closingFromThisSideIsNoHangUp() async throws {
+    let transport = MutableQMPTransport()
+    let client = try await QMPClient.handshake(over: transport, timeout: .seconds(2))
+    let calls = Counter()
+    await client.watchPeer(
+      window: .seconds(5), interval: .milliseconds(40), onClosed: { await calls.bump() })
+    await client.close()
+    try await Task.sleep(for: .milliseconds(200))
+    #expect(await calls.value == 0)
+    #expect(await client.peerHungUp == false)
+  }
+}
+
+actor Counter {
+  private(set) var value = 0
+  func bump() { value += 1 }
 }
 
 actor Reported {

@@ -62,6 +62,12 @@ public actor QMPClient {
   private var watchdog: Task<Void, Never>?
   /// Why the peer was declared dead, once it was; the connection is closed from then on.
   public private(set) var deadPeerReason: String?
+  /// This side closed the connection (`close()` or a dead peer), so its end is no hang-up.
+  private var closing = false
+  /// Called once when the peer closes the connection by itself (CX-15: QEMU exited).
+  private var onPeerClosed: (@Sendable () async -> Void)?
+  /// The peer closed the connection (end of stream) without this side closing it first.
+  public private(set) var peerHungUp = false
 
   /// Commands QEMU runs synchronously for a long time (it answers nothing meanwhile), each given
   /// its own timeout; dead-peer detection pauses while one is outstanding.
@@ -178,6 +184,8 @@ public actor QMPClient {
 
   /// Closes the connection. Pending commands fail with `guest_unreachable`; event streams end.
   public func close() async {
+    closing = true
+    onPeerClosed = nil
     watchdog?.cancel()
     await transport.close()
     readerTask?.cancel()
@@ -190,11 +198,19 @@ public actor QMPClient {
   /// peer that owes an answer (to a probe or any command but `longRunningCommands`) and has sent
   /// nothing for `window` is dead. Then every pending command fails with `DeadPeer.error`
   /// (`guest_unreachable`, `data.deadPeer`), the connection closes, and `onDead` gets the reason.
+  /// A peer that closes the connection itself (QEMU exited) calls `onClosed` once instead,
+  /// also when it already had before this call.
   public func watchPeer(
     window: Duration = DeadPeer.window, interval: Duration = DeadPeer.probeInterval,
-    onDead: @escaping @Sendable (String) async -> Void = { _ in }
+    onDead: @escaping @Sendable (String) async -> Void = { _ in },
+    onClosed: @escaping @Sendable () async -> Void = {}
   ) {
+    if peerHungUp {
+      Task { await onClosed() }
+      return
+    }
     guard watchdog == nil, !closed else { return }
+    onPeerClosed = onClosed
     peer.received()
     watchdog = Task { [weak self] in
       while !Task.isCancelled {
@@ -232,6 +248,8 @@ public actor QMPClient {
   }
 
   private func declareDead(_ reason: String) async {
+    closing = true
+    onPeerClosed = nil
     deadPeerReason = reason
     watchdog?.cancel()
     finish()
@@ -245,8 +263,20 @@ public actor QMPClient {
     let lines = transport.lines
     readerTask = Task { [weak self] in
       for await line in lines { await self?.handle(line) }
-      await self?.finish()
+      await self?.endOfStream()
     }
+  }
+
+  /// The stream ended: a hang-up by the peer unless this side was closing it.
+  private func endOfStream() async {
+    let hungUp = !closing && !closed
+    finish()
+    guard hungUp else { return }
+    peerHungUp = true
+    watchdog?.cancel()
+    let handler = onPeerClosed
+    onPeerClosed = nil
+    await handler?()
   }
 
   private func waitForGreeting(timeout: Duration) async throws -> QMPGreeting {
