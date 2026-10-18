@@ -29,7 +29,7 @@ extension QEMUBackend {
         hint: "Start the VM once (vm_lifecycle start) so its disk exists, or create a new VM.",
         data: ["vm": .string(source.id), "state": .string(source.state.rawValue)])
     }
-    let live = QEMUMachine.readPID(from).map(QEMUMachine.isAlive) ?? false
+    let live = QEMUMachine.readPID(from).map { QEMUMachine.isAlive($0, in: from) } ?? false
     let directory = from.directory.appending(path: Self.backingDirectory)
     do {
       try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

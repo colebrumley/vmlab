@@ -5,6 +5,30 @@ import VMLabCore
 @testable import VMLabVZ
 
 @Suite struct VZBackendTests {
+  /// BH-3: a `vz.pid` left by a runner that died names whatever process later got that pid;
+  /// kill and destroy must not SIGKILL it, nor wait for it to exit.
+  @Test func killDoesNotSignalANonRunnerProcessFromAStalePidFile() async throws {
+    let home = FileManager.default.temporaryDirectory.appending(path: "vmlab-vzk-\(UUID())")
+    defer { try? FileManager.default.removeItem(at: home) }
+    let store = Store(home: home)
+    let record = try store.create(
+      VMRecord(
+        id: "", profile: .vzLinux, guest: GuestSpec(os: .linux, arch: .arm64), features: [],
+        state: .broken))
+    let bystander = Process()
+    bystander.executableURL = URL(filePath: "/bin/sleep")
+    bystander.arguments = ["30"]
+    try bystander.run()
+    defer { if bystander.isRunning { bystander.terminate() } }
+    let backend = VZBackend(store: store)
+    try "\(bystander.processIdentifier)\n".write(
+      to: backend.paths(record).pidFile, atomically: true, encoding: .utf8)
+    try await backend.kill(record)
+    try await backend.destroy(record)
+    try await Task.sleep(for: .milliseconds(200))
+    #expect(bystander.isRunning, "vmlab SIGKILLed /bin/sleep, which it never started")
+  }
+
   static let tools =
     FileManager.default.isExecutableFile(atPath: "/usr/bin/ssh-keygen")
     && FileManager.default.isExecutableFile(atPath: "/usr/bin/hdiutil")

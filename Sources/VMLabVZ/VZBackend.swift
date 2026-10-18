@@ -217,7 +217,8 @@ public struct VZBackend: Backend {
     do {
       try await client.kill()
     } catch  where error.code == .guestUnreachable || error.code == .timeout {
-      if pid > 0 { Foundation.kill(pid, SIGKILL) }
+      // BH-3: only a pid that is still this VM's runner, not one a stale vz.pid names.
+      EngineProcess.kill(pid, vmDirectory: store.directory(of: record.id))
     }
     try await waitForExit(pid, within: .seconds(15), record: record, action: "kill")
     await serialChannels.drop(record.id)
@@ -234,8 +235,8 @@ public struct VZBackend: Backend {
   /// Ends a runner that is somehow still there; the manager removes the directory.
   public func destroy(_ record: VMRecord) async throws(VMLabError) {
     let (client, pid) = target(record)
-    if (try? await client.exit()) == nil, pid > 0, LivenessProbe.processExists(pid) {
-      Foundation.kill(pid, SIGKILL)
+    if (try? await client.exit()) == nil {
+      EngineProcess.kill(pid, vmDirectory: store.directory(of: record.id))
     }
     await serialChannels.drop(record.id)
   }
@@ -270,7 +271,8 @@ public struct VZBackend: Backend {
     guard pid > 0 else { return }
     let clock = ContinuousClock()
     let deadline = clock.now.advanced(by: limit)
-    while LivenessProbe.processExists(pid) {
+    let directory = store.directory(of: record.id)
+    while EngineProcess.isRunning(pid, vmDirectory: directory) {
       if clock.now >= deadline {
         throw VMLabError(
           code: .timeout,

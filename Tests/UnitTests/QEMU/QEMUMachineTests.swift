@@ -134,3 +134,36 @@ final class HeldMonitor: Sendable {
         == "QEMU shut down (QMP SHUTDOWN)")
   }
 }
+
+@Suite struct QEMUMachineStalePIDTests {
+  /// BH-3: a stale pid file naming a live non-QEMU process made every start refuse with
+  /// `wrong_state` ("A QEMU process already runs this VM"), though reconcile said stopped.
+  @Test func launchIsNotRefusedByAStalePidFileNamingANonQEMUProcess() async throws {
+    // Short, so the socket paths pass `QEMULayout.validate()` and the pid check is reached.
+    let home = URL(filePath: "/tmp/vmlab-sp-\(getpid())")
+    try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: home) }
+    let layout = QEMULayout(vmDirectory: home.appending(path: "vms/vm-bh"))
+    try FileManager.default.createDirectory(at: layout.directory, withIntermediateDirectories: true)
+    try "\(getpid())\n".write(to: layout.pidFile, atomically: true, encoding: .utf8)
+    let record = VMRecord(
+      id: "vm-bh", profile: .qemuHVF, guest: GuestSpec(os: .linux, arch: .arm64),
+      features: [.serial], state: .stopped)
+    let plan = Plan(
+      profile: .qemuHVF, guest: record.guest, resources: record.resources,
+      features: record.features, estimatedStartupSeconds: 1)
+    let request = QEMULaunchRequest(
+      record: record, plan: plan, layout: layout, baseImage: nil,
+      boot: BootSpec(mode: .kernel, kernel: "/nonexistent"),
+      installation: QEMUInstallation(
+        binDirectory: home.appending(path: "bin"), shareDirectory: home.appending(path: "share")))
+    do {
+      _ = try await QEMUMachine.launch(request)
+      Issue.record("launch unexpectedly succeeded")
+    } catch let error as VMLabError {
+      // Any error but wrong_state: the launch got past the pid check (and failed on the missing
+      // QEMU binary of this fake installation).
+      #expect(error.code != .wrongState, "\(error.message)")
+    }
+  }
+}

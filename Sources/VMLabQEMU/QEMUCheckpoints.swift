@@ -28,7 +28,7 @@ public struct QEMUCheckpoints: CheckpointProvider {
   /// Whether a QEMU process runs this guest now (running or paused).
   var isLive: Bool {
     guard let pid = QEMUMachine.readPID(layout) else { return false }
-    return QEMUMachine.isAlive(pid)
+    return QEMUMachine.isAlive(pid, in: layout)
   }
 
   public func create(id: String, mode: CheckpointMode) async throws(VMLabError) {

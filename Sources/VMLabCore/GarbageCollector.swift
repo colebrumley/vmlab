@@ -90,11 +90,8 @@ public struct ProcessInspector: Sendable {
 /// (the test homes) collects none.
 public struct GarbageCollector: Sendable {
   public static let pidFiles = ["qemu.pid", "vz.pid"]
-  /// The executables an engine pid file may name: QEMU's system emulators and the VZ runner.
-  public static func isEngine(_ path: String) -> Bool {
-    let name = URL(filePath: path).lastPathComponent
-    return name.hasPrefix("qemu-system-") || name == "vmlab-vz"
-  }
+  /// The executables an engine pid file may name (`EngineProcess.isEngine`).
+  public static func isEngine(_ path: String) -> Bool { EngineProcess.isEngine(path) }
 
   public let manager: VMManager
   public var maxAge: Duration = .seconds(7 * 24 * 3600)

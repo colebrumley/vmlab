@@ -65,8 +65,9 @@ public final class QEMUBackend: Backend {
   /// ACPI power button, then up to `grace` (default 60 s, Appendix G) for QEMU to exit.
   public func stop(_ record: VMRecord, grace: Duration?) async throws(VMLabError) {
     // A guest whose process is already gone is stopped.
-    guard let pid = QEMUMachine.readPID(layout(of: record.id)) ?? record.runtime?.pid,
-      QEMUMachine.isAlive(pid)
+    let layout = layout(of: record.id)
+    guard let pid = QEMUMachine.readPID(layout) ?? record.runtime?.pid,
+      QEMUMachine.isAlive(pid, in: layout)
     else {
       if let machine = machines.withLock({ $0.removeValue(forKey: record.id) }) {
         await machine.disconnect()
@@ -84,12 +85,14 @@ public final class QEMUBackend: Backend {
       if let machine = machines.withLock({ $0.removeValue(forKey: record.id) }) {
         await machine.disconnect()
       }
-      if let pid = QEMUMachine.readPID(layout(of: record.id)) ?? record.runtime?.pid,
-        QEMUMachine.isAlive(pid)
+      // BH-3: only a pid that is still this VM's QEMU is signalled, not one a stale pid file
+      // names after the pid was reused.
+      let layout = layout(of: record.id)
+      if let pid = QEMUMachine.readPID(layout) ?? record.runtime?.pid,
+        EngineProcess.kill(pid, vmDirectory: layout.directory)
       {
-        Darwin.kill(pid, SIGKILL)
         let deadline = ContinuousClock.now + .seconds(5)
-        while QEMUMachine.isAlive(pid), ContinuousClock.now < deadline {
+        while QEMUMachine.isAlive(pid, in: layout), ContinuousClock.now < deadline {
           try? await Task.sleep(for: .milliseconds(50))
         }
       }
@@ -97,10 +100,8 @@ public final class QEMUBackend: Backend {
     }
     if let machine = try? await machine(for: record) {
       await machine.kill()
-    } else if let pid = record.runtime?.pid ?? QEMUMachine.readPID(layout(of: record.id)),
-      QEMUMachine.isAlive(pid)
-    {
-      Darwin.kill(pid, SIGKILL)
+    } else if let pid = record.runtime?.pid ?? QEMUMachine.readPID(layout(of: record.id)) {
+      EngineProcess.kill(pid, vmDirectory: layout(of: record.id).directory)
     }
     machines.withLock { _ = $0.removeValue(forKey: record.id) }
   }
@@ -206,10 +207,10 @@ public final class QEMUBackend: Backend {
         // QEMU exits after the guest powers off (no -no-shutdown): record it now, not at the
         // next reconcile.
         let deadline = ContinuousClock.now + .seconds(10)
-        while QEMUMachine.isAlive(pid), ContinuousClock.now < deadline {
+        while QEMUMachine.isAlive(pid, in: machine.layout), ContinuousClock.now < deadline {
           try? await Task.sleep(for: .milliseconds(100))
         }
-        guard !QEMUMachine.isAlive(pid) else { return }
+        guard !QEMUMachine.isAlive(pid, in: machine.layout) else { return }
         self?.machines.withLock { cached in
           if cached[id] === machine { cached[id] = nil }
         }

@@ -155,7 +155,7 @@ public actor QEMUMachine {
   ) async throws -> QEMUMachine {
     let layout = request.layout
     try layout.validate()
-    if let pid = readPID(layout), isAlive(pid) {
+    if let pid = readPID(layout), isAlive(pid, in: layout) {
       throw VMLabError(
         code: .wrongState, message: "A QEMU process (pid \(pid)) already runs this VM.",
         hint: "Stop the VM first, or reconnect to it.",
@@ -214,7 +214,7 @@ public actor QEMUMachine {
     layout: QEMULayout, gdbPort: Int? = nil, sshPort: Int? = nil, forwards: [PortForward]? = nil,
     connectTimeout: Duration = .seconds(5)
   ) async throws -> QEMUMachine {
-    guard let pid = readPID(layout), isAlive(pid) else {
+    guard let pid = readPID(layout), isAlive(pid, in: layout) else {
       throw VMLabError(
         code: .guestUnreachable, message: "No QEMU process runs in \(layout.directory.path).",
         hint: "Start the VM.", data: ["tried": .string(layout.pidFile.path)])
@@ -293,7 +293,7 @@ public actor QEMUMachine {
   public func status() async throws -> QMPStatus { try await qmp.queryStatus() }
 
   /// Whether the QEMU process still exists.
-  public nonisolated var isRunning: Bool { Self.isAlive(pid) }
+  public nonisolated var isRunning: Bool { Self.isAlive(pid, in: layout) }
 
   /// Sends `system_powerdown` (ACPI power button) and waits for the process to exit. Throws
   /// `timeout` when the guest has not shut down within `timeout`; the process is left running so
@@ -315,7 +315,7 @@ public actor QEMUMachine {
       _ = try? await qmp.execute("quit", timeout: .seconds(2))
     }
     if !(await waitForExit(timeout: .seconds(1))) {
-      Darwin.kill(pid, SIGKILL)
+      EngineProcess.kill(pid, vmDirectory: layout.directory)
       _ = await waitForExit(timeout: .seconds(5))
     }
     await disconnect()
@@ -324,7 +324,7 @@ public actor QEMUMachine {
   /// Polls until the process is gone; false at `timeout`.
   public func waitForExit(timeout: Duration) async -> Bool {
     let deadline = ContinuousClock.now + timeout
-    while Self.isAlive(pid) {
+    while Self.isAlive(pid, in: layout) {
       guard ContinuousClock.now < deadline else { return false }
       try? await Task.sleep(for: .milliseconds(100))
     }
@@ -365,8 +365,10 @@ public actor QEMUMachine {
     return Int32(text.trimmingCharacters(in: .whitespacesAndNewlines))
   }
 
-  static func isAlive(_ pid: Int32) -> Bool {
-    pid > 0 && (Darwin.kill(pid, 0) == 0 || errno == EPERM)
+  /// Whether `pid` is a live QEMU (or VZ runner) process, running the VM in `layout` when given:
+  /// a stale pid file naming a reused pid is not (BH-3, `EngineProcess`).
+  static func isAlive(_ pid: Int32, in layout: QEMULayout? = nil) -> Bool {
+    EngineProcess.isRunning(pid, vmDirectory: layout?.directory)
   }
 
   /// Runs QEMU, whose foreground parent exits once the daemon is initialised (or has failed).
