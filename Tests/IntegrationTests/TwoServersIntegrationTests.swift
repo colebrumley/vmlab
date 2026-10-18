@@ -159,6 +159,8 @@ final class StdioMCPClient: Sendable {
     var isError: Bool
     var text: String
     var value: JSONValue
+    /// How many image blocks followed the text (vm_computer).
+    var images: Int = 0
   }
 
   let process: Process
@@ -169,7 +171,8 @@ final class StdioMCPClient: Sendable {
   }
   private let box = State()
 
-  init(binary: URL, home: URL, tag: String) throws {
+  /// `stderr`: a file for the server's log (default: discarded).
+  init(binary: URL, home: URL, tag: String, stderr: URL? = nil) throws {
     process = Process()
     process.executableURL = binary
     process.arguments = ["serve"]
@@ -180,9 +183,9 @@ final class StdioMCPClient: Sendable {
     let stdout = Pipe()
     process.standardInput = stdin
     process.standardOutput = stdout
+    if let stderr { FileManager.default.createFile(atPath: stderr.path, contents: nil) }
     process.standardError =
-      FileHandle(
-        forWritingAtPath: "/dev/null") ?? FileHandle.standardError
+      FileHandle(forWritingAtPath: stderr?.path ?? "/dev/null") ?? FileHandle.standardError
     input = stdin.fileHandleForWriting
     try process.run()
     let reader = stdout.fileHandleForReading
@@ -256,7 +259,9 @@ final class StdioMCPClient: Sendable {
     let result = reply["result"] ?? .null
     let text = result["content"]?.arrayValue?.first?["text"]?.stringValue ?? "\(reply)"
     let value = (try? JSONDecoder().decode(JSONValue.self, from: Data(text.utf8))) ?? .null
-    return Result(isError: result["isError"] == .bool(true), text: text, value: value)
+    let images = result["content"]?.arrayValue?.filter { $0["type"] == "image" }.count ?? 0
+    return Result(
+      isError: result["isError"] == .bool(true), text: text, value: value, images: images)
   }
 
   func terminate() {
