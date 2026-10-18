@@ -3,7 +3,8 @@ import VMLabCore
 
 /// `vm_file`: copies between the host and a running guest over the VM's SSH channel (R-404),
 /// recursively, with `scp` in SFTP mode. `push` needs `local`; `pull` without `local` lands in
-/// `<vm>/pulled/`. Host paths must be absolute. A heartbeat is reported while the copy runs.
+/// `<vm>/pulled/`. Host paths must be absolute and pass the `PathPolicy` (R-1102: under the user's
+/// home or `/tmp` unless `allowAnyPath`). A heartbeat is reported while the copy runs.
 struct VMFileHandler: ToolHandler {
   var spec: ToolSpec { .vmFile }
 
@@ -17,7 +18,8 @@ struct VMFileHandler: ToolHandler {
         field: "action", reason: "action must be push or pull", hint: "Pick push or pull.")
     }
     let remote = try arguments.string("remote") ?? ""
-    let local = try Self.localPath(try arguments.string("local"))
+    let local = try Self.localPath(
+      try arguments.string("local"), policy: PathPolicy.load(home: context.home))
     if action == "push", local == nil {
       throw VMLabError.invalidRequest(
         field: "local", reason: "push needs the host path to copy",
@@ -40,14 +42,10 @@ struct VMFileHandler: ToolHandler {
     ])
   }
 
-  /// An absolute host path, standardised; `invalid_request` for a relative one.
-  static func localPath(_ value: String?) throws(VMLabError) -> URL? {
+  /// An absolute host path, canonicalised and checked against `policy`; `invalid_request` for a
+  /// relative one or one outside the policy's roots.
+  static func localPath(_ value: String?, policy: PathPolicy) throws(VMLabError) -> URL? {
     guard let value else { return nil }
-    guard value.hasPrefix("/") else {
-      throw VMLabError.invalidRequest(
-        field: "local", reason: "\(value) is not an absolute path",
-        hint: "Give the absolute host path, such as /Users/me/file.txt.")
-    }
-    return URL(filePath: value).standardizedFileURL
+    return try policy.check(value, field: "local")
   }
 }

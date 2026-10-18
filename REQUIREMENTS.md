@@ -819,19 +819,19 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
 
 ## Phase 11 — Hardening, documentation, agent guide
 
-- [ ] **R-1100 Concurrency and two servers**
+- [x] **R-1100 Concurrency and two servers**
   Two `vmlab serve` processes (two Claude sessions) share `~/.vmlab` safely: per-VM `flock`, the
   start gate as a cross-process semaphore (lock files), the memory budget computed from the records
   of both. Integration test spawns two servers and creates from both at once.
   **Verify:** the integration test passes; no record corruption.
 
-- [ ] **R-1101 Timeouts and hangs**
+- [x] **R-1101 Timeouts and hangs**
   Every guest-facing call has a timeout from Appendix G and returns `timeout` with partial data;
   the QMP, RFB, GDB and control-socket clients detect a dead peer within 5 s and mark the VM
   `broken` with the reason. `vm_lifecycle kill` always works on a `broken` VM.
   **Verify:** unit tests with fake sockets that stop answering.
 
-- [ ] **R-1102 Security review of the tool surface**
+- [x] **R-1102 Security review of the tool surface**
   Paths in `vm_file`, `vm_memory_dump`, `images register` and `shared_dir` are canonicalised and
   must be under the user's home or `/tmp` unless `allowAnyPath` is set in `~/.vmlab/config.json`;
   `extra.qemuArgs` keeps its denylist; `vm_introspect raw` keeps its allowlist; no tool executes a

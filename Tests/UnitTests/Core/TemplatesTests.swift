@@ -104,9 +104,8 @@ import VMLabCore
         sourceVM: "vm-parent", sourceName: "base", baseImage: "debian-13-arm64",
         revokedKeys: [Self.parentKey], createdAt: Date()))
     let text = CloudInit.cloudConfig(config)
-    #expect(text.contains("bootcmd:\n  - - \"sh\"\n    - \"-c\""), "\(text)")
-    #expect(
-      text.contains("    - \"vmlab-revoke\"\n    - \"debian\"\n    - \"AAAAC3NzaParentKeyBlob\""))
+    #expect(text.contains("bootcmd:\n  - \"h=$(getent passwd 'debian'"), "\(text)")
+    #expect(text.contains("for k in 'AAAAC3NzaParentKeyBlob'; do"), "\(text)")
     #expect(text.contains("package_update: false"))
     #expect(text.contains("AAAAChildBlob"))
   }

@@ -1,5 +1,7 @@
 import Foundation
+import Synchronization
 import Testing
+import VMLabCore
 import VMLabGDB
 
 @Suite struct GDBClientTests {
@@ -160,6 +162,22 @@ import VMLabGDB
     #expect(stub.received == ["Z0,1000,4"])
   }
 
+  /// A write that finds the connection gone closes the client, even before the reader has seen
+  /// end of file (the stub's half of a TCP hang-up can arrive in either order).
+  @Test func aFailedWriteClosesTheClient() async throws {
+    final class Unwritable: GDBTransport, @unchecked Sendable {
+      let incoming = AsyncThrowingStream<[UInt8], any Error> { _ in }
+      func send(_ bytes: [UInt8]) async throws { throw GDBError.connectionClosed }
+      func close() async {}
+    }
+    let client = GDBClient(transport: Unwritable())
+    #expect(!(await client.isClosed))
+    await #expect(throws: GDBError.connectionClosed) {
+      try await client.insertBreakpoint(.software, address: 0x1000, kind: 4)
+    }
+    #expect(await client.isClosed)
+  }
+
   @Test func givesUpAfterTooManyNacks() async throws {
     let stub = FakeGDBStub(nackFirst: 10) { _ in ["OK"] }
     let client = GDBClient(transport: stub, options: .init(maxRetransmits: 3))
@@ -289,5 +307,74 @@ import VMLabGDB
       try await group.waitForAll()
     }
     #expect(stub.received.count == 20)
+  }
+}
+
+@Suite struct GDBDeadPeerTests {
+  /// A stub that serves no target description and answers `?` only `answered` times; after
+  /// that it acks `?` and never replies.
+  static func hangsAfter(_ answered: Int) -> FakeGDBStub {
+    let count = Mutex(0)
+    return FakeGDBStub { packet in
+      guard packet == "?" else { return [""] }
+      let n = count.withLock { value -> Int in
+        value += 1
+        return value
+      }
+      return n <= answered ? ["S05"] : []
+    }
+  }
+
+  @Test func defaultReplyTimeoutIsTheDeadPeerWindow() {
+    #expect(GDBClient.Options().replyTimeout == DeadPeer.window)
+  }
+
+  @Test func missingAckDeclaresTheStubDead() async throws {
+    let stub = SilentStub()
+    let client = GDBClient(transport: stub, options: .init(replyTimeout: .milliseconds(100)))
+    let reported = Mutex<String?>(nil)
+    await client.onDeadPeer { reason in reported.withLock { $0 = reason } }
+    await #expect(throws: GDBError.timeout(seconds: 0.1)) { _ = try await client.haltReason() }
+    let reason = await client.deadPeerReason
+    #expect(reason?.contains("ack of ?") == true)
+    #expect(reported.withLock { $0 } == reason)
+    #expect(stub.closed)
+    // The connection is gone: later calls fail at once instead of reading a late reply.
+    await #expect(throws: GDBError.connectionClosed) { _ = try await client.haltReason() }
+  }
+
+  @Test func missingReplyDeclaresTheStubDead() async throws {
+    // Acks every packet (FakeGDBStub always does) but answers only the first.
+    let stub = Self.hangsAfter(1)
+    let client = GDBClient(transport: stub, options: .init(replyTimeout: .milliseconds(100)))
+    #expect(try await client.haltReason().signal == 5)
+    await #expect(throws: GDBError.timeout(seconds: 0.1)) { _ = try await client.haltReason() }
+    #expect(await client.deadPeerReason?.contains("reply to ?") == true)
+    #expect(stub.closed)
+  }
+
+  @Test func waitingForARunningTargetIsNotADeadPeer() async throws {
+    let stub = GDBClientTests.silentWhileRunning()
+    let client = GDBClient(transport: stub, options: .init(replyTimeout: .milliseconds(100)))
+    try await client.cont()
+    await #expect(throws: GDBError.timeout(seconds: 0.05)) {
+      try await client.waitForStop(timeout: .milliseconds(50))
+    }
+    #expect(await client.deadPeerReason == nil)
+  }
+}
+
+/// A connection whose stub never sends a byte.
+final class SilentStub: GDBTransport, @unchecked Sendable {
+  let incoming: AsyncThrowingStream<[UInt8], any Error>
+  private let continuation: AsyncThrowingStream<[UInt8], any Error>.Continuation
+  private let flag = Mutex(false)
+  var closed: Bool { flag.withLock { $0 } }
+
+  init() { (incoming, continuation) = AsyncThrowingStream.makeStream() }
+  func send(_ bytes: [UInt8]) async throws {}
+  func close() async {
+    flag.withLock { $0 = true }
+    continuation.finish()
   }
 }

@@ -80,8 +80,11 @@ struct ImagesHandler: ToolHandler {
           field: "path", reason: "register takes a kernel or a disk path, not both",
           hint: "Register the kernel and the disk under separate calls.")
       }
-      let kernel = URL(filePath: try arguments.string("kernel") ?? "")
-      let initrd = try arguments.string("initrd").map { URL(filePath: $0) }
+      let policy = PathPolicy.load(home: context.home)
+      let kernel = try policy.check(try arguments.string("kernel") ?? "", field: "kernel")
+      let initrd = try arguments.string("initrd").map { (value) throws(VMLabError) in
+        try policy.check(value, field: "initrd")
+      }
       let guest = GuestSpec(
         os: .linux, arch: GuestSpec.Arch(rawValue: try arguments.string("arch") ?? "arm64"))
       let images = context.images
@@ -114,7 +117,7 @@ struct ImagesHandler: ToolHandler {
         field: "path", reason: "register needs path (a disk image or .ipsw) or kernel",
         hint: "Give path with the host path of a raw or qcow2 disk, or of an .ipsw.")
     }
-    let file = URL(filePath: path)
+    let file = try PathPolicy.load(home: context.home).check(path, field: "path")
     let images = context.images
     let record: PulledImage
     if file.pathExtension.lowercased() == "ipsw" {

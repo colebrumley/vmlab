@@ -168,29 +168,6 @@ extension ImageStore {
   }
 }
 
-extension CloudInit {
-  /// The `bootcmd` that removes `keys` (whole `authorized_keys` lines; matched by their base64
-  /// blob) from the login user's and root's `authorized_keys` before sshd starts (R-804).
-  static func revokeCommand(user: String, keys: [String]) -> YAML? {
-    let blobs = keys.compactMap { line -> String? in
-      let fields = line.split(separator: " ")
-      return fields.first(where: { $0.hasPrefix("AAAA") }).map(String.init)
-    }
-    guard !blobs.isEmpty else { return nil }
-    let script = """
-      h=$(getent passwd "$1" | cut -d: -f6); shift
-      for f in "$h/.ssh/authorized_keys" /root/.ssh/authorized_keys; do
-        [ -f "$f" ] || continue
-        for k in "$@"; do grep -v -F -- "$k" "$f" > "$f.vmlab" || true; cat "$f.vmlab" > "$f"; done
-        rm -f "$f.vmlab"
-      done
-      """
-    return .list(
-      [.string("sh"), .string("-c"), .string(script), "vmlab-revoke", .string(user)]
-        + blobs.map(YAML.string))
-  }
-}
-
 extension CloudInitConfig {
   /// A child of `template` (R-804): the parent's keys are revoked before sshd starts, and the
   /// packages it already has are not updated again.

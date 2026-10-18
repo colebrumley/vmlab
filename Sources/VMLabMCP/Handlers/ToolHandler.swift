@@ -91,8 +91,17 @@ public struct ToolProgress: Sendable {
         await step("\(message) (\(elapsed) s)")
       }
     }
-    defer { heartbeat.cancel() }
-    return try await body()
+    let outcome: Result<T, VMLabError>
+    do throws(VMLabError) {
+      outcome = .success(try await body())
+    } catch {
+      outcome = .failure(error)
+    }
+    // A heartbeat already past its sleep would otherwise report after the call ended, out of
+    // order with the caller's next step: wait for it to finish.
+    heartbeat.cancel()
+    await heartbeat.value
+    return try outcome.get()
   }
 
   private final class Counter: Sendable {
@@ -145,7 +154,12 @@ public struct ToolContext: Sendable {
   }
 
   /// The context of this process: `VMLAB_HOME`, or `~/.vmlab`.
-  public static func live() -> ToolContext { ToolContext(home: Store.defaultHome()) }
+  /// Starts are admitted by the cross-process `FileStartGate`, so every `vmlab` process on this
+  /// home shares the slots and the budget (R-1100).
+  public static func live() -> ToolContext {
+    let home = Store.defaultHome()
+    return ToolContext(home: home, startGate: FileStartGate(home: home))
+  }
 
   /// The fast host facts gathered now, merged with the persisted slow probes.
   public func hostFacts() -> HostFacts { probe.gather() }
@@ -192,7 +206,24 @@ public enum ToolHandlers {
         hint: "Call one of: \(specs.map(\.name).joined(separator: ", ")).")
     }
     let checked = try ToolArguments(arguments, spec: handler.spec)
-    return try await handler.call(checked, context: context)
+    do {
+      return try await handler.call(checked, context: context)
+    } catch {
+      await markBrokenOnDeadPeer(error, arguments: checked, context: context)
+      throw error
+    }
+  }
+
+  /// R-1101: an engine peer (QMP, the host-side display, the GDB stub, the VZ control socket)
+  /// that stopped answering marks the VM the call named `broken`, with the reason.
+  static func markBrokenOnDeadPeer(
+    _ error: VMLabError, arguments: ToolArguments, context: ToolContext
+  ) async {
+    guard DeadPeer.isDeadPeer(error) else { return }
+    let named = error.data["vm"]?.stringValue ?? (try? arguments.string("vm")) ?? nil
+    guard let named, let record = try? context.store.find(named) else { return }
+    await context.store.markBroken(id: record.id, reason: DeadPeer.reason(of: error))
+    await context.displays.forget(vm: record.id)
   }
 }
 

@@ -27,6 +27,8 @@ public actor VMManager {
 
   var busy: Set<String> = []
   private var waiters: [String: [CheckedContinuation<Void, Never>]] = [:]
+  /// The cross-process operation lock of each VM this manager is acting on (R-1100).
+  private var operationLocks: [String: FileLock] = [:]
 
   public init(
     store: Store, backends: BackendRegistry = Backends.shared,
@@ -73,6 +75,11 @@ public actor VMManager {
     new.runtime = nil
     new.checkpoints = []
     new.plan = plan
+    // R-1102: a share's host directory is model-supplied; it must pass the path policy and is
+    // recorded canonical, so a symlink swapped in later does not move it.
+    if let host = new.share?.host {
+      new.share?.host = try PathPolicy.load(home: store.home).check(host, field: "share.host").path
+    }
     var stored = try store.create(new)
     do throws(VMLabError) {
       if let name = Self.segmentName(of: stored) {
@@ -168,6 +175,9 @@ public actor VMManager {
       return Outcome(record: updated, warnings: warnings)
     } catch {
       await log(id, "\(action.rawValue) failed: \(error.message)", kind: .error, level: .error)
+      if DeadPeer.isDeadPeer(error) {
+        await store.markBroken(id: id, reason: DeadPeer.reason(of: error))
+      }
       throw error
     }
   }
@@ -206,6 +216,7 @@ public actor VMManager {
       }
       current.state = state
       current.runtime = runtime
+      if state != .broken { current.brokenReason = nil }
     }
     await log(record.id, "\(action.rawValue): \(record.state.rawValue) -> \(state.rawValue)")
     return updated
@@ -275,14 +286,18 @@ public actor VMManager {
 
   // MARK: Helpers
 
+  /// Serializes actions on `id`: first among this process's callers, then, through the VM's
+  /// operation lock file, with every other `vmlab` process on the same home (R-1100).
   func acquire(_ id: String) async {
     while busy.contains(id) {
       await withCheckedContinuation { waiters[id, default: []].append($0) }
     }
     busy.insert(id)
+    operationLocks[id] = await FileLock.lock(store.operationLockPath(of: id))
   }
 
   func release(_ id: String) {
+    operationLocks.removeValue(forKey: id)?.unlock()
     busy.remove(id)
     if var queue = waiters[id], !queue.isEmpty {
       queue.removeFirst().resume()

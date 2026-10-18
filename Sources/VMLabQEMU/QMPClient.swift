@@ -57,6 +57,15 @@ public actor QMPClient {
   private var closed = false
   private var readerTask: Task<Void, Never>?
   private var sendChain: Task<Void, Never>?
+  /// Dead-peer detection (R-1101): when the peer last spoke and what it owes.
+  private let peer = PeerClock()
+  private var watchdog: Task<Void, Never>?
+  /// Why the peer was declared dead, once it was; the connection is closed from then on.
+  public private(set) var deadPeerReason: String?
+
+  /// Commands QEMU runs synchronously for a long time (it answers nothing meanwhile), each given
+  /// its own timeout; dead-peer detection pauses while one is outstanding.
+  public static let longRunningCommands: Set<String> = ["dump-guest-memory", "pmemsave", "memsave"]
 
   private struct Pending {
     var command: String
@@ -118,6 +127,7 @@ public actor QMPClient {
     let encoder = JSONEncoder()
     encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
     let line = try encoder.encode(message)
+    if !Self.longRunningCommands.contains(command) { peer.awaiting(command) }
     return try await withCheckedThrowingContinuation { continuation in
       let timer = Task { [weak self] in
         try? await Task.sleep(for: timeout)
@@ -168,9 +178,65 @@ public actor QMPClient {
 
   /// Closes the connection. Pending commands fail with `guest_unreachable`; event streams end.
   public func close() async {
+    watchdog?.cancel()
     await transport.close()
     readerTask?.cancel()
     finish()
+  }
+
+  // MARK: Dead peer (R-1101)
+
+  /// Watches the peer: every `interval` an idle connection is probed with `query-status`, and a
+  /// peer that owes an answer (to a probe or any command but `longRunningCommands`) and has sent
+  /// nothing for `window` is dead. Then every pending command fails with `DeadPeer.error`
+  /// (`guest_unreachable`, `data.deadPeer`), the connection closes, and `onDead` gets the reason.
+  public func watchPeer(
+    window: Duration = DeadPeer.window, interval: Duration = DeadPeer.probeInterval,
+    onDead: @escaping @Sendable (String) async -> Void = { _ in }
+  ) {
+    guard watchdog == nil, !closed else { return }
+    peer.received()
+    watchdog = Task { [weak self] in
+      while !Task.isCancelled {
+        do { try await Task.sleep(for: interval) } catch { return }
+        guard let self, let reason = await self.checkPeer(window: window, interval: interval)
+        else {
+          continue
+        }
+        await onDead(reason)
+        return
+      }
+    }
+  }
+
+  /// One watchdog tick: the dead-peer reason when the peer is dead (the client is then closed),
+  /// else nil, probing an idle connection.
+  private func checkPeer(window: Duration, interval: Duration) async -> String? {
+    if closed {
+      watchdog?.cancel()
+      return nil
+    }
+    if pending.values.contains(where: { Self.longRunningCommands.contains($0.command) }) {
+      return nil
+    }
+    if let reason = peer.overdue(window: window) {
+      await declareDead(reason)
+      return reason
+    }
+    if pending.isEmpty, peer.idle() >= interval {
+      Task { [weak self] in
+        _ = try? await self?.execute("query-status", timeout: window + interval)
+      }
+    }
+    return nil
+  }
+
+  private func declareDead(_ reason: String) async {
+    deadPeerReason = reason
+    watchdog?.cancel()
+    finish()
+    await transport.close()
+    readerTask?.cancel()
   }
 
   // MARK: Reading
@@ -196,6 +262,7 @@ public actor QMPClient {
   }
 
   private func handle(_ line: Data) {
+    peer.received()
     guard let message = try? JSONDecoder().decode([String: JSONValue].self, from: line) else {
       return
     }
@@ -274,7 +341,10 @@ public actor QMPClient {
   private func unsubscribe(_ key: Int) { subscribers[key] = nil }
 
   private func closedError() -> VMLabError {
-    VMLabError(
+    if let deadPeerReason {
+      return DeadPeer.error(channel: "qmp", endpoint: endpoint, reason: deadPeerReason)
+    }
+    return VMLabError(
       code: .guestUnreachable, message: "The QMP connection is closed.",
       hint: "The guest's QEMU process may have exited; check vm_inspect.",
       data: ["tried": .string(endpoint)])

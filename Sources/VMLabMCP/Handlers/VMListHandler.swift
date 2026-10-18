@@ -41,6 +41,7 @@ struct VMListHandler: ToolHandler {
     if let port = record.runtime?.sshPort { row["sshPort"] = .number(Double(port)) }
     if let fleet = record.fleet { row["fleet"] = .string(fleet) }
     if let segment = record.segment { row["segmentIP"] = .string(segment.address) }
+    if let reason = record.brokenReason { row["brokenReason"] = .string(reason) }
     return .object(row)
   }
 }

@@ -10,23 +10,34 @@ import VMLabCore
   @Test func aJobIsReadIncrementallyAndFinishes() async throws {
     let f = try Fixture()
     let jobs = ExecJobs()
+    // Each line after the first waits for a gate file the test creates once it has read the line
+    // before, so the output arrives in three reads however slow the host is.
+    let gate = f.dir.appending(path: "gate").path
     let job = try await jobs.start(
-      ExecRequest(command: "for i in 1 2 3; do echo $i; sleep 1; done"), on: f.channel)
+      ExecRequest(
+        command:
+          "for i in 1 2 3; do echo $i; while [ ! -f '\(gate)'$i ]; do sleep 0.1; done; done"),
+      on: f.channel)
     #expect(ExecJobs.isValidJobID(job.id))
     var output = ""
     var reads = 0
     var last: ExecJobRead?
-    while last?.finished != true, reads < 100 {
+    let deadline = ContinuousClock.now + .seconds(60)
+    while last?.finished != true, ContinuousClock.now < deadline {
       let read = try await jobs.read(job.id, on: f.channel)
       output += read.output
-      if !read.output.isEmpty { reads += 1 }
+      if !read.output.isEmpty {
+        reads += 1
+        let lines = output.split(separator: "\n").count
+        FileManager.default.createFile(atPath: gate + String(lines), contents: nil)
+      }
       last = read
-      try await Task.sleep(for: .milliseconds(300))
+      try await Task.sleep(for: .milliseconds(100))
     }
     #expect(last?.finished == true)
     #expect(last?.exitCode == 0)
     #expect(output == "1\n2\n3\n")
-    #expect(reads >= 2, "output arrived in \(reads) read(s)")
+    #expect(reads == 3, "output arrived in \(reads) read(s)")
     // Read again: nothing new.
     #expect(try await jobs.read(job.id, on: f.channel).output == "")
   }

@@ -515,3 +515,26 @@ enum YAML: ExpressibleByStringInterpolation, ExpressibleByBooleanLiteral,
     return out + "\""
   }
 }
+
+extension CloudInit {
+  /// The `bootcmd` that removes `keys` (whole `authorized_keys` lines; matched by their base64
+  /// blob) from the login user's and root's `authorized_keys` before sshd starts (R-804).
+  static func revokeCommand(user: String, keys: [String]) -> YAML? {
+    let blobs = keys.compactMap { line -> String? in
+      let fields = line.split(separator: " ")
+      return fields.first(where: { $0.hasPrefix("AAAA") }).map(String.init)
+    }
+    guard !blobs.isEmpty else { return nil }
+    // A string entry, which cloud-init runs with its own shell; every value single-quoted.
+    let keys = blobs.map(RemoteShell.quote).joined(separator: " ")
+    let script = """
+      h=$(getent passwd \(RemoteShell.quote(user)) | cut -d: -f6)
+      for f in "$h/.ssh/authorized_keys" /root/.ssh/authorized_keys; do
+        [ -f "$f" ] || continue
+        for k in \(keys); do grep -v -F -- "$k" "$f" > "$f.vmlab" || true; cat "$f.vmlab" > "$f"; done
+        rm -f "$f.vmlab"
+      done
+      """
+    return .string(script)
+  }
+}

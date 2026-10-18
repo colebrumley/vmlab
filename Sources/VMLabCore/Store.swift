@@ -110,6 +110,9 @@ public struct VMRecord: Codable, Sendable, Hashable {
   public var provision: ProvisionSpec?
   /// The request's `share` (R-404); nil when it had none. Additive: schema 1 still.
   public var share: SharedDirSpec?
+  /// Why the VM is `broken` (R-1101: a dead engine peer, a missing disk); nil in any other state.
+  /// Additive: schema 1 still.
+  public var brokenReason: String?
   /// For a `vz-macos` guest, the directory of its Tart clone (`~/.tart/vms/<id>/`, holding
   /// `config.json`, `disk.img` and `nvram.bin`); its last component is the Tart VM name. Absent
   /// for other profiles (additive: schema 1 still).
@@ -152,6 +155,7 @@ public struct VMRecord: Codable, Sendable, Hashable {
     case state, runtime, checkpoints, plan, boot, extra, provision, share, clonedFrom, backingChain,
       tartClone
     case segment, fleet
+    case brokenReason
   }
 
   public init(from decoder: any Decoder) throws {
@@ -178,6 +182,7 @@ public struct VMRecord: Codable, Sendable, Hashable {
     fleet = try c.decodeIfPresent(String.self, forKey: .fleet)
     provision = try c.decodeIfPresent(ProvisionSpec.self, forKey: .provision)
     share = try c.decodeIfPresent(SharedDirSpec.self, forKey: .share)
+    brokenReason = try c.decodeIfPresent(String.self, forKey: .brokenReason)
     tartClone = try c.decodeIfPresent(String.self, forKey: .tartClone)
   }
 

@@ -220,3 +220,105 @@ final class FakeQMPServer: @unchecked Sendable {
     }
   }
 }
+
+/// A QMP server that answers every command with an empty `return` until it is muted, after which
+/// it keeps the connection open and says nothing: a hung QEMU (R-1101).
+actor MutableQMPTransport: QMPTransport {
+  nonisolated let lines: AsyncStream<Data>
+  private let sink: AsyncStream<Data>.Continuation
+  private var muted = false
+  private(set) var received: [String] = []
+  private(set) var closed = false
+
+  init() {
+    (lines, sink) = AsyncStream<Data>.makeStream()
+    sink.yield(
+      Data(
+        #"{"QMP": {"version": {"qemu": {"micro": 0, "minor": 1, "major": 11}}, "capabilities": []}}"#
+          .utf8))
+  }
+
+  func mute() { muted = true }
+
+  func send(_ line: Data) async throws {
+    let message = try JSONDecoder().decode([String: JSONValue].self, from: line)
+    received.append(message["execute"]?.stringValue ?? "?")
+    guard !muted, case .string(let id) = message["id"] else { return }
+    sink.yield(Data(#"{"return": {}, "id": "\#(id)"}"#.utf8))
+  }
+
+  func close() async {
+    closed = true
+    sink.finish()
+  }
+}
+
+@Suite struct QMPDeadPeerTests {
+  @Test func defaultWindowIsAppendixG() {
+    #expect(DeadPeer.window == .seconds(5))
+  }
+
+  @Test func idleConnectionIsProbedAndStaysAlive() async throws {
+    let transport = MutableQMPTransport()
+    let client = try await QMPClient.handshake(over: transport, timeout: .seconds(2))
+    await client.watchPeer(window: .seconds(3), interval: .milliseconds(40))
+    // Polled, so a busy machine only makes it slower.
+    let deadline = ContinuousClock.now + .seconds(10)
+    while await transport.received.filter({ $0 == "query-status" }).count < 3,
+      ContinuousClock.now < deadline
+    {
+      try await Task.sleep(for: .milliseconds(20))
+    }
+    #expect(await client.isConnected)
+    #expect(await client.deadPeerReason == nil)
+    #expect(await transport.received.filter { $0 == "query-status" }.count >= 3)
+    await client.close()
+  }
+
+  @Test func silentPeerIsDeclaredDeadWithinTheWindow() async throws {
+    let transport = MutableQMPTransport()
+    let client = try await QMPClient.handshake(over: transport, timeout: .seconds(2))
+    let reported = Reported()
+    await client.watchPeer(window: .milliseconds(300), interval: .milliseconds(40)) { reason in
+      await reported.set(reason)
+    }
+    await transport.mute()
+    let started = ContinuousClock.now
+    // A command that will never be answered fails with the dead-peer error, not its 30 s timeout.
+    await #expect {
+      try await client.execute("query-block")
+    } throws: { error in
+      guard let error = error as? VMLabError else { return false }
+      return DeadPeer.isDeadPeer(error) && error.data["channel"] == .string("qmp")
+    }
+    let elapsed = ContinuousClock.now - started
+    #expect(elapsed < .seconds(20))  // the command's own timeout is 30 s
+    #expect(await reported.value?.contains("query-block") == true)
+    #expect(await client.isConnected == false)
+    #expect(await transport.closed)
+    await #expect(throws: VMLabError.self) { try await client.execute("cont") }
+  }
+
+  @Test func longRunningCommandPausesDetection() async throws {
+    let transport = MutableQMPTransport()
+    let client = try await QMPClient.handshake(over: transport, timeout: .seconds(2))
+    await client.watchPeer(window: .milliseconds(200), interval: .milliseconds(40))
+    await transport.mute()
+    // QEMU answers nothing while it dumps memory; that is not a dead peer.
+    await #expect {
+      try await client.execute("dump-guest-memory", timeout: .milliseconds(600))
+    } throws: { ($0 as? VMLabError)?.code == .timeout }
+    #expect(await client.deadPeerReason == nil)
+    // Once it is over, the probes find the silence.
+    let deadline = ContinuousClock.now + .seconds(10)
+    while await client.deadPeerReason == nil, ContinuousClock.now < deadline {
+      try await Task.sleep(for: .milliseconds(20))
+    }
+    #expect(await client.deadPeerReason != nil)
+  }
+}
+
+actor Reported {
+  private(set) var value: String?
+  func set(_ value: String) { self.value = value }
+}
