@@ -15,10 +15,14 @@ extension ToolSpec {
         "vm": Schema.vm,
         "action": Schema.action(["read", "tail", "write", "wait"], "What to do."),
         "since": Schema.integer("read, wait: the byte offset to start from.", minimum: 0),
-        "lines": Schema.integer("tail: how many lines.", minimum: 1, default: 50),
+        "lines": Schema.integer(
+          "tail: how many lines.", minimum: 1, maximum: VMSerialHandler.maxTail, default: 50),
         "text": Schema.string("write: the text to send."),
-        "pattern": Schema.string("wait: a regular expression to wait for."),
-        "timeoutSeconds": Schema.timeoutSeconds("wait: the longest to block.", default: 30),
+        "pattern": Schema.string(
+          "wait: a regular expression to wait for, at most \(SerialChannel.maxPatternBytes) "
+            + "UTF-8 bytes.", maxLength: SerialChannel.maxPatternBytes),
+        "timeoutSeconds": Schema.timeoutSeconds(
+          "wait: the longest to block.", maximum: VMSerialHandler.maxTimeoutSeconds, default: 30),
       ], required: ["vm", "action"]),
     outputShape: "{ text, offset, matched?, truncated }",
     errors: [.vmNotFound, .wrongState, .capabilityMissing, .invalidRequest, .timeout])

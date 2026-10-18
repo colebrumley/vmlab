@@ -91,7 +91,7 @@ public actor SerialChannel {
   /// The most bytes one match runs over; a longer backlog is scanned window by window.
   static let scanWindow: UInt64 = 64 * 1024
   /// The longest pattern `wait` accepts, in UTF-8 bytes.
-  static let maxPatternBytes = 1024
+  public static let maxPatternBytes = 1024
   /// How many abandoned matches a channel tolerates before refusing new waits.
   static let maxAbandonedScans = 2
 

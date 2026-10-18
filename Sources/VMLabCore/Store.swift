@@ -193,9 +193,12 @@ public struct VMRecord: Codable, Sendable, Hashable {
     return tail.count == 6 && tail.allSatisfy { StoreIDs.alphabet.utf8.contains($0) }
   }
 
+  /// The longest VM name, in characters.
+  public static let maxNameLength = 64
+
   /// 1 to 64 letters, digits, `.`, `_` and `-`, starting with a letter or digit.
   public static func isValidName(_ name: String) -> Bool {
-    guard let first = name.unicodeScalars.first, name.unicodeScalars.count <= 64 else {
+    guard let first = name.unicodeScalars.first, name.unicodeScalars.count <= maxNameLength else {
       return false
     }
     func allowed(_ s: Unicode.Scalar) -> Bool {

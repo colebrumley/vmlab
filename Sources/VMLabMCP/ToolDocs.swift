@@ -99,6 +99,16 @@ public enum ToolDocs {
       text += " (\(number(min)) items)"
     }
     var notes: [String] = []
+    if field(schema, "type") == "array", node["minItems"] != node["maxItems"] {
+      if let min = node["minItems"], let max = node["maxItems"] {
+        notes.append("\(number(min))–\(number(max)) items")
+      } else if let max = node["maxItems"] {
+        notes.append("≤ \(number(max)) items")
+      } else if let min = node["minItems"] {
+        notes.append("≥ \(number(min)) items")
+      }
+    }
+    if let length = node["maxLength"] { notes.append("≤ \(number(length)) characters") }
     if let minimum = node["minimum"] {
       notes.append(
         node["maximum"].map { "\(number(minimum))–\(number($0))" } ?? "≥ \(number(minimum))")

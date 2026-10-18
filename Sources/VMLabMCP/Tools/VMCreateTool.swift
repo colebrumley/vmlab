@@ -15,7 +15,7 @@ extension ToolSpec {
     inputSchema: Schema.input(
       [
         "requirements": Schema.requirements,
-        "name": Schema.string("A unique name for the VM; defaults to its id."),
+        "name": Schema.vmName("A unique name for the VM; defaults to its id."),
         "autostart": Schema.boolean("Start the VM once created.", default: true),
         "confirm": Schema.boolean("Allow a large image pull the server asks to confirm."),
         "allowUnverified": Schema.allowUnverified,

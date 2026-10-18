@@ -116,9 +116,12 @@ public struct SegmentStore: Sendable {
     Bundle.main.executableURL?.deletingLastPathComponent().appending(path: "vmlab-switch").path
   }
 
+  /// The longest segment name, in characters.
+  public static let maxNameLength = 32
+
   /// `[a-z0-9-]`, starting with a letter or digit, at most 32 characters (as `vmlab-switch`).
   public static func isValidName(_ name: String) -> Bool {
-    guard let first = name.utf8.first, name.utf8.count <= 32, first != UInt8(ascii: "-") else {
+    guard let first = name.utf8.first, name.utf8.count <= maxNameLength, first != UInt8(ascii: "-") else {
       return false
     }
     return name.utf8.allSatisfy { c in

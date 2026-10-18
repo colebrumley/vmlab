@@ -15,7 +15,7 @@ extension ToolSpec {
       [
         "vm": Schema.vm,
         "action": Schema.action(["create", "list", "restore", "delete", "diff"], "What to do."),
-        "name": Schema.string("create, restore, delete: the checkpoint's name; unique per VM."),
+        "name": Schema.vmName("create, restore, delete: the checkpoint's name; unique per VM."),
         "mode": Schema.string(
           "create: what to save.", enum: ["auto", "disk", "live"], default: "auto"),
         "manifest": Schema.boolean("create: also take a guest manifest for diff."),

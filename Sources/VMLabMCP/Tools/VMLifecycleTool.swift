@@ -16,7 +16,7 @@ extension ToolSpec {
         "action": Schema.action(
           ["start", "stop", "kill", "pause", "resume", "reset", "destroy", "clone"],
           "The transition."),
-        "name": Schema.string("clone: the new VM's name."),
+        "name": Schema.vmName("clone: the new VM's name."),
         "from": Schema.string("clone: a checkpoint name to clone from (default: current disk)."),
         "force": Schema.boolean("destroy: even when another VM's disk depends on this one."),
         "timeoutSeconds": Schema.timeoutSeconds(
