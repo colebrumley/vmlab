@@ -28,4 +28,18 @@ import VMLabCore
       doc.contains(
         "| Feature | vz-macos | vz-linux | qemu-hvf | qemu-tcg | verified on dev host |"))
   }
+
+  /// The committed snapshot the verified column reads decodes as `SlowProbes` and records only
+  /// known probes (an unknown key would be dropped silently by the decoder).
+  @Test func committedSnapshotDecodes() throws {
+    let url = URL(filePath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+      .deletingLastPathComponent().deletingLastPathComponent()
+      .appending(path: "docs/dev-host-facts.json")
+    let data = try Data(contentsOf: url)
+    let probes = try SlowProbes.decoder.decode(SlowProbes.self, from: data)
+    #expect(probes.schemaVersion == SlowProbes.currentSchemaVersion)
+    let raw = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+    let keys = (raw?["probes"] as? [String: Any])?.keys.sorted() ?? []
+    #expect(keys == probes.records.keys.map(\.rawValue).sorted())
+  }
 }

@@ -7,20 +7,61 @@ public enum ConsoleDevice: String, Codable, Sendable, CaseIterable {
   case hvc0
 }
 
-/// The desktop and VNC server installed when `gui` is granted to a Linux guest (R-504).
+/// The desktop installed when a Linux guest's plan provisions one (`Plan.provisionsDesktop`,
+/// R-504): Xfce under LightDM with autologin, plus an x11vnc server on the NIC when the display is
+/// in-guest VNC (VZ). QEMU guests get no VNC server: QEMU's own VNC shows the screen.
 public struct GUIStack: Codable, Sendable, Hashable {
-  /// The VNC password written to the server's password file.
-  public var vncPassword: String
+  /// The VNC password written to the server's password file; nil installs no VNC server.
+  public var vncPassword: String?
   /// The TCP port the VNC server listens on inside the guest.
   public var vncPort: Int
 
-  public init(vncPassword: String, vncPort: Int = 5900) {
+  public init(vncPassword: String?, vncPort: Int = DisplayEndpoint.guestVNCPort) {
     self.vncPassword = vncPassword
     self.vncPort = vncPort
   }
 
-  /// The Debian packages of the minimal desktop.
-  public static let packages = ["xfce4", "lightdm", "x11vnc"]
+  /// The Debian packages of the minimal desktop. The X server and its fbdev driver are named
+  /// because Debian's cloud kernel has no DRM: X draws on the firmware framebuffer (QEMU's
+  /// `ramfb`), and libinput reads the virtio tablet and keyboard.
+  public static let desktopPackages = [
+    "xserver-xorg-core", "xserver-xorg-video-fbdev", "xserver-xorg-input-libinput", "xfce4",
+    "xfce4-terminal", "lightdm", "lightdm-gtk-greeter", "dbus-x11",
+  ]
+
+  /// Every package this stack installs.
+  public var packages: [String] {
+    Self.desktopPackages + (vncPassword == nil ? [] : ["x11vnc"])
+  }
+
+  /// A fresh VNC password: eight characters, the most VNC Authentication uses.
+  public static func generatePassword() -> String {
+    let alphabet = Array("abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789")
+    return String((0..<8).map { _ in alphabet.randomElement()! })
+  }
+
+  /// The stack of a VZ guest: a new password written to `<vm>/vnc.pass` (mode 0600), which the
+  /// display endpoint reads back (R-503). An existing file is reused.
+  public static func inGuestVNC(vmDirectory: URL) throws -> GUIStack {
+    let file = vmDirectory.appending(path: DisplayEndpoint.passwordFileName)
+    if let existing = try? String(contentsOf: file, encoding: .utf8)
+      .split(whereSeparator: \.isNewline).first, !existing.isEmpty
+    {
+      return GUIStack(vncPassword: String(existing))
+    }
+    let password = generatePassword()
+    try FileManager.default.createDirectory(at: vmDirectory, withIntermediateDirectories: true)
+    guard
+      FileManager.default.createFile(
+        atPath: file.path, contents: Data((password + "\n").utf8),
+        attributes: [.posixPermissions: 0o600])
+    else {
+      throw VMLabError(
+        code: .internal, message: "Cannot write \(file.path)",
+        hint: "Check that the VM directory is writable.")
+    }
+    return GUIStack(vncPassword: password)
+  }
 }
 
 /// A second NIC on a private segment with a static address (R-901). Both NICs are matched by MAC,
@@ -126,7 +167,7 @@ public enum CloudInit {
   /// Our `#cloud-config` document, before any user part.
   public static func cloudConfig(_ config: CloudInitConfig) -> String {
     var packages = ["qemu-guest-agent"]
-    if config.gui != nil { packages += GUIStack.packages }
+    if let gui = config.gui { packages += gui.packages }
     for package in config.packages where !packages.contains(package) { packages.append(package) }
 
     var runcmd: [YAML] = [
@@ -139,22 +180,28 @@ public enum CloudInit {
         .map([
           ("path", "/etc/lightdm/lightdm.conf.d/50-vmlab-autologin.conf"),
           ("permissions", "0644"),
-          ("content", .string("[Seat:*]\nautologin-user=\(config.user)\nautologin-session=xfce\n")),
+          ("content", .string(lightdmConf(user: config.user))),
         ]))
-      writeFiles.append(
-        .map([
-          ("path", "/etc/systemd/system/vmlab-vnc.service"),
-          ("permissions", "0644"),
-          ("content", .string(vncUnit(port: gui.vncPort))),
-        ]))
+      if gui.vncPassword != nil {
+        writeFiles.append(
+          .map([
+            ("path", "/etc/systemd/system/vmlab-vnc.service"),
+            ("permissions", "0644"),
+            ("content", .string(vncUnit(port: gui.vncPort))),
+          ]))
+      }
       runcmd += [
-        .list(["x11vnc", "-storepasswd", .string(gui.vncPassword), "/etc/x11vnc.pass"]),
-        .list(["chmod", "0600", "/etc/x11vnc.pass"]),
         .list(["systemctl", "daemon-reload"]),
         .list(["systemctl", "set-default", "graphical.target"]),
         .list(["systemctl", "enable", "--now", "lightdm"]),
-        .list(["systemctl", "enable", "--now", "vmlab-vnc.service"]),
       ]
+      if let password = gui.vncPassword {
+        runcmd += [
+          .list(["x11vnc", "-storepasswd", .string(password), "/etc/x11vnc.pass"]),
+          .list(["chmod", "0600", "/etc/x11vnc.pass"]),
+          .list(["systemctl", "enable", "--now", "vmlab-vnc.service"]),
+        ]
+      }
     }
 
     var entries: [(String, YAML)] = [
@@ -296,6 +343,21 @@ public enum CloudInit {
       field: "user_data",
       reason: "user-data must start with #cloud-config, #!, #cloud-boothook or #include",
       hint: "Begin the user-data with a cloud-init header line such as #cloud-config.")
+  }
+
+  /// LightDM: autologin into Xfce. `logind-check-graphical=false` because logind marks a seat
+  /// graphical only for a DRM device, and Debian's cloud kernel has none (X runs on fbdev); with
+  /// the check on, LightDM waits forever and no X server starts.
+  static func lightdmConf(user: String) -> String {
+    """
+    [LightDM]
+    logind-check-graphical=false
+
+    [Seat:*]
+    autologin-user=\(user)
+    autologin-session=xfce
+
+    """
   }
 
   static func vncUnit(port: Int) -> String {
