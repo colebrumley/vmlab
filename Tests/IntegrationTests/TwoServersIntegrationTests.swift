@@ -264,10 +264,15 @@ final class StdioMCPClient: Sendable {
       isError: result["isError"] == .bool(true), text: text, value: value, images: images)
   }
 
+  /// Closes stdin, sends SIGTERM, and waits at most 10 s before SIGKILL. Never blocks for good:
+  /// `waitUntilExit()` hung a full integration run here once, after the child was already gone.
   func terminate() {
     try? input.close()
+    guard process.processIdentifier > 0 else { return }
     if process.isRunning { process.terminate() }
-    process.waitUntilExit()
+    let deadline = Date().addingTimeInterval(10)
+    while process.isRunning, Date() < deadline { usleep(50_000) }
+    if process.isRunning { kill(process.processIdentifier, SIGKILL) }
   }
 }
 
