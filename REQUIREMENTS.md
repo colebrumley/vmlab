@@ -819,7 +819,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
 
 ## Phase 11 — Hardening, documentation, agent guide
 
-- [ ] **R-1100 Concurrency and two servers**
+- [x] **R-1100 Concurrency and two servers**
   Two `vmlab serve` processes (two Claude sessions) share `~/.vmlab` safely: per-VM `flock`, the
   start gate as a cross-process semaphore (lock files), the memory budget computed from the records
   of both. Integration test spawns two servers and creates from both at once.

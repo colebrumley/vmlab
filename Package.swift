@@ -74,6 +74,7 @@ let package = Package(
       name: "IntegrationTests",
       dependencies: [
         "VMLabCore", "VMLabQEMU", "VMLabVZ", "VMLabRFB", "VMLabGDB", "VMLabMCP", "VMLabEngines",
+        "vmlab",
       ]
     ),
   ]

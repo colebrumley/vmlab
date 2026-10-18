@@ -23,6 +23,8 @@ public actor VMManager {
 
   private var busy: Set<String> = []
   private var waiters: [String: [CheckedContinuation<Void, Never>]] = [:]
+  /// The cross-process operation lock of each VM this manager is acting on (R-1100).
+  private var operationLocks: [String: FileLock] = [:]
 
   public init(
     store: Store, backends: BackendRegistry = Backends.shared,
@@ -256,14 +258,18 @@ public actor VMManager {
 
   // MARK: Helpers
 
+  /// Serializes actions on `id`: first among this process's callers, then, through the VM's
+  /// operation lock file, with every other `vmlab` process on the same home (R-1100).
   func acquire(_ id: String) async {
     while busy.contains(id) {
       await withCheckedContinuation { waiters[id, default: []].append($0) }
     }
     busy.insert(id)
+    operationLocks[id] = await FileLock.lock(store.operationLockPath(of: id))
   }
 
   func release(_ id: String) {
+    operationLocks.removeValue(forKey: id)?.unlock()
     busy.remove(id)
     if var queue = waiters[id], !queue.isEmpty {
       queue.removeFirst().resume()
