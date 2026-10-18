@@ -482,7 +482,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   expected image hash; integration: connect to the Debian guest's QEMU VNC socket during boot and
   get a non-blank image.
 
-- [ ] **R-501 RFB client: input**
+- [x] **R-501 RFB client: input**
   `pointer(x, y, buttons)`, `key(keysym, down)`, a US keysym table for printable ASCII and the
   named keys of Appendix C (`Return`, `Tab`, `Escape`, arrows, function keys, modifiers, `cmd` on
   macOS guests mapped to `Super_L`), and `type(text)` that sends press/release per character with
