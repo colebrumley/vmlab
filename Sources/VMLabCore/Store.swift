@@ -102,15 +102,23 @@ public struct VMRecord: Codable, Sendable, Hashable {
   public var boot: BootSpec?
   /// The request's `extra` (R-306: `qemuArgs`); nil when it had none. Additive: schema 1 still.
   public var extra: ExtraSpec?
+  /// The request's `provision` (R-1001); nil when it had none. Additive: schema 1 still.
+  public var provision: ProvisionSpec?
   /// The request's `share` (R-404); nil when it had none. Additive: schema 1 still.
   public var share: SharedDirSpec?
+  /// For a `vz-macos` guest, the directory of its Tart clone (`~/.tart/vms/<id>/`, holding
+  /// `config.json`, `disk.img` and `nvram.bin`); its last component is the Tart VM name. Absent
+  /// for other profiles (additive: schema 1 still).
+  public var tartClone: String?
 
   public init(
     id: String, name: String? = nil, profile: Profile, guest: GuestSpec, features: [Feature],
     resources: ResourceSpec = ResourceSpec(), image: String? = nil,
     network: NetworkSpec = NetworkSpec(), createdAt: Date = Date(), state: VMState = .created,
     runtime: VMRuntime? = nil, checkpoints: [CheckpointRef] = [], plan: Plan? = nil,
-    boot: BootSpec? = nil, extra: ExtraSpec? = nil, share: SharedDirSpec? = nil
+    boot: BootSpec? = nil, extra: ExtraSpec? = nil, provision: ProvisionSpec? = nil,
+    share: SharedDirSpec? = nil,
+    tartClone: String? = nil
   ) {
     self.schemaVersion = Self.currentSchemaVersion
     self.id = id
@@ -128,12 +136,15 @@ public struct VMRecord: Codable, Sendable, Hashable {
     self.plan = plan
     self.boot = boot
     self.extra = extra
+    self.provision = provision
     self.share = share
+    self.tartClone = tartClone
   }
 
   enum CodingKeys: String, CodingKey {
     case schemaVersion, id, name, profile, guest, features, resources, image, network, createdAt
-    case state, runtime, checkpoints, plan, boot, extra, share, clonedFrom, backingChain
+    case state, runtime, checkpoints, plan, boot, extra, provision, share, clonedFrom, backingChain,
+      tartClone
   }
 
   public init(from decoder: any Decoder) throws {
@@ -156,7 +167,9 @@ public struct VMRecord: Codable, Sendable, Hashable {
     clonedFrom = try c.decodeIfPresent(CloneOrigin.self, forKey: .clonedFrom)
     backingChain = try c.decodeIfPresent([String].self, forKey: .backingChain)
     extra = try c.decodeIfPresent(ExtraSpec.self, forKey: .extra)
+    provision = try c.decodeIfPresent(ProvisionSpec.self, forKey: .provision)
     share = try c.decodeIfPresent(SharedDirSpec.self, forKey: .share)
+    tartClone = try c.decodeIfPresent(String.self, forKey: .tartClone)
   }
 
   /// `vm-` plus six lowercase RFC 4648 base32 characters.

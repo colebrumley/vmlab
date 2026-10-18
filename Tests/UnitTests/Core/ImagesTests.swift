@@ -38,6 +38,16 @@ final class ConvertRunner: CommandRunning {
   }
 }
 
+/// Stands in for `tart`: succeeds and records the call.
+final class TartRunner: CommandRunning {
+  let calls = Mutex<[[String]]>([])
+
+  func run(_ executable: String, _ arguments: [String]) -> CommandOutput? {
+    calls.withLock { $0.append([URL(filePath: executable).lastPathComponent] + arguments) }
+    return CommandOutput(status: 0, output: "")
+  }
+}
+
 @Suite struct ImagesTests {
   static let fixtures = URL(filePath: #filePath).deletingLastPathComponent()
     .deletingLastPathComponent().deletingLastPathComponent().appending(path: "Fixtures/images")
@@ -93,6 +103,49 @@ final class ConvertRunner: CommandRunning {
     for image in catalogue.images where image.format != .tart {
       #expect(image.checksumURL != nil && image.checksumAlgorithm != nil, "\(image.name)")
     }
+  }
+
+  /// R-1000: the Ubuntu and amd64 entries carry their checksum URLs, and every amd64 image is
+  /// one only qemu-tcg runs (so it is never converted to raw for VZ).
+  @Test func ubuntuAndAmd64Catalogue() throws {
+    let catalogue = ImageCatalogue.builtin
+    let ubuntu = try #require(catalogue.image(named: "ubuntu-24.04-arm64"))
+    #expect(
+      ubuntu.url == "https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-arm64.img")
+    #expect(
+      ubuntu.checksumURL?.absoluteString
+        == "https://cloud-images.ubuntu.com/noble/current/SHA256SUMS")
+    #expect(ubuntu.fileName == "noble-server-cloudimg-arm64.img")
+    #expect(ubuntu.format == .qcow2 && ubuntu.convertToRaw)
+    #expect(ubuntu.login == ImageLogin(user: "ubuntu"))
+    let ubuntuAmd64 = try #require(catalogue.image(named: "ubuntu-24.04-amd64"))
+    #expect(ubuntuAmd64.fileName == "noble-server-cloudimg-amd64.img")
+    #expect(ubuntuAmd64.checksumAlgorithm == .sha256)
+    let debianAmd64 = try #require(catalogue.image(named: "debian-13-amd64"))
+    #expect(debianAmd64.fileName == "debian-13-genericcloud-amd64.qcow2")
+    #expect(debianAmd64.checksumURL?.lastPathComponent == "SHA512SUMS")
+
+    let amd64 = catalogue.images.filter { $0.guest.arch == .x86_64 }
+    #expect(Set(amd64.map(\.name)) == ["debian-13-amd64", "ubuntu-24.04-amd64"])
+    for image in amd64 {
+      #expect(!image.convertToRaw, "\(image.name)")
+      let profiles = Profile.allCases.filter { Capabilities.supports(image.guest, on: $0) }
+      #expect(profiles == [.qemuTCG], "\(image.name)")
+      let plan = try ProfileSelector.select(
+        try Requirements(guest: image.guest, image: image.name), host: SelectorTests.devHost(),
+        running: .empty
+      ).get()
+      #expect(plan.profile == .qemuTCG, "\(image.name)")
+    }
+  }
+
+  @Test func guestOfAnImageIsItsRecordsElseTheCatalogues() throws {
+    let (home, bin) = try Self.sandbox()
+    defer { try? FileManager.default.removeItem(at: home.deletingLastPathComponent()) }
+    let store = ImageStore(home: home, catalogue: try Self.catalogue(), searchPaths: [bin.path])
+    #expect(store.guest(of: "tiny-arm64") == GuestSpec(os: .linux, arch: .arm64))
+    #expect(store.guest(of: "tiny-mac")?.os == .macos)
+    #expect(store.guest(of: "nothing") == nil)
   }
 
   @Test func parsesChecksumLists() throws {
@@ -194,6 +247,27 @@ final class ConvertRunner: CommandRunning {
     #expect(error?.data["tool"] == .string("qemu-img"))
     let tart = await #expect(throws: VMLabError.self) { try await store.pull("tiny-mac") }
     #expect(tart?.data["tool"] == .string("tart"))
+  }
+
+  /// R-605: `images pull` of a Tart image runs `tart pull <ref>` and records the ref as the Tart
+  /// VM that `tart clone` takes; a second pull is a no-op.
+  @Test func tartPullRecordsTheTartVMName() async throws {
+    let (home, bin) = try Self.sandbox()
+    defer { try? FileManager.default.removeItem(at: home.deletingLastPathComponent()) }
+    let tart = bin.appending(path: "tart")
+    try Data("#!/bin/sh\nexit 0\n".utf8).write(to: tart)
+    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: tart.path)
+    let runner = TartRunner()
+    let store = ImageStore(
+      home: home, catalogue: try Self.catalogue(), downloader: Self.downloader(), runner: runner,
+      searchPaths: [bin.path])
+    let first = try await store.pull("tiny-mac")
+    #expect(first.changed)
+    #expect(first.image.tartVM == "ghcr.io/example/tiny:latest")
+    #expect(first.image.format == .tart)
+    #expect(store.pulled("tiny-mac")?.tartVM == "ghcr.io/example/tiny:latest")
+    #expect(try await store.pull("tiny-mac").changed == false)
+    #expect(runner.calls.withLock { $0 } == [["tart", "pull", "ghcr.io/example/tiny:latest"]])
   }
 
   @Test func defaultHomeHonoursVMLabHome() {

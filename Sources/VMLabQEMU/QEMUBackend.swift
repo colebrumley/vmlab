@@ -223,7 +223,8 @@ public final class QEMUBackend: Backend {
         gui: plan.provisionsDesktop ? GUIStack(vncPassword: nil) : nil,
         mounts: share.map {
           [GuestMount(tag: SharedDirSpec.tag, guestPath: $0.guestPath, kind: .ninep)]
-        } ?? [])
+        } ?? []
+      ).provisioned(record.provision)
     }
     return QEMULaunchRequest(
       record: record, plan: plan, layout: layout, baseImage: base, boot: boot, seed: config,

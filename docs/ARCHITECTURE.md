@@ -23,10 +23,13 @@ matches each line against `PanicSignature.table` and appends a `panic` event (th
 QEMU backend calls for QMP events (`GUEST_PANICKED` becomes `panic`, `RESET` `lifecycle`, others ignored),
 and `EventLog.latestPanic()` reads the newest. Also process-wide logging (`VMLabLogging`: swift-log to stderr at the `VMLAB_LOG` level, default `info`).
 `CodeSignature` reads `codesign` output so `vmlab doctor` can say whether the runner is entitled. `Profile` names the four profiles with their Appendix B tiers. `HostProbe` gathers `HostFacts` (Appendix E fast facts) through an injectable `CommandRunning` and merges the slow probes persisted in `VMLAB_HOME/host-facts.json` (`SlowProbes`), resetting to `unknown` any probe recorded under another macOS or QEMU version; `ProbeResult.countsAsYes` is how selection reads a probe (unknown counts as no). `SlowProbeRunner.swift` is the slow probe registry: an item that owns a probe (`SlowProbe.owner`: R-307, R-309, R-608, R-702) conforms a `SlowProbeRunner` and calls `SlowProbeRunners.register`; `SlowProbeRegistry.runAll` runs them one at a time, persists each `yes` or `no` to `host-facts.json`, and reports a probe with no runner as `not_implemented`, left as it was. `docs/FEATURES.md` does not read that file: its "verified on dev host" column reads the committed snapshot `docs/dev-host-facts.json` (same format), so a probe run in one worktree does not make `scripts/check.sh` fail in the others. Recording probe results in the docs means `scripts/gen-docs.sh --refresh-host-facts` (copies `VMLAB_HOME/host-facts.json` into the snapshot via the hidden `vmlab gen-docs host-facts`, then regenerates) and committing the snapshot with `docs/FEATURES.md`.
-`Images.swift` holds the Appendix H catalogue (`ImageCatalogue.builtin`, decoded from JSON into `CatalogImage`) and `ImageStore`, an actor over `VMLAB_HOME/images/<name>/` that pulls (URLSession through an injectable `ImageDownloading`, checksum from the published `SHA512SUMS`/`SHA256SUMS`, qcow2 to raw with `qemu-img` through `CommandRunning`), lists and removes images and records `image.json` (`PulledImage`); a re-pull whose file still matches the published checksum is a no-op. `ImageStore.defaultHome()` resolves `VMLAB_HOME`.
+`Images.swift` holds the Appendix H catalogue (`ImageCatalogue.builtin`, decoded from JSON into `CatalogImage`) and `ImageStore`, an actor over `VMLAB_HOME/images/<name>/` that pulls (URLSession through an injectable `ImageDownloading`, checksum from the published `SHA512SUMS`/`SHA256SUMS`, qcow2 to raw with `qemu-img` through `CommandRunning`), lists and removes images and records `image.json` (`PulledImage`; a Tart image runs `tart pull` and records the ref to clone as `tartVM`); a re-pull whose file still matches the published checksum is a no-op. `ImageStore.defaultHome()` resolves `VMLAB_HOME`.
 `KernelImages.swift` adds direct-kernel-boot files to the store (R-305): `extractKernel` copies the newest `vmlinuz-*` with its initrd, `System.map` and `config` out of a pulled image's `/boot` into `images/<name>/kernel/` (recorded under the `files` keys `kernel`, `initrd`, `systemMap`, `config`, plus `kernelVersion`), and `registerKernel` records a host kernel (and initrd), as a `format: kernel` image when no disk is pulled under that name. `Ext4.swift` (`Ext4Volume`) reads GPT partitions and ext4 (extents, block maps, linear and hashed directories, symlinks) read-only, because macOS has no ext4 driver for `hdiutil` to mount; an image without `disk.raw` is converted to a temporary raw file first. Debian's `System.map` is a stub that points at the `-dbg` package.
+`ImageRegistration.swift` registers local images (R-1002): `registerDisk` copies a raw or qcow2 Linux disk (format from its header, `detectFormat`) into `images/<name>/`, adds the qcow2 QEMU overlays and, for arm64, the raw VZ boots, and records `image.json` with its SHA-256 and the login `vmlab`; `registerIPSW` runs `tart create --from-ipsw <ipsw> vmlab-image-<name>` (`tartCreateArguments`) and records a `tart` image whose `tartVM` is that local VM. Names in use (catalogue, pulled, registered) are refused.
+`ImageCache.swift` is the cache policy (R-1003): `checkPullSize` refuses a pull whose catalogue `approxBytes` is over 10 GB (`confirmAboveBytes`, Appendix G) with `confirm_required` stating the size unless `confirm` is set (the images tool and `vm_create` pass theirs); `references(records)` is the set of image names VM records use and `unreferenced`/`prune` remove every pulled or registered image outside it (the images handler keeps everything when a VM record is unreadable, and asks for `confirm` above 10 GB); `sizes(of:)` measures allocated bytes, which `host_facts` reports as `imagesBytes`.
 `CloudInit` builds the NoCloud seed both engines attach: from a plain `CloudInitConfig` (hostname, user, SSH key, packages, optional `GUIStack` (R-504: Xfce, LightDM autologin with `logind-check-graphical=false` since the cloud kernel has no DRM and X runs on fbdev, and x11vnc on port 5900 only when a VNC password is given; `GUIStack.inGuestVNC(vmDirectory:)` makes or reuses `<vm>/vnc.pass`), `SegmentNIC`, `GuestMount`s, `ConsoleDevice`, `dhcpIdentifierMAC` (a `network-config` NIC with `dhcp-identifier: mac`, so vmnet's lease file is keyed by the MAC), extra user-data merged last as a MIME part) it emits `user-data`, `meta-data` and `network-config` with a small hand-written YAML emitter (every string double-quoted; no YAML library, C5) and runs `hdiutil makehybrid` to make the `cidata` ISO. `FeatureDocs` renders `docs/FEATURES.md` from the matrix. It depends on swift-log only.
-`Store.swift` holds the VM store: `VMRecord` (the `vm.json` of `vms/<id>/`, with `VMState`, `VMRuntime` endpoints, `CheckpointRef`s, the resolved `[Feature]` and the optional creating `Plan`), and `Store`, which lists, loads, creates (IDs `vm-` plus six base32 characters, unique names defaulting to the ID), updates and removes records under `VMLAB_HOME` (`Store.defaultHome`). Writes go through a temp file and `rename(2)` under a per-VM `flock` on `locks/<id>.lock` (names under `locks/store.lock`, always taken after a VM lock), so two server processes never corrupt or lose an update; `StoreMigrations` upgrades older `schemaVersion`s step by step, with one fixture per released version in `Tests/Fixtures/store/`. `Store.runningGuests()` is the counter `HostProbe.runningGuests` and the budgets read. `Tests/StoreHelper` builds `vmlab-store-helper`, a test-only executable (no product) that `StoreTests` spawns as the second writer.
+`Provision.swift` holds the request's `provision` (R-1001: `ProvisionSpec` with `packages`, `userData`, `runCommands`; stored on `VMRecord.provision`). On Linux `CloudInitConfig.provisioned(_:)` folds it into the seed (packages appended, user-data as the last MIME part, commands as files under `/var/lib/vmlab/provision/` that a runner script in `runcmd` executes in order, recording `<n> <exit> <ms>` in `steps.tsv` (`ProvisionPaths`, R-1004)); on macOS `runCommands` imply `exec_ssh`. `VMManager` hands every start whose guest answered SSH to a `GuestProvisioning` (`SSHProvisioner` by default), which, once per VM and only when the request had a `provision`, either waits for `cloud-init status --wait` and reads the runner's results back as root (Linux) or runs the commands one by one over `SSHExecChannel` (macOS), and records each step (`ProvisionStep`: command, status, exit, duration) in `<vm>/provision.json` (`ProvisionReport`) with their output in `<vm>/provision.log`. A failed step becomes a `provision_failed` start warning, and `vm_inspect` returns the report and the same warning (or `provision_unknown` when SSH never answered).
+`Store.swift` holds the VM store: `VMRecord` (the `vm.json` of `vms/<id>/`, with `VMState`, `VMRuntime` endpoints, `CheckpointRef`s, the resolved `[Feature]`, the optional creating `Plan` and, for `vz-macos`, `tartClone`, the Tart clone's directory), and `Store`, which lists, loads, creates (IDs `vm-` plus six base32 characters, unique names defaulting to the ID), updates and removes records under `VMLAB_HOME` (`Store.defaultHome`). Writes go through a temp file and `rename(2)` under a per-VM `flock` on `locks/<id>.lock` (names under `locks/store.lock`, always taken after a VM lock), so two server processes never corrupt or lose an update; `StoreMigrations` upgrades older `schemaVersion`s step by step, with one fixture per released version in `Tests/Fixtures/store/`. `Store.runningGuests()` is the counter `HostProbe.runningGuests` and the budgets read. `Tests/StoreHelper` builds `vmlab-store-helper`, a test-only executable (no product) that `StoreTests` spawns as the second writer.
 
 `Lifecycle.swift` holds the lifecycle state machine: `Lifecycle.table` maps each `VMState` and `LifecycleAction` (start, stop, kill, pause, resume, reset, destroy, checkpoint_stop) to a `LifecycleTarget` (a state or `destroyed`); `Lifecycle.transition` throws `wrong_state` with `state` and `legalActions` for any other pair. It also holds reattach: `Store.reconcile(probe:)` checks each record's `runtime.pid` with an injectable `LivenessProbe` (default `kill(pid, 0)` plus a connect to the control or QMP unix socket), marks a live, answering engine `running`, and a gone or silent one `stopped` (`broken` when no `Store.diskCandidates` file exists, `suspended` kept), clearing `runtime` and logging a `lifecycle` event per change. The server calls it at start.
 `Serial.swift` holds `SerialChannel`, an actor over a guest's serial unix stream socket (QEMU's `-serial unix:`, or the `vmlab-vz` bridge, R-602), engine-neutral so both backends share it. `start(connectTimeout:)` connects (retrying while the socket is absent or refusing) and a reader thread feeds bytes in order to the actor, which appends them to `<vm>/serial.log` (`O_APPEND`, never truncated, rotated to `serial.log.1` past 64 MB) and a 4 MB `ByteRing` addressed by absolute byte offsets from the channel's first byte. `read(since:maxBytes:)` and `read(tail:)` return `SerialRead` (`text`, `start`, `offset`, `truncated` when bytes fell out of the ring or were cut); `write(_:)` sends UTF-8 and returns the end offset; `wait(for:since:timeout:)` matches a Swift `Regex` against output at or after `since` (default: the current end) and returns `SerialMatch` (`match`, `start`, `offset` after it), or `timeout`, `guest_unreachable` when the socket closes, `invalid_request` for a bad pattern. `setLineObserver` receives every completed `SerialLine` with its offsets (R-304's panic table hangs there). The socket descriptor is closed exactly once, by the reader, under the lock writes take.
@@ -206,6 +209,29 @@ reconnect by socket path alone. `VZBackend` (profile `vz-linux`) conforms to Cor
 create clones the pulled raw image to `<vm>/disk.raw` and writes the VM's key and `seed.iso`
 (image login user, console `hvc0`, DHCP by MAC, and when the plan provisions a desktop the R-504 `GUIStack` with its x11vnc password in `<vm>/vnc.pass`), start launches and waits up to `leaseTimeout` for
 the lease, recorded as `runtime.ip`, stop/kill wait for the runner to exit; `VZRunningVM` offers exec over SSH to the leased address (`SSHExecChannel`) and no serial, display or checkpoint channel yet (R-602, R-503, R-605; its display endpoint is Core's `DisplayEndpoint.forVM`, which `vm_computer` and `vm_inspect` use directly).
+`VZMacBackend` (profile `vz-macos`, R-605) runs macOS guests in the same runner: `Tart.swift` wraps
+the `tart` CLI (`Tart.locate`, `clone`, `delete`, under `TART_HOME` or `~/.tart`) and reads a clone's
+`config.json` (`TartVMConfig`, Tart 2.x `version: 1`; any other layout is `engine_error`). Create runs
+`tart clone <ref> <vm-id>` from the ref the image record names (`PulledImage.tartVM`) and records the
+clone's directory as `VMRecord.tartClone`; start builds `VZRunnerConfig.macOS` (boot `.macOS` with the
+base64 hardware model and machine identifier and `nvram.bin` as auxiliary storage, `disk.img`, the
+clone's MAC, no console, always a Mac display) and waits for that MAC's lease; stop, kill, pause and
+resume are `VZBackend`'s; destroy also `tart delete`s the clone. The runner turns boot `.macOS` into
+a `VZMacPlatformConfiguration`, `VZMacOSBootLoader` and `VZMacGraphicsDeviceConfiguration`.
+`PasswordSSH` runs `ssh` with the image password through an askpass script
+(`SSH_ASKPASS_REQUIRE=force`, the password only in its environment) for a guest whose key is not
+installed yet; `HostCommand` is its subprocess with stdin and a deadline.
+`MacProvisioner` (R-606) is a macOS guest's first boot, run by `VZMacBackend.start` once the lease
+is known and `<vm>/provisioned` is absent: over `PasswordSSH` with the image login it waits for
+sshd, appends `<vm>/id_ed25519.pub` (made at create by `VMManager`, R-400) to `~/.ssh/authorized_keys`,
+sets the hostname with `scutil` (through `sudo -S`, the password on stdin), and when a GUI feature was
+granted sets the legacy VNC password from `<vm>/vnc.pass` (eight letters and digits, made at
+create) with ARD's `kickstart`, sets `VNCAlwaysStartOnConsole` (without it macOS 26 shows a
+password-only VNC viewer a lock screen of its own instead of the logged-in console), enables and
+restarts Screen Sharing and checks that port 5900 answers RFB. The display is then the guest's
+Screen Sharing (`DisplayEndpoint.forVM`, `hostSide: false`, R-607). Steps
+go to `<vm>/provision.log`; a failure is `provision_failed` naming the step, and the runner is
+killed. Password authentication stays enabled.
 
 **`VMLabRFB`** (library). A VNC (RFB) client: framebuffer updates to PNG, pointer and key events. It
 gives both engines a screen to look at and click on. `RFBClient` (an actor) speaks RFB 3.8 over an
@@ -216,7 +242,9 @@ requests keeps a `Framebuffer` current; `snapshot()` returns a `CGImage` and `Fr
 encodes PNG with ImageIO. Input (`RFBInput.swift`, `Keysym.swift`): `pointer(x:y:buttons:)` with a
 `PointerButtons` mask, `key(_:down:)`, `press(_:)` for a `KeyChord` parsed from `cmd+shift+4`-style
 text (`cmd` is `Super_L`), and `type(_:gap:)`, which strikes each character with Shift where a US
-layout needs it, 10 ms apart. Screenshots (`ScreenshotEncoder.swift`, `ScreenshotCache.swift`):
+layout needs it, 10 ms apart; with a `hold`, `press` and `type` send each key event on its own,
+`hold` apart (macOS Screen Sharing drops strokes whose press and release arrive together).
+`serverVersion` is the server's ProtocolVersion (`RFB 003.889` is Screen Sharing). Screenshots (`ScreenshotEncoder.swift`, `ScreenshotCache.swift`):
 `ScreenshotEncoder` crops a `Framebuffer` to a `PixelRect` region, scales its long edge to `maxEdge`
 (default 1280, never upscaling) and encodes PNG or JPEG with a quality; `ScreenshotCache`, one per VM
 held by its owner, keeps the last 20 frames LZFSE-compressed under ids so a later capture with
@@ -278,10 +306,11 @@ has a manifest; sections capped at 500 entries with the counts and `truncated`, 
 `path`), `images`
 (list/pull/remove), `vm_computer` (`Handlers/VMComputerHandler.swift`, R-502: resolves the VM's
 `DisplayEndpoint`, gets its session from `ToolContext.displays`, and maps the computer-use actions
-onto pointer, key and type events; clicks move first, double and triple clicks repeat 60 ms apart,
+onto pointer, key and type events; clicks move first and hold the button 30 ms, double and triple clicks repeat 60 ms apart,
 drags hold the left button over eight steps, scroll strikes wheel buttons; coordinates are checked
 against the screen and, with `scaled: true`, mapped through the last screenshot as origin +
-pixel / scale; every acting action sleeps `settleMs` and returns a fresh screenshot), `vm_introspect` (an `IntrospectionQuery` to the attached VM's `introspection`
+pixel / scale; every acting action sleeps `settleMs` and returns a fresh screenshot; on `vz-macos`
+a `key` chord with `cmd` adds the warning that it went out as `Super_L`, R-607), `vm_introspect` (an `IntrospectionQuery` to the attached VM's `introspection`
 channel; `raw` takes exactly one of `qmp`/`hmp`; returns `{ query, json | text }`) and
 `vm_debug` (R-701: `VMManager.attach`, the `.gdb` channel, then the VM's `DebugSession` from
 `ToolContext.debug`, `DebugSessions.shared` by default; addresses are `0x` hex or decimal, memory
@@ -314,14 +343,16 @@ go to stderr. Built: `facts`, `doctor`, `plan`, `create` (the `plan` flags plus 
 `destroy`, `exec` and `job` (`Sources/vmlab/ExecCommands.swift`: stdout to stdout, stderr and a
 non-zero status to stderr), `images pull|list|remove`, `computer <vm> <action>` (`--at x,y`, `--out` writes the image), `debug <vm> <action>`, `introspect`, `memory-dump`, `serve`, `--version`. It bootstraps logging and hands off to Core and `VMLabMCP`.
 `destroy`, `exec`, `job` and `file` (`Sources/vmlab/ExecCommands.swift`: stdout to stdout, stderr and a
-non-zero status to stderr), `images pull|list|remove`, `computer <vm> <action>` (`--at x,y`, `--out` writes the image), `introspect`, `memory-dump`, `serve`, `--version`. It bootstraps logging and hands off to Core and `VMLabMCP`.
+non-zero status to stderr), `images pull|list|remove`, `computer <vm> <action>` (`--at x,y`, `--out` writes the image), `introspect`, `memory-dump`, `serve`, `--version`, and `install-mcp --client claude-code|claude-desktop` (`Sources/vmlab/InstallMCP.swift`: prints the `mcpServers` entry that runs this `vmlab serve` with `VMLAB_HOME`, and for Claude Code the `claude mcp add` line; `--write` merges it into `~/.claude.json` or Claude Desktop's `claude_desktop_config.json`, keeping every other key; the entry and the merge are `MCPServerEntry`/`MCPClient` in `VMLabMCP/ClientInstall.swift`, which take the home directory as a parameter). It bootstraps logging and hands off to Core and `VMLabMCP`.
 
 **`VMLabEngines`** (library). The engine wiring, and the only module that imports both Core and the
 backends for that purpose: `Engines.registerAll(store:into:displays:debug:)` registers `QEMUBackend` for `qemu-hvf`
-and `qemu-tcg` and `VZBackend` for `vz-linux` in `Backends.shared` (or a given `BackendRegistry`),
+and `qemu-tcg`, `VZBackend` for `vz-linux` and `VZMacBackend` for `vz-macos` in `Backends.shared` (or a given `BackendRegistry`),
 `RFBDisplayConnector` in `Displays.shared` and `GDBDebugConnector` in `DebugSessions.shared`. `RFBDisplay.swift` is Core's `DisplaySession` over
 `VMLabRFB`: `RFBDisplaySession` (an actor) connects with the endpoint's password file, waits for the
-first frame, keeps the VM's `ScreenshotCache` across reconnects (a dropped connection is reopened on
+first frame (and up to 3 s more while it is one colour: Screen Sharing opens with a black frame),
+sends keys with a 20 ms hold, waits 3 s after connecting to Screen Sharing before the first input
+(it ignores key events while a viewer settles in), keeps the VM's `ScreenshotCache` across reconnects (a dropped connection is reopened on
 the next call) and maps `RFBError` to Appendix D codes (bad requests and key names
 `invalid_request`, unreachable or refused displays `guest_unreachable`, protocol trouble
 `engine_error`).
@@ -332,7 +363,7 @@ it starts a diskless, firmware-less arm64 `virt` machine under HVF halted with `
 `nop; nop; b` loop at 0x40000000, points `pc` at it, continues, halts, reads the registers, sets a
 software breakpoint at `pc + 4` and expects the stop there; `unknown` without QEMU or HVF, and a
 `no` makes `gdb` on `qemu-hvf` refuse with `SlowProbe.noReason`, so arm64 guests that need gdb go
-to `qemu-tcg`). `vz-macos` joins `Engines.profiles` when `VZBackend` runs macOS guests.
+to `qemu-tcg`).
 `BoundariesTests` checks that it imports only Core, QEMU, VZ, RFB and GDB and that no library imports it.
 
 **`vmlab-vz`** (executable). The VZ runner: one process per Virtualization.framework guest, so a
@@ -373,7 +404,7 @@ pulled images; each skips itself unless `VMLAB_INTEGRATION=1`.
 ## Scripts
 
 `scripts/check.sh` (format lint, build, unit tests, sign, generated docs current), `build.sh`,
-`sign.sh`, `bootstrap.sh` (Homebrew: qemu, tart), `gen-docs.sh` (`--check` for check.sh;
+`sign.sh`, `release.sh` (R-1106: `swift build -c release` with the version from `VMLAB_VERSION` or `git describe --tags` baked into `VMLabMCP.version`'s line for that build only, `sign.sh release`, `dist/vmlab-<version>-arm64.tar.gz` plus `.sha256`, then unpacks it to a temp directory and checks `vmlab --version` and that `vmlab doctor` finds the signed `vmlab-vz` next to `vmlab`), `bootstrap.sh` (Homebrew: qemu, tart), `gen-docs.sh` (`--check` for check.sh;
 `--refresh-host-facts` copies this host's slow probes into `docs/dev-host-facts.json`, the only
 input of FEATURES.md that is not code), and the process scripts
 `board.mjs`, `tidy.mjs`, `review.mjs`, `retro.mjs` and `guard.mjs` (the worktree-rule hook)

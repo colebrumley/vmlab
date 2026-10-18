@@ -68,6 +68,9 @@ struct VMComputerHandler: ToolHandler {
   static let maxWaitSeconds = 60.0
   /// The pause between the clicks of a double or triple click, and between drag steps.
   static let clickGap = Duration.milliseconds(60)
+  /// How long a click holds the button: macOS Screen Sharing ignores a press and release that
+  /// arrive together.
+  static let buttonHold = Duration.milliseconds(30)
   static let dragSteps = 8
 
   var spec: ToolSpec { .vmComputer }
@@ -86,7 +89,8 @@ struct VMComputerHandler: ToolHandler {
       record, vmDirectory: context.store.directory(of: record.id))
     let session = try await context.displays.session(vm: record.id, endpoint: endpoint)
     let computer = Computer(
-      vm: record.id, session: session, sessions: context.displays, arguments: arguments)
+      vm: record.id, profile: record.profile, session: session, sessions: context.displays,
+      arguments: arguments)
     return try await computer.perform(action)
   }
 }
@@ -94,11 +98,37 @@ struct VMComputerHandler: ToolHandler {
 /// One `vm_computer` call.
 struct Computer {
   let vm: String
+  var profile: Profile = .qemuHVF
   let session: any DisplaySession
   let sessions: DisplaySessions
   let arguments: ToolArguments
 
+  /// The note a `key` result carries on a macOS guest when a chord used Command (R-607).
+  static let commandNote =
+    "cmd was sent as Super_L, which macOS Screen Sharing reads as the Command key"
+
+  /// The modifier names that send Super_L (`KeyChord`).
+  static let commandNames: Set<String> = ["cmd", "command", "super", "super_l", "win"]
+
+  /// Whether any chord of `text` holds Command.
+  static func usesCommand(_ text: String) -> Bool {
+    text.split(whereSeparator: \.isWhitespace).contains { chord in
+      chord.split(separator: "+").contains { commandNames.contains($0.lowercased()) }
+    }
+  }
+
   func perform(_ action: String) async throws(VMLabError) -> ToolResult {
+    var result = try await act(action)
+    if action == "key", profile == .vzMacOS, Self.usesCommand(try requiredText()),
+      case .object(var object) = result.value
+    {
+      object["warnings"] = .array((result.warnings + [Self.commandNote]).map { .string($0) })
+      result.value = .object(object)
+    }
+    return result
+  }
+
+  private func act(_ action: String) async throws(VMLabError) -> ToolResult {
     switch action {
     case "screenshot":
       let request = try screenshotRequest(
@@ -193,6 +223,7 @@ struct Computer {
     for n in 0..<count {
       if n > 0 { await pause(VMComputerHandler.clickGap) }
       try await session.pointer(x: target.x, y: target.y, buttons: button)
+      await pause(VMComputerHandler.buttonHold)
       try await session.pointer(x: target.x, y: target.y, buttons: [])
     }
   }
