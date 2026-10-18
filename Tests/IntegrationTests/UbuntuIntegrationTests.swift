@@ -58,7 +58,7 @@ import VMLabVZ
       VMRecord(id: "", profile: .vzLinux, guest: plan.guest, features: [], image: Self.image),
       plan: plan)
     let dir = store.directory(of: created.id)
-    let started = try #require(try await manager.perform(.start, on: created.id))
+    let started = try #require(try await manager.performAdmitted(.start, on: created.id))
     defer {
       if let pid = started.runtime?.pid { kill(pid, SIGKILL) }
     }

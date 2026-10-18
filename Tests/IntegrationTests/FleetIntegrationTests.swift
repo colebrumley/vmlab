@@ -6,7 +6,8 @@ import VMLabMCP
 @Suite(.serialized) struct FleetIntegrationTests {
   /// A tool context over a `LabHome`: its backends and its manager (whose switch is the built one).
   static func context(_ lab: LabHome) -> ToolContext {
-    var context = ToolContext(home: lab.home, backends: lab.registry, startGate: StartGate())
+    var context = ToolContext(
+      home: lab.home, backends: lab.registry, startGate: IntegrationAdmission.gate)
     context.manager = lab.manager
     return context
   }

@@ -89,7 +89,7 @@ definition of done.
    schema changed.
 4. **Verify.** While working, run only the tests for what you touch (`swift test --filter <Name>`).
    Before the review, bring `origin/main` in, then run `scripts/check.sh` once. Run the integration
-   tests (`VMLAB_INTEGRATION=1 swift test --filter Integration`) only when the Verify line says
+   tests (`VMLAB_INTEGRATION=1 swift test --no-parallel --filter Integration`) only when the Verify line says
    "integration"; they boot real guests and need `scripts/bootstrap.sh` and a pulled image. Every
    previously passing test must still pass; fix regressions before anything else.
 5. **Commit and review.** Tick your item's line in REQUIREMENTS.md (only that line). Commit as
@@ -128,6 +128,10 @@ definition of done.
 
 Guests are the main cost of many sessions on one Mac: memory, and the two-macOS-guest limit.
 
+- Integration tests run serially (`--no-parallel`, always): run in parallel, every suite boots
+  its own guests at once and the host swaps itself to a halt. Their starts go through the same
+  host-memory gate as a server's, so an overcommitted run fails fast with `limit_memory`
+  (`VMLAB_IGNORE_MEMORY_PRESSURE=1` turns that off, for the owner only).
 - Integration tests create guests under `VMLAB_HOME=$TMPDIR/vmlab-test-<pid>` and destroy them in
   teardown, never under `~/.vmlab`. A killed test run may leave a QEMU or `vmlab-vz` process: run
   `vmlab gc` (R-805) or `pkill -f vmlab-test` before blaming the next failure.
@@ -162,7 +166,7 @@ scripts/bootstrap.sh                 # brew install qemu and tart; prints versio
 scripts/check.sh                     # format lint + build + unit tests + sign (must pass before every commit)
 scripts/build.sh                     # swift build and sign vmlab-vz
 scripts/gen-docs.sh                  # regenerate docs/FEATURES.md and docs/TOOLS.md
-VMLAB_INTEGRATION=1 swift test --filter Integration   # boots real guests; needs pulled images
+VMLAB_INTEGRATION=1 swift test --no-parallel --filter Integration   # boots real guests, one test at a time; needs pulled images
 node scripts/board.mjs               # claims and notes shared by every worktree
 node scripts/tidy.mjs                # remove merged worktrees and branches, release their claims
 node scripts/review.mjs              # Codex's adversarial review of this branch, plus CodeRabbit on its PR

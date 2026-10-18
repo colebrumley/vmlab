@@ -30,7 +30,7 @@ import VMLabVZ
       VZBackend(
         store: store, launcher: VZRunnerLauncher(runnerPath: VZRunnerIntegrationTests.runner),
         leaseTimeout: .seconds(90)))
-    let context = ToolContext(home: home, backends: registry)
+    let context = ToolContext(home: home, backends: registry, startGate: IntegrationAdmission.gate)
     let plan = Plan(
       profile: .vzLinux, guest: GuestSpec(os: .linux, arch: .arm64),
       resources: ResourceSpec(cpus: 2, memoryGB: 2), features: [.execSSH, .serial],
@@ -39,7 +39,7 @@ import VMLabVZ
       VMRecord(
         id: "", profile: .vzLinux, guest: plan.guest, features: [], image: "debian-13-arm64"),
       plan: plan)
-    var started = try #require(try await context.manager.perform(.start, on: created.id))
+    var started = try #require(try await context.manager.performAdmitted(.start, on: created.id))
     defer {
       if let pid = try? store.load(id: created.id).runtime?.pid { kill(pid, SIGKILL) }
     }
@@ -87,7 +87,7 @@ import VMLabVZ
     // Synced above; kill rather than stop, since a guest still busy with cloud-init can take
     // minutes to honour a shutdown request on a loaded host.
     _ = try await context.manager.perform(.kill, on: created.id)
-    started = try #require(try await context.manager.perform(.start, on: created.id))
+    started = try #require(try await context.manager.performAdmitted(.start, on: created.id))
     _ = try await serial([
       "action": .string("wait"), "pattern": .string("login: "), "timeoutSeconds": .number(90),
     ])

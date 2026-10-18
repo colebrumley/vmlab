@@ -112,7 +112,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   Sources/vmlab-vz/        VZ runner executable: one process per VZ guest, control socket (needs entitlement)
   Sources/vmlab-switch/    user-space Ethernet switch for private segments
   Tests/UnitTests/         Swift Testing, fast, no engines
-  Tests/IntegrationTests/  need QEMU/Tart and pulled images; gated by VMLAB_INTEGRATION=1
+  Tests/IntegrationTests/  need QEMU/Tart and pulled images; gated by VMLAB_INTEGRATION=1, run with --no-parallel
   Tests/Fixtures/          vm.json fixtures per schema version, QMP transcripts, RFB captures, host-facts samples
   docs/                    ARCHITECTURE.md, FEATURES.md (generated), TOOLS.md (generated), AGENT.md, specs/
   scripts/                 check.sh, sign.sh, bootstrap.sh, board.mjs, tidy.mjs, review.mjs, gen-docs.sh

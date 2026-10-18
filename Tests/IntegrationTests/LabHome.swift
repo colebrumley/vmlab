@@ -80,7 +80,7 @@ struct LabHome {
       VMRecord(
         id: "", name: name, profile: plan.profile, guest: plan.guest, features: plan.features,
         image: image, network: network), plan: plan)
-    return try await manager.run(.start, on: created.id)
+    return try await manager.runAdmitted(.start, on: created.id)
   }
 
   func exec(_ vm: String, _ command: String) async throws -> ExecResult {

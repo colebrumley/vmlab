@@ -103,7 +103,8 @@ import VMLabVZ
       #expect(clone.hasSuffix("/vms/\(guest.record.id)"))
       let config = try TartVMConfig.read(from: URL(filePath: clone))
 
-      let started = try #require(try await guest.manager.perform(.start, on: guest.record.id))
+      let started = try #require(
+        try await guest.manager.performAdmitted(.start, on: guest.record.id))
       #expect(started.state == .running)
       let ip = try #require(started.runtime?.ip, "no DHCP lease for the clone's MAC")
       #expect(DHCPLeases.lookup(mac: MACAddress.normalize(config.macAddress) ?? "") == ip)
@@ -164,7 +165,8 @@ import VMLabVZ
     let begun = clock.now
     let guest = try await Self.makeGuest(features: [.execSSH, .gui, .guiDesktop], suffix: "p")
     do {
-      let started = try #require(try await guest.manager.perform(.start, on: guest.record.id))
+      let started = try #require(
+        try await guest.manager.performAdmitted(.start, on: guest.record.id))
       print("started and provisioned after \(clock.now - begun)")
       #expect(MacProvisioner.isProvisioned(guest.directory))
       let ip = try #require(started.runtime?.ip)
@@ -198,7 +200,8 @@ import VMLabVZ
   func vmComputerOpensTerminalThroughSpotlight() async throws {
     let guest = try await Self.makeGuest(features: [.execSSH, .gui, .guiDesktop], suffix: "g")
     do {
-      let started = try #require(try await guest.manager.perform(.start, on: guest.record.id))
+      let started = try #require(
+        try await guest.manager.performAdmitted(.start, on: guest.record.id))
       let ip = try #require(started.runtime?.ip)
       // The image restores a Terminal window at login; quit it so the new one is new.
       _ = Self.keySSH(guest, host: ip, command: "pkill -x Terminal")

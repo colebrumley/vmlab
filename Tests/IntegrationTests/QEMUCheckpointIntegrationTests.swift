@@ -63,7 +63,7 @@ enum GuestSSH {
       let checkpoints = try await guest.backend.checkpoints(stopped)
       try await checkpoints.create(id: "before", mode: .disk)
 
-      var running = try #require(try await guest.manager.perform(.start, on: id))
+      var running = try #require(try await guest.manager.performAdmitted(.start, on: id))
       var port = try #require(running.runtime?.sshPort)
       try await GuestSSH.waitForSSH(guest, port: port)
       #expect(try GuestSSH.run(guest, port: port, "echo hi > /home/debian/marker && sync") == 0)
@@ -76,7 +76,7 @@ enum GuestSSH {
 
       let again = try #require(try await guest.manager.perform(.stop, on: id))
       try await guest.backend.checkpoints(again).restore(id: "before", mode: .disk)
-      running = try #require(try await guest.manager.perform(.start, on: id))
+      running = try #require(try await guest.manager.performAdmitted(.start, on: id))
       port = try #require(running.runtime?.sshPort)
       try await GuestSSH.waitForSSH(guest, port: port)
       #expect(try GuestSSH.run(guest, port: port, "test -e /home/debian/marker") == 1)

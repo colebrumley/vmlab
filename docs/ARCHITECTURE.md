@@ -435,7 +435,7 @@ live switch for the same segment, and removes its sockets on SIGTERM or SIGINT.
 fixtures come from `Tests/Fixtures/` through `#filePath`.
 
 **`IntegrationTests`** (Swift Testing). Tests that boot real guests through QEMU or Tart and need
-pulled images; each skips itself unless `VMLAB_INTEGRATION=1`.
+pulled images; each skips itself unless `VMLAB_INTEGRATION=1`, and they run serially (`VMLAB_INTEGRATION=1 swift test --no-parallel --filter Integration`). Their starts go through `IntegrationAdmission` (`IntegrationGate.swift`: a `StartGate` with the live `HostMemoryGuard`, reached through `VMManager.performAdmitted`/`runAdmitted` and the contexts' `startGate`), so an overcommitted run fails with `limit_memory` instead of swapping.
 
 ## Scripts
 

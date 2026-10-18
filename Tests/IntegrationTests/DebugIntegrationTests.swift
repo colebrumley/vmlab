@@ -12,7 +12,8 @@ import VMLabQEMU
     let vm: String
 
     init(_ guest: QEMUGuest) {
-      var context = ToolContext(home: guest.home, backends: guest.backends)
+      var context = ToolContext(
+        home: guest.home, backends: guest.backends, startGate: IntegrationAdmission.gate)
       context.debug = DebugSessions(connector: GDBDebugConnector())
       self.context = context
       vm = guest.record.id
