@@ -240,7 +240,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   **Verify:** table-driven unit test over every (state, action) pair; a reconcile test with a fixture
   directory whose pid is a finished process marks it `stopped` and logs the event.
 
-- [ ] **R-107 Memory and concurrency budgets**
+- [x] **R-107 Memory and concurrency budgets**
   Before start: sum of memory of running guests plus this one must leave `reserveGB` (Appendix G,
   default 4) free of physical memory, else `limit_memory` with the numbers. Running macOS guests
   must stay under 2, else `limit_macos_guests`. A global `StartGate` limits concurrent starts to

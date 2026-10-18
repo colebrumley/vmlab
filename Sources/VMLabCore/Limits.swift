@@ -103,12 +103,7 @@ public struct Inventory: Sendable, Hashable {
 
   /// The live (running or paused) records, each with its memory or the Appendix G default.
   public init(records: [VMRecord]) {
-    guests = records.filter(\.state.isLive).map { record in
-      Guest(
-        id: record.id, profile: record.profile, os: record.guest.os,
-        memoryGB: record.resources.memoryGB
-          ?? ResourceLimits.defaultResources(for: record.guest.os).memoryGB ?? 0)
-    }
+    guests = records.filter(\.state.isLive).map(Guest.init(record:))
   }
 
   public var macOSGuests: Int { guests.count(where: { $0.os == .macos }) }
