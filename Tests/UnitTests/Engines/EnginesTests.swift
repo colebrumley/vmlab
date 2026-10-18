@@ -14,4 +14,10 @@ import VMLabEngines
       #expect(try registry.backend(for: profile).profile == profile)
     }
   }
+
+  @Test func registerProbesFillsTheQEMUProbes() {
+    let registry = SlowProbeRegistry()
+    Engines.registerProbes(into: registry)
+    #expect(registry.probes == [.qemuHVFLiveSnapshot])
+  }
 }

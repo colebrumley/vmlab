@@ -96,8 +96,30 @@ public final class QEMUBackend: Backend {
   }
 
   public func attach(_ record: VMRecord) async throws(VMLabError) -> any RunningVM {
-    QEMURunningVM(record: record, machine: try await machine(for: record))
+    QEMURunningVM(
+      record: record, machine: try await machine(for: record),
+      checkpoints: try checkpointProvider(record))
   }
+
+  /// Checkpoints work on a stopped guest too (`qemu-img`), so they need no attach.
+  public func checkpoints(_ record: VMRecord) async throws(VMLabError) -> any CheckpointProvider {
+    try checkpointProvider(record)
+  }
+
+  func checkpointProvider(_ record: VMRecord) throws(VMLabError) -> QEMUCheckpoints {
+    QEMUCheckpoints(backend: self, record: record, liveAllowed: liveSnapshotsAllowed(record))
+  }
+
+  /// Live checkpoints: always under TCG; under HVF when the plan granted `checkpoint_live` or the
+  /// host fact `qemu_hvf_live_snapshot` (in this home's `host-facts.json`) is `yes`.
+  public func liveSnapshotsAllowed(_ record: VMRecord) -> Bool {
+    if profile == .qemuTCG || record.features.contains(.checkpointLive) { return true }
+    let facts = try? SlowProbes.load(from: SlowProbes.url(home: store.home))
+    return facts?.result(.qemuHVFLiveSnapshot) == .yes
+  }
+
+  /// The host's QEMU, located on first use.
+  public func installation() throws(VMLabError) -> QEMUInstallation { try locate() }
 
   // MARK: Helpers
 
@@ -169,12 +191,14 @@ public struct QEMURunningVM: RunningVM {
   public let profile: Profile
   public let features: [Feature]
   public let machine: QEMUMachine
+  public let checkpoints: any CheckpointProvider
 
-  public init(record: VMRecord, machine: QEMUMachine) {
+  public init(record: VMRecord, machine: QEMUMachine, checkpoints: any CheckpointProvider) {
     id = record.id
     profile = record.profile
     features = record.features
     self.machine = machine
+    self.checkpoints = checkpoints
   }
 
   public var serial: SerialChannel? { machine.serial }
@@ -183,26 +207,12 @@ public struct QEMURunningVM: RunningVM {
   }
   public var gdb: GDBEndpoint? { machine.runtime.gdbEndpoint.flatMap(GDBEndpoint.init(runtime:)) }
   public var introspection: (any Introspection)? { QMPIntrospection(qmp: machine.qmp) }
+  public var memoryDump: (any MemoryDumper)? { QMPMemoryDumper(qmp: machine.qmp) }
   public var exec: any ExecChannel { NotYetBuilt(vm: id, channel: "exec", item: "R-400") }
-  public var checkpoints: any CheckpointProvider {
-    NotYetBuilt(vm: id, channel: "checkpoints", item: "R-307")
-  }
-}
-
-/// `query` runs QMP `query-<query>` (R-311 widens this).
-struct QMPIntrospection: Introspection {
-  let qmp: QMPClient
-
-  func query(_ query: String, arguments: [String: JSONValue]) async throws(VMLabError) -> JSONValue
-  {
-    try await QEMUBackend.lift {
-      try await qmp.execute("query-\(query)", arguments: arguments.isEmpty ? nil : arguments)
-    }
-  }
 }
 
 /// A channel the QEMU backend does not provide yet; every call is `guest_unreachable`.
-struct NotYetBuilt: ExecChannel, CheckpointProvider {
+struct NotYetBuilt: ExecChannel {
   let vm: String
   let channel: String
   let item: String
@@ -215,7 +225,4 @@ struct NotYetBuilt: ExecChannel, CheckpointProvider {
   }
 
   func run(_ request: ExecRequest) async throws(VMLabError) -> ExecResult { throw error }
-  func create(id: String, mode: CheckpointMode) async throws(VMLabError) { throw error }
-  func restore(id: String, mode: CheckpointMode) async throws(VMLabError) { throw error }
-  func delete(id: String) async throws(VMLabError) { throw error }
 }

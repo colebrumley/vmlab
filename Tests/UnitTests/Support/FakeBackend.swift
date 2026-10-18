@@ -101,6 +101,7 @@ struct FakeRunningVM: RunningVM {
   var introspection: (any Introspection)?
   var exec: any ExecChannel
   var checkpoints: any CheckpointProvider
+  var memoryDump: (any MemoryDumper)? = FakeMemoryDumper()
 }
 
 struct FakeExec: ExecChannel {
@@ -110,10 +111,21 @@ struct FakeExec: ExecChannel {
 }
 
 struct FakeIntrospection: Introspection {
-  func query(
-    _ query: String, arguments: [String: JSONValue]
-  ) async throws(VMLabError) -> JSONValue {
-    .object(["query": .string(query)])
+  func query(_ query: IntrospectionQuery) async throws(VMLabError) -> IntrospectionAnswer {
+    switch query {
+    case .memoryTree, .registers, .devices, .hmp: .text("fake \(query.name)")
+    default: .json(.object(["query": .string(query.name)]))
+    }
+  }
+}
+
+/// Writes `size` zero bytes for a range, 1 KB for a full dump.
+struct FakeMemoryDumper: MemoryDumper {
+  func dump(_ request: MemoryDumpRequest) async throws(VMLabError) -> MemoryDumpResult {
+    let bytes = request.size ?? 1024
+    FileManager.default.createFile(
+      atPath: request.path.path, contents: Data(count: Int(bytes)))
+    return MemoryDumpResult(path: request.path, bytes: bytes, format: request.format)
   }
 }
 
