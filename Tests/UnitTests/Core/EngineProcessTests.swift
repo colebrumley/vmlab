@@ -13,6 +13,16 @@ import Testing
     defer { try? FileManager.default.removeItem(at: root) }
     let fake = root.appending(path: "qemu-system-aarch64")
     try FileManager.default.copyItem(atPath: "/bin/sh", toPath: fake.path)
+    // A copied platform binary keeps Apple's signature, which the kernel no longer accepts at
+    // its new path: it SIGKILLs it at exec (seen as a flaky "killed by another test"). An ad-hoc
+    // signature makes the copy run.
+    let sign = Process()
+    sign.executableURL = URL(filePath: "/usr/bin/codesign")
+    sign.arguments = ["--force", "--sign", "-", fake.path]
+    sign.standardError = FileHandle.nullDevice
+    try sign.run()
+    sign.waitUntilExit()
+    try #require(sign.terminationStatus == 0, "codesign of the fake engine failed")
     let engine = Process()
     engine.executableURL = fake
     // A shell named like QEMU that stays the process (`; :` keeps it from exec'ing sleep); its
