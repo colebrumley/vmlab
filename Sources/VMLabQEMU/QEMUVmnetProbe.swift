@@ -73,12 +73,19 @@ public struct QEMUVmnetProbe: SlowProbeRunner {
   }
 
   /// Whether a failed start is QEMU refusing the vmnet interface (no privilege), as opposed to
-  /// any other failure.
+  /// any other failure: one of QEMU's own lines (not the `vmlab:` launch line `daemonize` echoes
+  /// into qemu.log, which names `vmnet-shared` on every probe) says it cannot create it.
   static func isVmnetRefusal(_ error: VMLabError) -> Bool {
     guard error.code == .engineError, case .string(let raw)? = error.data["raw"] else {
       return false
     }
-    return raw.localizedCaseInsensitiveContains("vmnet")
+    return raw.split(whereSeparator: \.isNewline).contains { line in
+      !line.hasPrefix("vmlab: ") && line.localizedCaseInsensitiveContains("vmnet")
+        && (line.localizedCaseInsensitiveContains("cannot")
+          || line.localizedCaseInsensitiveContains("failure")
+          || line.localizedCaseInsensitiveContains("privilege")
+          || line.localizedCaseInsensitiveContains("permission"))
+    }
   }
 
   /// Under `home/probes/`, or under /tmp when that would make socket paths too long.

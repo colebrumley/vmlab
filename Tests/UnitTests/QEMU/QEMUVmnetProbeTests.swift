@@ -94,6 +94,16 @@ import VMLabCore
     let other = VMLabError(
       code: .engineError, message: "", hint: "", data: ["raw": .string("Could not open disk")])
     #expect(!QEMUVmnetProbe.isVmnetRefusal(other))
+    // The launch line vmlab echoes into qemu.log names vmnet-shared on every probe; a failure
+    // after it that is not about vmnet is no vmnet refusal.
+    let echoed = VMLabError(
+      code: .engineError, message: "", hint: "",
+      data: [
+        "raw": .string(
+          "vmlab: /opt/homebrew/bin/qemu-system-aarch64 -netdev vmnet-shared,id=net0\n"
+            + "qemu-system-aarch64: Could not open 'disk.qcow2': Permission denied\n")
+      ])
+    #expect(!QEMUVmnetProbe.isVmnetRefusal(echoed))
     #expect(
       QEMUVmnetProbe.request(
         layout: QEMULayout(vmDirectory: URL(filePath: "/tmp/p")), base: URL(filePath: "/tmp/b"),
