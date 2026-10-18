@@ -263,7 +263,8 @@ public actor DebugSession {
     try await withStoppedTarget { target throws(VMLabError) in
       try await target.insert(point)
     }
-    saved.points.append(point)
+    // An overlapping add of the same point may have recorded it while this one waited.
+    if !saved.points.contains(where: { $0.matches(point) }) { saved.points.append(point) }
     try persist()
     return saved.points
   }
@@ -273,18 +274,18 @@ public actor DebugSession {
   public func remove(address: UInt64, kind: DebugPointKind) async throws(VMLabError)
     -> [DebugPoint]
   {
-    guard let index = saved.points.firstIndex(where: { $0.address == address && $0.kind == kind })
-    else {
+    // Find by value, not index: other calls may change `saved.points` across the await below.
+    let isIt = { (point: DebugPoint) in point.address == address && point.kind == kind }
+    guard let point = saved.points.first(where: isIt) else {
       throw VMLabError.invalidRequest(
         field: "address",
         reason: "no \(kind.rawValue) point at \(Self.hex(address)) on \(vm)",
         hint: "Call vm_debug breakpoints to list the points that are set.")
     }
-    let point = saved.points[index]
     try await withStoppedTarget { target throws(VMLabError) in
       try await target.remove(point)
     }
-    saved.points.remove(at: index)
+    saved.points.removeAll(where: isIt)
     try persist()
     return saved.points
   }
@@ -368,13 +369,22 @@ public actor DebugSession {
       return target as any DebugTarget
     }
     connecting = task
-    defer { connecting = nil }
+    // `detach` (or `follow`) may run while this waits: it cancels the task and clears or replaces
+    // `connecting`, and a connection it no longer wants must not become `target`.
+    defer { if connecting == task { connecting = nil } }
     let target: any DebugTarget
     do {
       target = try await Self.value(of: task)
     } catch {
       if error.code == .debugBusy { busySince = busySince ?? Date() }
       throw error
+    }
+    guard connecting == task else {
+      await target.close()
+      throw VMLabError(
+        code: .guestUnreachable, message: "The debugger was detached while connecting to \(vm)",
+        hint: "Call vm_debug again to reconnect.",
+        data: ["endpoint": .string(endpoint.address)])
     }
     busySince = nil
     self.target = target

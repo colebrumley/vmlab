@@ -345,11 +345,11 @@ has a manifest; sections capped at 500 entries with the counts and `truncated`, 
 `SerialChannel` via `channel(.serial)`; `since` defaults to 0 for `wait` as for `read`; `wait`
 returns the text up to the match, at most 64 KB), `images`
 (list/pull/remove), `vm_computer` (`Handlers/VMComputerHandler.swift`, R-502: resolves the VM's
-`DisplayEndpoint`, gets its session from `ToolContext.displays`, and maps the computer-use actions
+`DisplayEndpoint`, gets its session from `ToolContext.displays` inside `DisplaySessions.exclusive(vm:)` (one call per VM at a time, so gestures and modifiers never interleave), checks every argument before sending input, and maps the computer-use actions
 onto pointer, key and type events; clicks move first and hold the button 30 ms, double and triple clicks repeat 60 ms apart,
 drags hold the left button over eight steps, scroll strikes wheel buttons; coordinates are checked
 against the screen and, with `scaled: true`, mapped through the last screenshot as origin +
-pixel / scale; every acting action sleeps `settleMs` and returns a fresh screenshot; on `vz-macos`
+pixel / scale (a diff's origin is its `changedRegion`; an unchanged diff keeps the last frame); every acting action sleeps `settleMs` and returns a fresh screenshot; on `vz-macos`
 a `key` chord with `cmd` adds the warning that it went out as `Super_L`, R-607), `vm_introspect` (an `IntrospectionQuery` to the attached VM's `introspection`
 channel; `raw` takes exactly one of `qmp`/`hmp`; returns `{ query, json | text }`) and
 `vm_debug` (R-701: `VMManager.attach`, the `.gdb` channel, then the VM's `DebugSession` from
@@ -393,7 +393,7 @@ and `qemu-tcg`, `VZBackend` for `vz-linux` and `VZMacBackend` for `vz-macos` in 
 first frame (and up to 3 s more while it is one colour: Screen Sharing opens with a black frame),
 sends keys with a 20 ms hold, waits 3 s after connecting to Screen Sharing before the first input
 (it ignores key events while a viewer settles in), keeps the VM's `ScreenshotCache` across reconnects (a dropped connection is reopened on
-the next call) and maps `RFBError` to Appendix D codes (bad requests and key names
+the next call, by one shared in-flight reconnect; a connection that fails before its first frame is closed) and maps `RFBError` to Appendix D codes (bad requests and key names
 `invalid_request`, unreachable or refused displays `guest_unreachable`, protocol trouble
 `engine_error`).
 `vmlab` calls it once in `main`, before any command runs, so `serve` and every tool subcommand can

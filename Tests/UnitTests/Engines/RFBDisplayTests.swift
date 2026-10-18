@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 import Testing
 import VMLabCore
 import VMLabRFB
@@ -89,5 +90,55 @@ import VMLabRFB
     let guestError = RFBDisplaySession.map(RFBError.deadPeer("silent"), endpoint: guest)
     #expect(guestError.code == .guestUnreachable)
     #expect(!DeadPeer.isDeadPeer(guestError))
+  }
+}
+
+/// Codex CX-34 and the reconnect race: a connection that never sends its first frame is closed,
+/// and concurrent callers share one reconnect.
+@Suite struct RFBDisplayReconnectTests {
+  /// Hands out still-screen transports, muted (no first frame) when asked, counting the opens.
+  final class Opener: Sendable {
+    let transports = Mutex<[StillScreenTransport]>([])
+    let muted: Bool
+    let delay: Duration
+
+    init(muted: Bool, delay: Duration = .zero) {
+      self.muted = muted
+      self.delay = delay
+    }
+
+    func open() async throws -> RFBClient {
+      if delay > .zero { try await Task.sleep(for: delay) }
+      let transport = StillScreenTransport()
+      if muted { await transport.mute() }
+      transports.withLock { $0.append(transport) }
+      return try await RFBClient.handshake(over: transport, timeout: .seconds(2))
+    }
+  }
+
+  @Test func aFirstFrameThatNeverComesClosesTheConnection() async throws {
+    let opener = Opener(muted: true)
+    let session = RFBDisplaySession(
+      endpoint: RFBDisplayTests.endpoint, firstFrameTimeout: .milliseconds(200),
+      open: { _ in try await opener.open() })
+    await #expect(throws: VMLabError.self) { try await session.screenSize() }
+    let transports = opener.transports.withLock { $0 }
+    #expect(transports.count == 1)
+    for transport in transports { #expect(await transport.closed) }
+  }
+
+  @Test func concurrentCallersShareOneReconnect() async throws {
+    let opener = Opener(muted: false, delay: .milliseconds(100))
+    let session = RFBDisplaySession(
+      endpoint: RFBDisplayTests.endpoint, firstFrameTimeout: .seconds(2),
+      uniformFrameGrace: .zero, open: { _ in try await opener.open() })
+    try await withThrowingTaskGroup(of: Void.self) { group in
+      for _ in 0..<6 { group.addTask { _ = try await session.screenSize() } }
+      try await group.waitForAll()
+    }
+    let transports = opener.transports.withLock { $0 }
+    #expect(transports.count == 1)
+    await session.close()
+    #expect(await transports.first?.closed == true)
   }
 }
