@@ -33,7 +33,10 @@ gives both engines a screen to look at and click on. `RFBClient` (an actor) spea
 streams. It negotiates security None or VNC Authentication (`VNCAuth`, DES via CommonCrypto), sets
 32-bit BGRX, requests Raw, CopyRect and DesktopSize, and a background loop of incremental update
 requests keeps a `Framebuffer` current; `snapshot()` returns a `CGImage` and `Framebuffer.pngData`
-encodes PNG with ImageIO. Failures are `RFBError`, which callers map to Appendix D codes.
+encodes PNG with ImageIO. Input (`RFBInput.swift`, `Keysym.swift`): `pointer(x:y:buttons:)` with a
+`PointerButtons` mask, `key(_:down:)`, `press(_:)` for a `KeyChord` parsed from `cmd+shift+4`-style
+text (`cmd` is `Super_L`), and `type(_:gap:)`, which strikes each character with Shift where a US
+layout needs it, 10 ms apart. Failures are `RFBError`, which callers map to Appendix D codes.
 
 **`VMLabGDB`** (library). A GDB remote serial protocol client: registers, memory, breakpoints,
 watchpoints and stepping over a guest's GDB stub. `GDBPacket`/`GDBPacketDecoder` frame packets
