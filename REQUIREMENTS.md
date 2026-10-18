@@ -655,7 +655,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   arm64 TCG guest is legal, only slow).
   **Verify:** the probe runs from `doctor --probe` and writes the fact; the matrix row follows it.
 
-- [ ] **R-703 Halt at start and reset**
+- [x] **R-703 Halt at start and reset**
   `boot.haltAtStart: true` starts QEMU with `-S` so the first instruction can be stepped;
   `vm_lifecycle action: reset` (QEMU `system_reset`; VZ: stop and start) returns the guest to its
   first instruction with breakpoints kept.

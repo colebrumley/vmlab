@@ -87,10 +87,16 @@ public final class QEMUBackend: Backend {
     _ = try await Self.lift { try await machine.qmp.execute("cont") }
   }
 
-  /// `system_reset`: the same process and endpoints, the guest rebooted.
+  /// `system_reset`: the same process and endpoints (a debugger stays attached and QEMU keeps its
+  /// breakpoints), the guest rebooted. With `boot.haltAtStart` the CPU is stopped first, so it
+  /// waits at its first instruction as it did at start (R-703); otherwise it runs on.
   public func reset(_ record: VMRecord) async throws(VMLabError) -> VMRuntime {
     let machine = try await machine(for: record)
-    _ = try await Self.lift { try await machine.qmp.execute("system_reset") }
+    let halt = record.boot?.haltAtStart == true
+    _ = try await Self.lift {
+      if halt { _ = try await machine.qmp.execute("stop") }
+      return try await machine.qmp.execute("system_reset")
+    }
     return machine.runtime
   }
 

@@ -233,6 +233,24 @@ public actor DebugSession {
     }
   }
 
+  /// After the engine reset the guest (`vm_lifecycle reset`): inserts every point again, since a
+  /// reset may clear the CPU's debug registers (QEMU under HVF does), and leaves the CPU as the
+  /// reset left it: stopped at its first instruction when `halted` (`boot.haltAtStart`),
+  /// otherwise running if it ran. A session that is not attached has nothing to do: it inserts
+  /// the points when it next connects.
+  public func afterReset(halted: Bool) async throws(VMLabError) {
+    guard let target, await target.isConnected else { return }
+    let wasRunning = await target.isRunning
+    // A halted reset stopped the CPU through the engine; the halt takes the stub's stop reply.
+    if wasRunning { _ = try await target.halt(timeout: .seconds(5)) }
+    for point in saved.points {
+      try? await target.remove(point)
+      try await target.insert(point)
+    }
+    lastResume = .none
+    if wasRunning && !halted { try await target.resume(thread: nil) }
+  }
+
   // MARK: Stop points
 
   /// Inserts `point` and records it. On a running CPU the session halts, inserts and resumes, so

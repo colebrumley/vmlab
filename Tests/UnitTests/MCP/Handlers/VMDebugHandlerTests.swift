@@ -134,6 +134,26 @@ import VMLabCore
     #expect(size?.data["field"] == .string("size"))
   }
 
+  /// R-703: vm_lifecycle reset puts the session's points in again; destroy drops the session.
+  @Test func resetReinsertsAndDestroyDrops() async throws {
+    let f = try Fixture()
+    defer { f.base.cleanUp() }
+    _ = try await f.base.create()
+    _ = try await f.debug("breakpoint_add", ["address": .string("0x1000")])
+    let lifecycle = { (action: String) async throws(VMLabError) -> ToolResult in
+      try await ToolHandlers.call(
+        "vm_lifecycle", arguments: .object(["vm": .string("web"), "action": .string(action)]),
+        context: f.context)
+    }
+    let reset = try await lifecycle("reset")
+    #expect(reset.warnings.isEmpty)
+    #expect(f.connector.latest?.log.suffix(2) == ["remove software 1000", "insert software 1000"])
+    let id = try f.context.store.find("web").id
+    #expect(f.context.debug.existing(id) != nil)
+    _ = try await lifecycle("destroy")
+    #expect(f.context.debug.existing(id) == nil)
+  }
+
   @Test func busyStubIsDebugBusy() async throws {
     let f = try Fixture()
     defer { f.base.cleanUp() }

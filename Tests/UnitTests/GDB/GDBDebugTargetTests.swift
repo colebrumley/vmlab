@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 import Testing
 import VMLabCore
 
@@ -9,11 +10,23 @@ import VMLabCore
   /// The arm64 fixture stub, plus breakpoints, memory at 0x1000, threads, running and stops.
   static func qemuLike() throws -> FakeGDBStub.Handler {
     let base = try GDBClientTests.arm64Handler(chunk: 2000)
+    let pc = Mutex<UInt64>(0x4008_0000)
     return { packet in
       switch packet {
+      case "g":
+        // The fixture's block with the pc the CPU has now (x0..x30 and sp come first).
+        var block = Array(base("g")[0])
+        let value = Array(GDBFixtures.littleEndian(pc.withLock { $0 }))
+        block.replaceSubrange(512..<528, with: value)
+        return [String(block)]
+      case "s":
+        let next = pc.withLock {
+          $0 += 4
+          return $0
+        }
+        return ["T05thread:p01.01;20:" + GDBFixtures.littleEndian(next) + ";"]
       case "c", "vCont;c:p01.02": return []
       case "^C": return ["T02thread:p01.01;"]
-      case "s": return ["T05thread:p01.01;20:" + GDBFixtures.littleEndian(0x4008_0004) + ";"]
       case "m1000,4": return ["deadbeef"]
       case "m1000,8": return ["4142430a00ff7e20"]
       case "m9000,4": return ["E14"]

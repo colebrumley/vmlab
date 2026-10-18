@@ -145,4 +145,52 @@ import VMLabQEMU
     await debug.close()
     await guest.shutdown()
   }
+
+  /// R-703 Verify: `boot.haltAtStart` under `qemu-hvf` (arm64, EDK2 from the disk): the CPU waits
+  /// at its reset pc, `continue` lets the firmware print on serial, and `vm_lifecycle reset`
+  /// returns it to that first instruction, halted, with its breakpoint kept and still hit.
+  @Test(.enabled(if: integrationEnabled), .timeLimit(.minutes(4)))
+  func haltAtStartAndResetKeepBreakpoints() async throws {
+    let guest = try await QEMUGuest.boot(
+      features: [.serial, .gdb, .haltAtStart, .netNAT], memoryGB: 1,
+      boot: BootSpec(haltAtStart: true))
+    let debug = Debugger(guest)
+    do {
+      #expect(try await guest.machine.status().running == false)
+      let reset = try #require(try await debug("registers")["pc"]?.stringValue)
+      #expect(try await guest.machine.serial.read(since: 0).text.isEmpty)
+
+      // The next instruction after the reset pc, as a hardware breakpoint (the flash is ROM).
+      let next = try #require(try await debug("step")["pc"]?.stringValue)
+      _ = try await debug(
+        "breakpoint_add", ["address": .string(next), "kind": .string("hardware")])
+      _ = try await debug(
+        "breakpoint_remove", ["address": .string(next), "kind": .string("hardware")])
+      #expect(try await debug("continue")["stopped"] == .bool(false))
+      _ = try await guest.machine.serial.wait(
+        for: "BdsDxe|UEFI|GRUB|Booting", since: 0, timeout: .seconds(60))
+
+      _ = try await debug(
+        "breakpoint_add", ["address": .string(next), "kind": .string("hardware")])
+      let lifecycle = try await ToolHandlers.call(
+        "vm_lifecycle",
+        arguments: .object(["vm": .string(guest.record.id), "action": .string("reset")]),
+        context: debug.context)
+      #expect(lifecycle.warnings.isEmpty)
+      let halted = try await debug("halt")
+      #expect(halted["pc"]?.stringValue == reset)
+      #expect(try await debug("registers")["pc"]?.stringValue == reset)
+      #expect(try await debug("breakpoints")["breakpoints"]?.arrayValue?.count == 1)
+      _ = try await debug("continue")
+      let hit = try await debug("wait", ["timeoutSeconds": .number(10)])
+      #expect(hit["reason"] == .string("breakpoint"))
+      #expect(hit["pc"]?.stringValue == next)
+    } catch {
+      await debug.close()
+      await guest.shutdown()
+      throw error
+    }
+    await debug.close()
+    await guest.shutdown()
+  }
 }

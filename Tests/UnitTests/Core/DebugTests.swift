@@ -130,4 +130,24 @@ import Testing
     await sessions.drop("vm-a")
     #expect(sessions.existing("vm-a") == nil)
   }
+
+  /// R-703: after a reset the points go in again; a halted reset leaves the CPU stopped, any
+  /// other leaves it running if it ran; an unattached session waits for its next connect.
+  @Test(arguments: [true, false])
+  func afterResetReinsertsPoints(halted: Bool) async throws {
+    let (session, connector, dir) = try await Self.session()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    try await session.afterReset(halted: halted)
+    #expect(connector.targets.isEmpty)
+
+    try await session.add(DebugPoint(address: 0x1000, kind: .hardware))
+    try await session.resume()
+    try await session.afterReset(halted: halted)
+    let target = try #require(connector.latest)
+    #expect(
+      target.log.suffix(halted ? 3 : 4)
+        == ["halt", "remove hardware 1000", "insert hardware 1000"] + (halted ? [] : ["resume"]))
+    #expect(await session.running() == !halted)
+    #expect(target.inserted == [DebugPoint(address: 0x1000, kind: .hardware)])
+  }
 }

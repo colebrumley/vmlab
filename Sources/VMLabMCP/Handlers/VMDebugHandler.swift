@@ -64,8 +64,10 @@ struct VMDebugHandler: ToolHandler {
       }
       result["registers"] = .object(object)
       result["stopped"] = .bool(true)
-      if let pc = registers.first(where: { $0.name == "pc" || $0.name == "rip" })?.value {
-        result["pc"] = .string(pc)
+      if let pc = registers.first(where: { $0.name == "pc" || $0.name == "rip" })?.value,
+        let value = Self.parseAddress(pc)
+      {
+        result["pc"] = .string(Self.hex(value))
       }
     case "read_memory":
       let address = try Self.address(arguments)

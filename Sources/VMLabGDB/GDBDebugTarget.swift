@@ -90,7 +90,7 @@ public struct GDBDebugTarget: DebugTarget {
   }
 
   public func halt(timeout: Duration) async throws(VMLabError) -> DebugStop {
-    try await lift { Self.stop(try await client.halt(timeout: timeout)) }
+    try await lift { try await fresh(Self.stop(try await client.halt(timeout: timeout))) }
   }
 
   public func resume(thread: String?) async throws(VMLabError) {
@@ -114,7 +114,18 @@ public struct GDBDebugTarget: DebugTarget {
   }
 
   public func waitForStop(timeout: Duration) async throws(VMLabError) -> DebugStop {
-    try await lift { Self.stop(try await client.waitForStop(timeout: timeout)) }
+    try await lift { try await fresh(Self.stop(try await client.waitForStop(timeout: timeout))) }
+  }
+
+  /// The stop with the pc read now: a stop reply (or the last one, for a CPU already stopped)
+  /// can predate a reset that moved the CPU back to its first instruction.
+  private func fresh(_ stop: DebugStop) async throws -> DebugStop {
+    guard stop.reason != .exited, let pc = try? await client.register(named: "pc").uint64 else {
+      return stop
+    }
+    var stop = stop
+    stop.pc = pc
+    return stop
   }
 
   public func insert(_ point: DebugPoint) async throws(VMLabError) {
