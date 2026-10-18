@@ -12,11 +12,12 @@ import Testing
     try FileManager.default.createDirectory(at: vm, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: root) }
     let fake = root.appending(path: "qemu-system-aarch64")
-    try FileManager.default.copyItem(atPath: "/bin/sleep", toPath: fake.path)
+    try FileManager.default.copyItem(atPath: "/bin/sh", toPath: fake.path)
     let engine = Process()
     engine.executableURL = fake
-    // sleep reads only its first operand; the second stands for QEMU's -pidfile argument.
-    engine.arguments = ["30", vm.appending(path: "qemu.pid").path]
+    // A shell named like QEMU that stays the process (`; :` keeps it from exec'ing sleep); its
+    // `$1` stands for QEMU's -pidfile argument inside the VM directory.
+    engine.arguments = ["-c", "sleep 30; :", "qemu", vm.appending(path: "qemu.pid").path]
     try engine.run()
     defer { if engine.isRunning { engine.terminate() } }
     let pid = engine.processIdentifier
