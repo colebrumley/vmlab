@@ -34,4 +34,25 @@ import VMLabCore
     }
     #expect(error?.code == .hostMissingTool)
   }
+
+  /// CX-12: cancelling the caller ends a child that ignores SIGTERM with SIGKILL and reaps it
+  /// before the call returns.
+  @Test func cancellationKillsAChildThatIgnoresTerm() async throws {
+    let pidFile = FileManager.default.temporaryDirectory.appending(path: "vmlab-hp-\(UUID())")
+    defer { try? FileManager.default.removeItem(at: pidFile) }
+    let script = "trap '' TERM; echo $$ > '\(pidFile.path)'; while :; do sleep 0.1; done"
+    let run = Task { try await HostProcess.run("/bin/sh", ["-c", script]) }
+    var pid: pid_t = 0
+    for _ in 0..<200 where pid == 0 {
+      try await Task.sleep(for: .milliseconds(50))
+      let text = (try? String(contentsOf: pidFile, encoding: .utf8)) ?? ""
+      pid = pid_t(text.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
+    }
+    try #require(pid > 0)
+    run.cancel()
+    let outcome = try await run.value
+    #expect(outcome.timedOut)
+    #expect(outcome.status == SIGKILL)
+    #expect(kill(pid, 0) == -1 && errno == ESRCH, "the child is still running")
+  }
 }
