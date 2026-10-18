@@ -19,12 +19,14 @@ struct QEMUGuest {
   /// never answered).
   var startWarnings: [String] = []
 
-  /// `prepare` runs on the VM directory after create and before the first start (to drop an
-  /// `id_ed25519.pub` there, say).
+  /// `requested` becomes the plan's `requested` features (R-504 installs a desktop for
+  /// `gui_desktop`). `VMManager.create` generates `<vm>/id_ed25519` (R-400), so the guest boots
+  /// with a cloud-init seed that authorizes it. `prepare` runs on the VM directory after create
+  /// and before the first start (to drop an `id_ed25519.pub` there, say).
   static func boot(
-    features: [Feature] = [.serial, .gui, .netNAT], memoryGB: Int = 2,
-    prepare: ((URL) throws -> Void)? = nil, boot: BootSpec? = nil,
-    network: NetworkSpec = NetworkSpec(), profile: Profile = .qemuHVF,
+    features: [Feature] = [.serial, .gui, .netNAT], requested: [Feature] = [], memoryGB: Int = 2,
+    diskGB: Int = 8, prepare: ((URL) throws -> Void)? = nil,
+    boot: BootSpec? = nil, network: NetworkSpec = NetworkSpec(), profile: Profile = .qemuHVF,
     guest: GuestSpec = GuestSpec(os: .linux, arch: .arm64), image: String = "debian-13-arm64",
     cpus: Int = 2
   ) async throws -> QEMUGuest {
@@ -46,8 +48,8 @@ struct QEMUGuest {
     let manager = VMManager(store: store, backends: registry)
     let plan = Plan(
       profile: profile, guest: guest,
-      resources: ResourceSpec(cpus: cpus, memoryGB: memoryGB, diskGB: 8), features: features,
-      estimatedStartupSeconds: 15)
+      resources: ResourceSpec(cpus: cpus, memoryGB: memoryGB, diskGB: diskGB), features: features,
+      requested: requested, estimatedStartupSeconds: 15)
     let created = try await manager.create(
       VMRecord(
         id: "", name: "it-\(n)", profile: profile, guest: guest, features: features,

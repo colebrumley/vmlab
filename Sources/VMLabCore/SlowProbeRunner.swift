@@ -87,8 +87,9 @@ public final class SlowProbeRegistry: Sendable {
   /// or `no` to `host-facts.json` under `context.home` with the OS and QEMU versions of
   /// `context.facts`. A probe without a runner is reported `not_implemented` and left as it was.
   ///
-  /// `docs/FEATURES.md` reads this host's `host-facts.json`: after recording results on the
-  /// development host, run `scripts/gen-docs.sh` and commit the regenerated document.
+  /// `docs/FEATURES.md` reads the committed snapshot `docs/dev-host-facts.json`, not this file:
+  /// after recording results on the development host, run `scripts/gen-docs.sh
+  /// --refresh-host-facts` and commit the snapshot with the regenerated document.
   public func runAll(_ context: SlowProbeContext, now: @Sendable () -> Date = { Date() }) async
     -> [SlowProbeOutcome]
   {

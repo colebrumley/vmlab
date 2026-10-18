@@ -494,7 +494,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   on the Debian guest's tty1 login prompt shown by QEMU's VNC, type `debian` + Return; the next
   screenshot shows `Password:` (the image differs from the previous one in the prompt region).
 
-- [ ] **R-502 `vm_computer`**
+- [x] **R-502 `vm_computer`**
   The tool of Appendix C with the computer-use action set: `screenshot` (PNG, scaled so the long
   edge ≤ `maxEdge`, default 1280, with the scale factor returned; coordinates in every other
   action are in the unscaled guest pixel space unless `scaled: true`), `left_click`, `right_click`,
@@ -506,7 +506,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   integration on Debian with the GUI image (R-504): click the terminal icon, type a command, the
   screenshot contains new pixels in the terminal region.
 
-- [ ] **R-503 Display endpoint per profile**
+- [x] **R-503 Display endpoint per profile**
   QEMU: the built-in VNC socket, always present, works from the first firmware frame (`gui_preboot`).
   VZ Linux: an in-guest VNC server on the NAT address, port 5900, password from `<vm>/vnc.pass`,
   provisioned by R-504 when `gui` was granted; absent otherwise. VZ macOS: the guest's Screen
@@ -515,7 +515,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   **Verify:** unit test that the endpoint is absent when `gui` was not required; integration for
   each profile in its own phase (R-502, R-607, R-608).
 
-- [ ] **R-504 GUI-enabled Linux provisioning**
+- [x] **R-504 GUI-enabled Linux provisioning**
   When `gui` is required for a Linux guest, cloud-init installs a minimal desktop (Debian:
   `xfce4`, `lightdm` with autologin, `tigervnc-scraping-server` or `x11vnc` bound to the NIC with
   the password file) and enables it; the Plan's `startupTier` worsens by one and `vm_plan` reports

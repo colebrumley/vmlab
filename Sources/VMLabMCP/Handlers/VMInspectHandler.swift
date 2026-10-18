@@ -36,15 +36,16 @@ struct VMInspectHandler: ToolHandler {
         "plan": try record.plan.map { plan throws(VMLabError) in try JSONValue(encoding: plan) }
           ?? .null,
         "features": .array(record.features.map { .string($0.rawValue) }),
-        "endpoints": .object(Self.endpoints(record.runtime)),
+        "endpoints": .object(Self.endpoints(record, store: context.store)),
         "segments": .array([]),
         "events": try JSONValue(encoding: events),
         "panic": panicValue,
       ], warnings: warnings)
   }
 
-  static func endpoints(_ runtime: VMRuntime?) -> [String: JSONValue] {
-    guard let runtime else { return [:] }
+  /// The runtime endpoints; `display` is the profile's endpoint (R-503), absent when it has none.
+  static func endpoints(_ record: VMRecord, store: Store) -> [String: JSONValue] {
+    guard let runtime = record.runtime else { return [:] }
     var endpoints: [String: JSONValue] = [:]
     if let port = runtime.sshPort { endpoints["ssh"] = .string("127.0.0.1:\(port)") }
     if let ip = runtime.ip { endpoints["ip"] = .string(ip) }
@@ -58,8 +59,8 @@ struct VMInspectHandler: ToolHandler {
         })
     }
     if let serial = runtime.serialSocket { endpoints["serial"] = .string(serial) }
-    if let vnc = runtime.vncSocket {
-      endpoints["display"] = .object(["kind": .string("vnc"), "hostSide": .string(vnc)])
+    if let display = DisplayEndpoint.forVM(record, vmDirectory: store.directory(of: record.id)) {
+      endpoints["display"] = display.json
     }
     if let gdb = runtime.gdbEndpoint { endpoints["gdb"] = .string(gdb) }
     return endpoints

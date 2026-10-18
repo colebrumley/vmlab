@@ -66,7 +66,7 @@ public struct VZBackend: Backend {
     let key = try SSHKeys.generate(in: dir, comment: "vmlab-\(record.id)", runner: commands)
     let seed = CloudInitConfig(
       instanceID: record.id, hostname: Self.hostname(for: record), user: pulled.login.user,
-      sshPublicKey: key,
+      sshPublicKey: key, gui: try Self.guiStack(plan: plan, vmDirectory: dir),
       mounts: record.shares.enumerated().map {
         GuestMount(
           tag: ShareSpec.tag($0.offset), guestPath: $0.element.guestPath(index: $0.offset),
@@ -100,6 +100,21 @@ public struct VZBackend: Backend {
           field: "shares[\(index)].host", reason: "\(share.host) is not a directory on the host",
           hint: "Create the directory first, or share an existing one.")
       }
+    }
+  }
+
+  /// R-504: the desktop and its in-guest VNC server, with the password in `<vm>/vnc.pass`, when
+  /// the plan provisions one.
+  static func guiStack(plan: Plan, vmDirectory: URL) throws(VMLabError) -> GUIStack? {
+    guard plan.provisionsDesktop else { return nil }
+    do {
+      return try GUIStack.inGuestVNC(vmDirectory: vmDirectory)
+    } catch let error as VMLabError {
+      throw error
+    } catch {
+      throw VMLabError(
+        code: .internal, message: "Cannot write the VNC password file: \(error)",
+        hint: "Check that the VM directory is writable.")
     }
   }
 
