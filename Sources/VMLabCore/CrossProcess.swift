@@ -53,6 +53,13 @@ public final class FileLock: Sendable {
     }
   }
 
+  /// Whether `path` can be opened (and created) for locking at all.
+  static func canOpen(_ path: String) -> Bool {
+    guard let fd = open(path) else { return false }
+    close(fd)
+    return true
+  }
+
   /// Whether another holder has `path` locked (a shared lock cannot be taken).
   public static func isHeld(_ path: String) -> Bool {
     let fd = Darwin.open(path, O_RDONLY | O_CLOEXEC)
@@ -165,12 +172,16 @@ public final class FileStartGate: StartGating {
     held.withLock { $0.removeValue(forKey: permit.id) }?.unlock()
   }
 
-  /// The first free slot, polling while all are taken.
+  /// The first free slot, polling while all are taken; `internal` when no slot file can be
+  /// opened, since then none will ever be free.
   private func acquireSlot() async throws -> (FileLock, Int) {
     while true {
       try Task.checkCancellation()
       for n in 0..<slotCount {
         if let lock = FileLock.tryLock(slotPath(n)) { return (lock, n) }
+      }
+      if !(0..<slotCount).contains(where: { FileLock.canOpen(slotPath($0)) }) {
+        throw Self.ioError(slotPath(0))
       }
       try await Task.sleep(for: pollInterval)
     }
