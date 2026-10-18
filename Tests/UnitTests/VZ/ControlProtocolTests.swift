@@ -95,11 +95,11 @@ import VMLabVZ
       id: "vm-abcdef", profile: .vzLinux, guest: GuestSpec(os: .linux, arch: .arm64), features: [],
       resources: ResourceSpec(cpus: 3, memoryGB: nil))
     let dir = URL(filePath: "/tmp/vmlab-test/vms/vm-abcdef")
-    let config = VZRunnerConfig.linuxEFI(record: record, vmDirectory: dir)
+    let config = try VZRunnerConfig.linux(record: record, vmDirectory: dir, seed: false)
     #expect(config.cpus == 3)
     #expect(config.memoryBytes == 4 << 30)
     #expect(config.disks == [.init(path: "/tmp/vmlab-test/vms/vm-abcdef/disk.raw")])
-    #expect(config.efiVariableStore == "/tmp/vmlab-test/vms/vm-abcdef/efi-vars.bin")
+    #expect(config.boot == .efi(variableStore: "/tmp/vmlab-test/vms/vm-abcdef/efi-vars.bin"))
     #expect(config.consoleLog == "/tmp/vmlab-test/vms/vm-abcdef/console.log")
     let data = try JSONEncoder().encode(config)
     #expect(try JSONDecoder().decode(VZRunnerConfig.self, from: data) == config)

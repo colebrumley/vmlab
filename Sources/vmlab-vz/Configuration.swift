@@ -3,35 +3,92 @@ import VMLabCore
 import VMLabVZ
 @preconcurrency import Virtualization
 
-/// Turns a `VZRunnerConfig` into a validated `VZVirtualMachineConfiguration`. R-601 extends this
-/// (cloud-init seed, balloon, serial pipes, graphics) and adds the unit test of its decisions.
+/// The guest's virtio console: two pipes the runner owns. Guest output is appended to the console
+/// log; the input pipe's write end stays open for R-602's `serial.sock` bridge.
+final class ConsolePipes: Sendable {
+  let guestInput = Pipe()
+  let guestOutput = Pipe()
+  let log: FileHandle
+
+  init(log path: String) throws(VMLabError) {
+    let fd = open(path, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0o644)
+    guard fd >= 0 else {
+      throw VMLabError(
+        code: .internal,
+        message: "Cannot open \(path): \(String(cString: strerror(errno)))",
+        hint: "Check that the VM directory is writable.")
+    }
+    log = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+  }
+
+  var attachment: VZFileHandleSerialPortAttachment {
+    VZFileHandleSerialPortAttachment(
+      fileHandleForReading: guestInput.fileHandleForReading,
+      fileHandleForWriting: guestOutput.fileHandleForWriting)
+  }
+
+  /// Starts copying guest output to the log.
+  func start() {
+    let log = log
+    guestOutput.fileHandleForReading.readabilityHandler = { handle in
+      let data = handle.availableData
+      if data.isEmpty {
+        handle.readabilityHandler = nil
+      } else {
+        try? log.write(contentsOf: data)
+      }
+    }
+  }
+}
+
+/// A built machine and the console pipes the runner must keep alive.
+struct BuiltMachine {
+  let configuration: VZVirtualMachineConfiguration
+  let console: ConsolePipes?
+}
+
+/// Turns a `VZRunnerConfig` into a validated `VZVirtualMachineConfiguration`: the config is first
+/// resolved into `VZMachineDecisions` (plain data, unit-tested in VMLabVZ), which this materialises
+/// device by device.
 enum ConfigurationBuilder {
-  static func build(_ config: VZRunnerConfig) throws(VMLabError) -> VZVirtualMachineConfiguration {
+  static var limits: VZMachineLimits {
+    VZMachineLimits(
+      minCPUs: VZVirtualMachineConfiguration.minimumAllowedCPUCount,
+      maxCPUs: VZVirtualMachineConfiguration.maximumAllowedCPUCount,
+      minMemoryBytes: VZVirtualMachineConfiguration.minimumAllowedMemorySize,
+      maxMemoryBytes: VZVirtualMachineConfiguration.maximumAllowedMemorySize)
+  }
+
+  static func build(_ config: VZRunnerConfig) throws(VMLabError) -> BuiltMachine {
+    let plan = try config.decisions(limits: limits)
     let machine = VZVirtualMachineConfiguration()
-    machine.cpuCount = min(
-      max(config.cpus, VZVirtualMachineConfiguration.minimumAllowedCPUCount),
-      VZVirtualMachineConfiguration.maximumAllowedCPUCount)
-    let mib: UInt64 = 1 << 20
-    machine.memorySize = min(
-      max(config.memoryBytes / mib * mib, VZVirtualMachineConfiguration.minimumAllowedMemorySize),
-      VZVirtualMachineConfiguration.maximumAllowedMemorySize)
+    machine.cpuCount = plan.cpus
+    machine.memorySize = plan.memoryBytes
     machine.platform = VZGenericPlatformConfiguration()
 
-    let storeURL = URL(filePath: config.efiVariableStore)
-    let store: VZEFIVariableStore
-    do {
-      store =
-        FileManager.default.fileExists(atPath: storeURL.path)
-        ? VZEFIVariableStore(url: storeURL)
-        : try VZEFIVariableStore(creatingVariableStoreAt: storeURL)
-    } catch {
-      throw engineError("Cannot create the EFI variable store \(storeURL.path)", error)
+    switch plan.bootLoader {
+    case .efi(let path):
+      let storeURL = URL(filePath: path)
+      let store: VZEFIVariableStore
+      do {
+        store =
+          FileManager.default.fileExists(atPath: storeURL.path)
+          ? VZEFIVariableStore(url: storeURL)
+          : try VZEFIVariableStore(creatingVariableStoreAt: storeURL)
+      } catch {
+        throw engineError("Cannot create the EFI variable store \(storeURL.path)", error)
+      }
+      let loader = VZEFIBootLoader()
+      loader.variableStore = store
+      machine.bootLoader = loader
+    case .linux(let kernel, let initrd, let commandLine):
+      let loader = VZLinuxBootLoader(kernelURL: URL(filePath: kernel))
+      loader.initialRamdiskURL = initrd.map { URL(filePath: $0) }
+      loader.commandLine = commandLine
+      machine.bootLoader = loader
     }
-    let loader = VZEFIBootLoader()
-    loader.variableStore = store
-    machine.bootLoader = loader
 
-    machine.storageDevices = try config.disks.map { disk throws(VMLabError) in
+    machine.storageDevices = try plan.storage.map { disk throws(VMLabError) in
       do {
         let attachment = try VZDiskImageStorageDeviceAttachment(
           url: URL(filePath: disk.path), readOnly: disk.readOnly)
@@ -41,45 +98,42 @@ enum ConfigurationBuilder {
       }
     }
 
-    machine.networkDevices = try config.network.map { network throws(VMLabError) in
-      switch network {
-      case .nat(let mac):
-        let device = VZVirtioNetworkDeviceConfiguration()
-        device.attachment = VZNATNetworkDeviceAttachment()
-        if let mac {
-          guard let address = VZMACAddress(string: mac) else {
-            throw VMLabError.invalidRequest(
-              field: "network.macAddress", reason: "\(mac) is not a MAC address",
-              hint: "Use six colon-separated hex octets.")
-          }
-          device.macAddress = address
-        } else {
-          device.macAddress = .randomLocallyAdministered()
-        }
-        return device
-      }
+    machine.networkDevices = plan.network.map { nic in
+      let device = VZVirtioNetworkDeviceConfiguration()
+      device.attachment = VZNATNetworkDeviceAttachment()
+      // decisions(limits:) validated the text.
+      device.macAddress =
+        nic.mac.flatMap(VZMACAddress.init(string:)) ?? .randomLocallyAdministered()
+      return device
     }
 
-    if let consoleLog = config.consoleLog {
-      let fd = open(consoleLog, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0o644)
-      guard fd >= 0 else {
-        throw VMLabError(
-          code: .internal,
-          message: "Cannot open \(consoleLog): \(String(cString: strerror(errno)))",
-          hint: "Check that the VM directory is writable.")
-      }
-      let console = VZVirtioConsoleDeviceSerialPortConfiguration()
-      console.attachment = VZFileHandleSerialPortAttachment(
-        fileHandleForReading: nil,
-        fileHandleForWriting: FileHandle(fileDescriptor: fd, closeOnDealloc: true))
-      machine.serialPorts = [console]
+    var pipes: ConsolePipes? = nil
+    if let console = plan.console {
+      let console = try ConsolePipes(log: console.log)
+      let port = VZVirtioConsoleDeviceSerialPortConfiguration()
+      port.attachment = console.attachment
+      machine.serialPorts = [port]
+      pipes = console
     }
-    machine.entropyDevices = [VZVirtioEntropyDeviceConfiguration()]
+    if plan.entropy { machine.entropyDevices = [VZVirtioEntropyDeviceConfiguration()] }
+    if plan.memoryBalloon {
+      machine.memoryBalloonDevices = [VZVirtioTraditionalMemoryBalloonDeviceConfiguration()]
+    }
+    if let graphics = plan.graphics {
+      let device = VZVirtioGraphicsDeviceConfiguration()
+      device.scanouts = [
+        VZVirtioGraphicsScanoutConfiguration(
+          widthInPixels: graphics.width, heightInPixels: graphics.height)
+      ]
+      machine.graphicsDevices = [device]
+      machine.keyboards = [VZUSBKeyboardConfiguration()]
+      machine.pointingDevices = [VZUSBScreenCoordinatePointingDeviceConfiguration()]
+    }
 
     do { try machine.validate() } catch {
       throw validationError(error)
     }
-    return machine
+    return BuiltMachine(configuration: machine, console: pipes)
   }
 
   /// A failed `validate()`: `host_missing_tool` when the process lacks the entitlement.

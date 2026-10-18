@@ -543,7 +543,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   **Verify:** unit test of the protocol codec; integration: start a Linux guest, kill the MCP server
   process, start it again, `vm_list` shows the guest `running` and `pause` works.
 
-- [ ] **R-601 VZ Linux guest configuration**
+- [x] **R-601 VZ Linux guest configuration**
   `VZVirtualMachineConfiguration` from a `VMRecord`: CPUs, memory, `VZEFIBootLoader` with a per-VM
   variable store for `.disk` boot or `VZLinuxBootLoader` for `.kernel` (R-604), virtio-blk raw
   disk, cloud-init seed as a second virtio-blk device, `VZNATNetworkDeviceAttachment` with a stable
