@@ -201,27 +201,99 @@ public struct VZCheckpoints: CheckpointProvider {
   }
 
   /// Clones the record's live files into checkpoint `folder`.
-  static func save(_ files: [(live: URL, name: String)], into folder: URL) throws(VMLabError) {
-    for file in files where FileManager.default.fileExists(atPath: file.live.path) {
-      try clone(file.live, to: folder.appending(path: file.name))
+  static func save(
+    _ files: [(live: URL, name: String)], into folder: URL, using ops: FileOps = .system
+  ) throws(VMLabError) {
+    try replace(
+      files.filter { FileManager.default.fileExists(atPath: $0.live.path) }.map {
+        ($0.live, folder.appending(path: $0.name))
+      }, using: ops)
+  }
+
+  /// Clones checkpoint `folder`'s files back over the record's live files, all or none.
+  static func load(
+    _ files: [(live: URL, name: String)], from folder: URL, using ops: FileOps = .system
+  ) throws(VMLabError) {
+    try replace(
+      files.map { (folder.appending(path: $0.name), $0.live) }.filter {
+        FileManager.default.fileExists(atPath: $0.0.path)
+      }, using: ops)
+  }
+
+  /// Clones one file over another (or into place).
+  static func clone(_ from: URL, to: URL, using ops: FileOps = .system) throws(VMLabError) {
+    try replace([(from, to)], using: ops)
+  }
+
+  /// The file operations a checkpoint's copies use; tests inject failures.
+  struct FileOps: Sendable {
+    /// Copies a file to a path that does not exist.
+    var copy: @Sendable (URL, URL) throws -> Void
+    /// Atomically swaps two existing files, or renames the first to the second when the
+    /// second does not exist.
+    var exchange: @Sendable (URL, URL) throws -> Void
+
+    static let system = FileOps(
+      copy: { from, to in
+        // `clonefile(2)` (an instant APFS copy-on-write clone), else a plain copy.
+        if clonefile(from.path, to.path, 0) == 0 { return }
+        try FileManager.default.copyItem(at: from, to: to)
+      },
+      exchange: { a, b in
+        if !FileManager.default.fileExists(atPath: b.path) {
+          guard rename(a.path, b.path) == 0 else { throw posixError() }
+          return
+        }
+        if renamex_np(a.path, b.path, UInt32(RENAME_SWAP)) == 0 { return }
+        guard errno == ENOTSUP || errno == EINVAL else { throw posixError() }
+        // A volume without RENAME_SWAP: three renames through a spare name.
+        let spare = b.deletingLastPathComponent().appending(
+          path: ".\(b.lastPathComponent).vmlab-swap-\(UUID().uuidString)")
+        guard rename(b.path, spare.path) == 0 else { throw posixError() }
+        guard rename(a.path, b.path) == 0 else {
+          let error = posixError()
+          _ = rename(spare.path, b.path)
+          throw error
+        }
+        guard rename(spare.path, a.path) == 0 else { throw posixError() }
+      })
+
+    static func posixError() -> POSIXError {
+      POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
     }
   }
 
-  /// Clones checkpoint `folder`'s files back over the record's live files.
-  static func load(_ files: [(live: URL, name: String)], from folder: URL) throws(VMLabError) {
-    for file in files {
-      let saved = folder.appending(path: file.name)
-      guard FileManager.default.fileExists(atPath: saved.path) else { continue }
-      try clone(saved, to: file.live)
+  /// Replaces each pair's destination with a copy of its source, all or none. Every source is
+  /// first copied to a temporary beside its destination; only when all copies exist is each
+  /// swapped into place (`renamex_np(RENAME_SWAP)`, atomic per file, so a destination is never
+  /// missing). A failed swap swaps the earlier ones back. The previous files, left in the
+  /// temporaries by the swaps, are removed at the end.
+  static func replace(_ pairs: [(from: URL, to: URL)], using ops: FileOps) throws(VMLabError) {
+    let temps = pairs.map { pair in
+      pair.to.deletingLastPathComponent().appending(
+        path: ".\(pair.to.lastPathComponent).vmlab-new-\(UUID().uuidString)")
     }
-  }
-
-  /// `clonefile(2)` (an instant APFS copy-on-write clone), else a plain copy.
-  static func clone(_ from: URL, to: URL) throws(VMLabError) {
-    try? FileManager.default.removeItem(at: to)
-    if clonefile(from.path, to.path, 0) == 0 { return }
-    do { try FileManager.default.copyItem(at: from, to: to) } catch {
-      throw ioError("clone \(from.path) to \(to.path)", error)
+    defer { for temp in temps { try? FileManager.default.removeItem(at: temp) } }
+    for (pair, temp) in zip(pairs, temps) {
+      do { try ops.copy(pair.from, temp) } catch {
+        throw ioError("clone \(pair.from.path) to \(pair.to.path)", error)
+      }
+    }
+    // Whether each destination existed: a swap of a new file is a rename, undone by renaming back.
+    var swapped: [(temp: URL, to: URL, existed: Bool)] = []
+    for (pair, temp) in zip(pairs, temps) {
+      let existed = FileManager.default.fileExists(atPath: pair.to.path)
+      do { try ops.exchange(temp, pair.to) } catch {
+        for done in swapped.reversed() {
+          if done.existed {
+            try? ops.exchange(done.temp, done.to)
+          } else {
+            _ = rename(done.to.path, done.temp.path)
+          }
+        }
+        throw ioError("replace \(pair.to.path)", error)
+      }
+      swapped.append((temp, pair.to, existed))
     }
   }
 
