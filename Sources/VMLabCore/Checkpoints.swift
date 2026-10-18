@@ -343,7 +343,7 @@ extension VMManager {
         }
       } else {
         warnings.append(
-          "manifest: true was ignored: guest manifests are not built yet (R-801); "
+          "manifest: true was ignored: this manager takes no guest manifests; "
             + "the checkpoint has no manifest")
       }
     }

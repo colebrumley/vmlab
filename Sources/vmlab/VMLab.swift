@@ -18,8 +18,7 @@ struct VMLab: AsyncParsableCommand {
       KillCommand.self, PauseCommand.self, ResumeCommand.self, ResetCommand.self,
       DestroyCommand.self, CloneCommand.self, GCCommand.self, ExecCommand.self, JobCommand.self,
       LogsCommand.self, ComputerCommand.self, IntrospectCommand.self, MemoryDumpCommand.self,
-      CheckpointCommand.self, Serve.self,
-      GenDocs.self,
+      CheckpointCommand.self, ManifestCommand.self, Serve.self, GenDocs.self,
     ]
   )
 

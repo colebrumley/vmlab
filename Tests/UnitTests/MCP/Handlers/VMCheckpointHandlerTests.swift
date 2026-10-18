@@ -31,7 +31,8 @@ import VMLabCore
       ["action": .string("create"), "name": .string("B"), "manifest": .bool(true)], in: f)
     #expect(b.value["checkpoint"]?["parent"] == a.value["checkpoint"]?["id"])
     #expect(b.value["checkpoint"]?["manifestPath"] == nil)
-    #expect(b.warnings.contains { $0.contains("R-801") })
+    // The guest is not running, so the manifest cannot be taken: a warning, not a failure.
+    #expect(b.warnings.contains { $0.contains("without a manifest") })
 
     let list = try await Self.call(["action": .string("list")], in: f)
     #expect(list.value["nodes"]?.arrayValue?.count == 2)

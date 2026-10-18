@@ -9,9 +9,9 @@ import Logging
 public actor VMManager {
   public nonisolated let store: Store
   public nonisolated let backends: BackendRegistry
-  /// Takes the guest manifests `vm_checkpoint create manifest: true` asks for (R-801); nil until
-  /// that item provides one, in which case the checkpoint is taken without a manifest and a
-  /// warning says so.
+  /// Takes the guest manifests `vm_checkpoint create manifest: true` asks for (R-801,
+  /// `CheckpointManifests`; `ToolContext` passes one); without one the checkpoint is taken
+  /// without a manifest and a warning says so.
   public nonisolated let manifests: (any GuestManifestTaker)?
 
   /// How a start waits for the guest to answer SSH (R-400).
