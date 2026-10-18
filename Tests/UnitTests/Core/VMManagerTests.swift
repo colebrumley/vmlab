@@ -37,6 +37,19 @@ import VMLabCore
     }
   }
 
+  /// CX-14: a start finds the engine a crashed start left (no runtime recorded), kills it and
+  /// says so, instead of refusing or running a second engine on the disk.
+  @Test func startKillsAStrandedEngineFirst() async throws {
+    let f = try Fixture()
+    let vm = try await f.create()
+    let engine = try FakeEngine(vmDirectory: f.store.directory(of: vm.id))
+    try await Task.sleep(for: .milliseconds(100))
+    let outcome = try await f.manager.run(.start, on: vm.id)
+    #expect(outcome.record?.state == .running)
+    #expect(outcome.warnings.contains { $0.contains("killed engine process \(engine.pid)") })
+    #expect(try await engine.waitForExit())
+  }
+
   @Test func fullLifecycleThroughCore() async throws {
     let f = try Fixture()
     let vm = try await f.create()

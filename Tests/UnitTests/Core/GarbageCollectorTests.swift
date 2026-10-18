@@ -31,6 +31,33 @@ import VMLabCore
     }
   }
 
+  /// CX-14: an engine still running for a record with no runtime is collected (unless the VM's
+  /// lock is held); one for a record that has a runtime is that VM's and stays.
+  @Test func collectsAnEngineARecordWithoutRuntimeLeft() async throws {
+    let f = try Fixture()
+    let stranded = try await f.create()
+    try "4242\n".write(
+      to: f.store.directory(of: stranded.id).appending(path: "qemu.pid"), atomically: true,
+      encoding: .utf8)
+    let processes = Processes()
+    var collector = GarbageCollector(manager: f.manager)
+    collector.processes = processes.inspector
+    collector.processes.runsVM = { pid, _ in pid == 4242 }
+
+    let held = try #require(FileLock.tryLock(f.store.operationLockPath(of: stranded.id)))
+    #expect(await collector.run().items.filter { $0.kind == .orphanProcess }.isEmpty)
+    held.unlock()
+
+    let report = await collector.run()
+    #expect(report.items.contains { $0.kind == .orphanProcess && $0.vm == stranded.id })
+    #expect(processes.terminated.withLock { $0 } == [4242])
+
+    _ = try await f.manager.perform(.start, on: stranded.id)
+    processes.terminated.withLock { $0 = [] }
+    _ = await collector.run()
+    #expect(processes.terminated.withLock { $0 }.isEmpty)
+  }
+
   @Test func collectsEverythingTheItemNamesAndNothingElse() async throws {
     let f = try Fixture()
     let source = try await f.create([.serial, .checkpointDisk, .checkpointLive])

@@ -264,3 +264,31 @@ import VMLabCore
     #expect(await exit.value)
   }
 }
+
+/// CX-14: a start that crashed between launching its engine and recording `runtime` left the
+/// engine running unseen: reconcile ignored it, start refused ("already runs") and gc looked only
+/// at VMs with no record. Each now kills such an engine, unless the VM's lock is held.
+@Suite struct StrandedEngineTests {
+  @Test func reconcileKillsAnEngineARecordWithoutRuntimeLeft() async throws {
+    let home = try StoreTests.tempHome()
+    defer { try? FileManager.default.removeItem(at: home) }
+    let store = Store(home: home)
+    let vm = try LifecycleTests.record(in: store, state: .stopped, runtime: nil)
+    let engine = try FakeEngine(vmDirectory: store.directory(of: vm.id))
+    try await Task.sleep(for: .milliseconds(100))
+
+    // A process holding the VM's lock may be starting it now: hands off.
+    let held = try #require(FileLock.tryLock(store.operationLockPath(of: vm.id)))
+    #expect(try await store.reconcile().isEmpty)
+    #expect(engine.process.isRunning)
+    held.unlock()
+
+    let changes = try await store.reconcile()
+    #expect(changes.map(\.id) == [vm.id])
+    #expect(changes.first?.reason.contains("\(engine.pid)") == true)
+    #expect(try await engine.waitForExit())
+    #expect(try store.load(id: vm.id).state == .stopped)
+    let events = try await LifecycleTests.events(store, vm.id)
+    #expect(events.contains { $0.message.contains("no runtime recorded") })
+  }
+}

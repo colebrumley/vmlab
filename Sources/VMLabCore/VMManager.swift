@@ -210,6 +210,17 @@ public actor VMManager {
     switch action {
     case .start:
       if let segment = record.segment { try await segments.startSwitch(segment.segment) }
+      // CX-14: an engine a crashed start left behind (no runtime recorded) would make this start
+      // refuse ("already runs") or run two engines on one disk; this start holds the lock.
+      if record.runtime == nil,
+        let pid = await EngineProcess.killStranded(in: store.directory(of: record.id))
+      {
+        let warning =
+          "start: killed engine process \(pid), left running with no runtime by a start that "
+          + "did not finish"
+        warnings.append(warning)
+        await log(record.id, warning, level: .warning)
+      }
       runtime = try await backend.start(record)
       if record.state == .suspended, let started = runtime {
         try await resumeSuspended(record, runtime: started, with: backend)
@@ -241,16 +252,34 @@ public actor VMManager {
     }
     guard case .state(let state) = target else { return nil }
     if !state.isLive { runtime = nil }
-    let updated = try store.update(id: record.id) { (current: inout VMRecord) throws(VMLabError) in
-      guard current.state == record.state else {
-        throw Lifecycle.wrongState(action: action, state: current.state, vm: current.id)
+    let updated: VMRecord
+    do {
+      updated = try store.update(id: record.id) { (current: inout VMRecord) throws(VMLabError) in
+        guard current.state == record.state else {
+          throw Lifecycle.wrongState(action: action, state: current.state, vm: current.id)
+        }
+        current.state = state
+        current.runtime = runtime
+        if state != .broken { current.brokenReason = nil }
       }
-      current.state = state
-      current.runtime = runtime
-      if state != .broken { current.brokenReason = nil }
+    } catch {
+      // An engine this start launched but could not record would run on unseen.
+      if action == .start, let started = runtime {
+        await killStarted(record, runtime: started, with: backend)
+      }
+      throw error
     }
     await log(record.id, "\(action.rawValue): \(record.state.rawValue) -> \(state.rawValue)")
     return updated
+  }
+
+  /// Kills the engine a start launched when the start then failed, so none runs unrecorded.
+  private func killStarted(_ record: VMRecord, runtime: VMRuntime, with backend: any Backend) async
+  {
+    var started = record
+    started.state = .running
+    started.runtime = runtime
+    try? await backend.kill(started)
   }
 
   /// The target when the guest answered SSH; neither when it is not one to wait for (no

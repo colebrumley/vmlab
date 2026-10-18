@@ -4,7 +4,8 @@ import Foundation
 /// What `vmlab gc` removed (R-805).
 public struct GCReport: Codable, Sendable, Hashable {
   public enum Kind: String, Codable, Sendable, CaseIterable {
-    /// An engine process whose VM record is gone, and that VM's leftover directory.
+    /// An engine process whose VM record is gone, and that VM's leftover directory; or one still
+    /// running for a record with no runtime (a start that crashed, CX-14).
     case orphanProcess = "orphan_process"
     case orphanDirectory = "orphan_directory"
     case dump
@@ -49,15 +50,21 @@ public struct ProcessInspector: Sendable {
   public var executablePath: @Sendable (Int32) -> String?
   /// SIGTERM, a short wait, then SIGKILL.
   public var terminate: @Sendable (Int32) async -> Void
+  /// Whether `pid` runs the VM in the directory (`EngineProcess.isRunning(_:vmDirectory:)`).
+  public var runsVM: @Sendable (Int32, URL) -> Bool
 
   public init(
     isAlive: @escaping @Sendable (Int32) -> Bool,
     executablePath: @escaping @Sendable (Int32) -> String?,
-    terminate: @escaping @Sendable (Int32) async -> Void
+    terminate: @escaping @Sendable (Int32) async -> Void,
+    runsVM: @escaping @Sendable (Int32, URL) -> Bool = {
+      EngineProcess.isRunning($0, vmDirectory: $1)
+    }
   ) {
     self.isAlive = isAlive
     self.executablePath = executablePath
     self.terminate = terminate
+    self.runsVM = runsVM
   }
 
   public static let system = ProcessInspector(
@@ -89,7 +96,7 @@ public struct ProcessInspector: Sendable {
 /// images are left to `images prune`, and a home whose `images` is a link to another's cache
 /// (the test homes) collects none.
 public struct GarbageCollector: Sendable {
-  public static let pidFiles = ["qemu.pid", "vz.pid"]
+  public static let pidFiles = EngineProcess.pidFiles
   /// The executables an engine pid file may name (`EngineProcess.isEngine`).
   public static func isEngine(_ path: String) -> Bool { EngineProcess.isEngine(path) }
 
@@ -114,6 +121,7 @@ public struct GarbageCollector: Sendable {
       return report
     }
     await collectOrphans(into: &report)
+    for record in records { await collectStrandedEngine(of: record, into: &report) }
     for record in records { collectOldFiles(of: record, into: &report) }
     for record in records { await collectTemporaryCheckpoints(of: record, into: &report) }
     collectBackingFiles(records: records, into: &report)
@@ -149,6 +157,26 @@ public struct GarbageCollector: Sendable {
         try? FileManager.default.removeItem(
           at: store.locksDirectory.appending(path: "\(name).lock"))
       }
+    }
+  }
+
+  /// CX-14: an engine running in the directory of a VM whose record has no runtime (a start that
+  /// crashed after launching it) is ended, unless a process holds the VM's operation lock.
+  func collectStrandedEngine(of record: VMRecord, into report: inout GCReport) async {
+    guard record.runtime == nil else { return }
+    let directory = store.directory(of: record.id)
+    for file in Self.pidFiles {
+      guard let text = try? String(contentsOf: directory.appending(path: file), encoding: .utf8),
+        let pid = Int32(text.trimmingCharacters(in: .whitespacesAndNewlines)), pid > 0,
+        processes.isAlive(pid), let path = processes.executablePath(pid), Self.isEngine(path),
+        processes.runsVM(pid, directory)
+      else { continue }
+      guard let lock = FileLock.tryLock(store.operationLockPath(of: record.id)) else { return }
+      defer { lock.unlock() }
+      guard (try? store.load(id: record.id))?.runtime == nil else { return }
+      if !dryRun { await processes.terminate(pid) }
+      report.items.append(
+        GCReport.Item(kind: .orphanProcess, target: "pid \(pid) (\(path))", vm: record.id))
     }
   }
 

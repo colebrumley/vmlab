@@ -85,13 +85,18 @@ public struct LivenessProbe: Sendable {
   public var isAlive: @Sendable (Int32) -> Bool
   /// Whether the engine answers on one of its recorded sockets.
   public var isAnswering: @Sendable (VMRuntime) -> Bool
+  /// Kills an engine running in a VM directory whose record has no runtime (CX-14), returning
+  /// its pid; nil when there is none.
+  public var killStranded: @Sendable (URL) async -> Int32?
 
   public init(
     isAlive: @escaping @Sendable (Int32) -> Bool,
-    isAnswering: @escaping @Sendable (VMRuntime) -> Bool
+    isAnswering: @escaping @Sendable (VMRuntime) -> Bool,
+    killStranded: @escaping @Sendable (URL) async -> Int32? = { _ in nil }
   ) {
     self.isAlive = isAlive
     self.isAnswering = isAnswering
+    self.killStranded = killStranded
   }
 
   /// `kill(pid, 0)`, and a connect to the control socket or the QMP socket.
@@ -101,7 +106,8 @@ public struct LivenessProbe: Sendable {
       ([runtime.controlSocket] + [runtime.qmpSocket].compactMap { $0 }).contains {
         canConnect(unixSocket: $0)
       }
-    })
+    },
+    killStranded: { await EngineProcess.killStranded(in: $0) })
 
   /// `kill(pid, 0)` succeeds or fails with `EPERM`. A pid of 0 or less never names one guest.
   public static func processExists(_ pid: Int32) -> Bool {
@@ -218,6 +224,9 @@ extension Store {
   ) async throws(VMLabError) -> [ReconcileChange] {
     var changes: [ReconcileChange] = []
     for record in try list().records {
+      if record.runtime == nil, let change = await stopStrandedEngine(of: record, probe: probe) {
+        changes.append(change)
+      }
       guard Self.reconciled(record, probe: probe, diskExists: { _ in true }) != nil else {
         continue
       }
@@ -243,6 +252,24 @@ extension Store {
         level: change.to == .broken ? .warning : .info)
     }
     return changes
+  }
+
+  /// CX-14: an engine still running in the directory of a record with no runtime (a start that
+  /// crashed between launching it and recording it) is killed, when no process holds the VM's
+  /// operation lock (one that does may be starting it now). The change is reported for a record
+  /// that is not live; a live one is reported by the reconcile that follows.
+  func stopStrandedEngine(of record: VMRecord, probe: LivenessProbe) async -> ReconcileChange? {
+    guard let lock = FileLock.tryLock(operationLockPath(of: record.id)) else { return nil }
+    defer { lock.unlock() }
+    guard let current = try? load(id: record.id), current.runtime == nil,
+      let pid = await probe.killStranded(directory(of: record.id))
+    else { return nil }
+    let reason =
+      "engine process \(pid) ran with no runtime recorded (a start that did not finish); killed"
+    try? await EventLog(vmDirectory: directory(of: record.id)).append(
+      .lifecycle, "reconcile: \(reason)", level: .warning)
+    guard !current.state.isLive else { return nil }
+    return ReconcileChange(id: record.id, from: current.state, to: current.state, reason: reason)
   }
 
   /// The reconciled record and why, or nil when `record` needs no change.
