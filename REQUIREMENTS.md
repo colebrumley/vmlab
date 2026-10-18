@@ -861,7 +861,7 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   install (`swift build -c release`, `scripts/sign.sh`, copy to `~/.local/bin`).
   **Verify:** unit test of the generated configuration JSON; manual: Claude Code lists the tools.
 
-- [ ] **R-1106 Release build**
+- [x] **R-1106 Release build**
   `scripts/release.sh`: `swift build -c release`, signs `vmlab-vz`, bundles `vmlab`, `vmlab-vz`,
   `vmlab-switch` into `dist/vmlab-<version>-arm64.tar.gz` with a checksum; `vmlab --version` reads
   the tag.

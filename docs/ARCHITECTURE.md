@@ -351,7 +351,7 @@ pulled images; each skips itself unless `VMLAB_INTEGRATION=1`.
 ## Scripts
 
 `scripts/check.sh` (format lint, build, unit tests, sign, generated docs current), `build.sh`,
-`sign.sh`, `bootstrap.sh` (Homebrew: qemu, tart), `gen-docs.sh` (`--check` for check.sh;
+`sign.sh`, `release.sh` (R-1106: `swift build -c release` with the version from `VMLAB_VERSION` or `git describe --tags` baked into `VMLabMCP.version`'s line for that build only, `sign.sh release`, `dist/vmlab-<version>-arm64.tar.gz` plus `.sha256`, then unpacks it to a temp directory and checks `vmlab --version` and that `vmlab doctor` finds the signed `vmlab-vz` next to `vmlab`), `bootstrap.sh` (Homebrew: qemu, tart), `gen-docs.sh` (`--check` for check.sh;
 `--refresh-host-facts` copies this host's slow probes into `docs/dev-host-facts.json`, the only
 input of FEATURES.md that is not code), and the process scripts
 `board.mjs`, `tidy.mjs`, `review.mjs`, `retro.mjs` and `guard.mjs` (the worktree-rule hook)
