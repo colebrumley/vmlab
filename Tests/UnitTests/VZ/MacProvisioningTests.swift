@@ -52,6 +52,13 @@ import VMLabCore
     #expect(calls[3].command.contains("-setvnclegacy -vnclegacy yes -setvncpw -vncpw abcd2345"))
     #expect(calls[3].command.contains("com.apple.screensharing"))
     #expect(MacProvisioner.isProvisioned(dir))
+    // R-1004: the steps are in provision.json, the VNC password is not.
+    let report = try #require(ProvisionReport.load(from: dir))
+    #expect(report.steps.map(\.name) == ["ssh", "authorized_keys", "hostname", "screen_sharing"])
+    #expect(report.steps.allSatisfy { $0.status == .succeeded })
+    #expect(report.failure == nil && !report.hasRequestedSteps)
+    #expect(report.steps[3].command.contains("-vncpw <vnc.pass>"))
+    #expect(!report.steps.contains { $0.command.contains("abcd2345") })
     let log = try String(contentsOf: dir.appending(path: "provision.log"), encoding: .utf8)
     #expect(log.contains("provisioned"))
     #expect(!log.contains("admin\n"))
@@ -76,6 +83,7 @@ import VMLabCore
     }
     #expect(noSSH?.code == .provisionFailed)
     #expect(noSSH?.data["step"] == .string("ssh"))
+    #expect(ProvisionReport.load(from: dir)?.steps.map(\.status) == [.failed, .skipped, .skipped])
 
     let badHost = await #expect(throws: VMLabError.self) {
       try await Self.provisioner(
@@ -83,12 +91,20 @@ import VMLabCore
       ).provision(ip: "192.168.64.20")
     }
     #expect(badHost?.data["step"] == .string("hostname"))
+    let failed = try #require(ProvisionReport.load(from: dir))
+    #expect(failed.steps.map(\.status) == [.succeeded, .succeeded, .failed])
+    #expect(failed.failure?.name == "hostname" && failed.failure?.exitCode == 1)
+    #expect(
+      failed.warning(vmDirectory: dir)?.hasPrefix(
+        "provision_failed: \(dir.lastPathComponent) step hostname")
+        == true)
 
     let noRFB = await #expect(throws: VMLabError.self) {
       try await Self.provisioner(dir, guest: FakeGuest(), vnc: "abcd2345", rfb: false)
         .provision(ip: "192.168.64.20")
     }
     #expect(noRFB?.data["step"] == .string("screen_sharing"))
+    #expect(ProvisionReport.load(from: dir)?.failure?.error == "port 5900 did not answer RFB")
     #expect(!MacProvisioner.isProvisioned(dir))
   }
 

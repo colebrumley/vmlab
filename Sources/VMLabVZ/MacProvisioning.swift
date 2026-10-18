@@ -86,40 +86,91 @@ public struct MacProvisioner: Sendable {
     return steps
   }
 
+  /// The name of the first step: waiting for sshd to take the image password.
+  public static let sshStep = "ssh"
+
+  /// `command` as `provision.json` records it: the VNC password replaced by where it is kept.
+  func recorded(_ command: String) -> String {
+    guard let vncPassword else { return command }
+    return command.replacingOccurrences(of: vncPassword, with: "<vnc.pass>")
+  }
+
   /// Runs the steps against the guest at `ip`; `provision_failed` names the step that failed.
+  /// Either way the steps land in `<vm>/provision.json` (R-1004: `ssh`, `authorized_keys`,
+  /// `hostname`, `screen_sharing`), so `vm_inspect` shows a failed first boot.
   public func provision(ip: String) async throws(VMLabError) {
     try? FileManager.default.removeItem(at: Self.marker(in: vmDirectory))
+    try? FileManager.default.removeItem(at: ProvisionReport.url(in: vmDirectory))
     let session = PasswordSSH(
       user: login.user, host: ip, password: login.password ?? "", scratch: vmDirectory)
     append("provisioning \(login.user)@\(ip)")
+    let planned = [(name: Self.sshStep, command: "true", input: Data())] + steps()
+    var done: [ProvisionStep] = []
+
+    /// Records `name` as failed and the steps after it as skipped, writes the report, and
+    /// returns the error to throw.
+    func fail(_ name: String, _ reason: String, _ output: CommandOutput?, ms: Int?)
+      -> VMLabError
+    {
+      let command = planned.first { $0.name == name }.map { recorded($0.command) } ?? name
+      done.append(
+        ProvisionStep(
+          name: name, command: command, status: .failed, exitCode: output.map { Int($0.status) },
+          durationMs: ms, error: output == nil ? reason : nil))
+      for step in planned where !done.contains(where: { $0.name == step.name }) {
+        done.append(
+          ProvisionStep(name: step.name, command: recorded(step.command), status: .skipped))
+      }
+      writeReport(done)
+      return failure(name, reason, output)
+    }
 
     let clock = ContinuousClock()
-    let deadline = clock.now.advanced(by: sshTimeout)
+    let begun = clock.now
+    let deadline = begun.advanced(by: sshTimeout)
     var last: CommandOutput? = nil
     while true {
       last = await ssh(session, "true", Data())
       if last?.status == 0 { break }
       if clock.now >= deadline {
-        throw failure("ssh", "sshd did not accept the image password within \(sshTimeout)", last)
+        throw fail(
+          Self.sshStep, "sshd did not accept the image password within \(sshTimeout)", last,
+          ms: Self.ms(clock.now - begun))
       }
       try? await Task.sleep(for: .seconds(3))
     }
+    done.append(
+      ProvisionStep(
+        name: Self.sshStep, command: "true", status: .succeeded, exitCode: 0,
+        durationMs: Self.ms(clock.now - begun)))
     append("ssh: password login works")
 
-    for step in steps() {
+    for step in planned.dropFirst() {
+      let started = clock.now
       let output = await ssh(session, step.command, step.input)
+      let ms = Self.ms(clock.now - started)
       append("\(step.name): exit \(output.map { String($0.status) } ?? "none")")
       if let text = output?.output, !text.isEmpty { append(text) }
-      guard output?.status == 0 else { throw failure(step.name, "the step failed", output) }
-    }
-
-    if vncPassword != nil {
-      guard await rfbProbe(ip, 5900, .seconds(60)) else {
-        throw failure("screen_sharing", "port 5900 did not answer RFB", nil)
+      guard output?.status == 0 else { throw fail(step.name, "the step failed", output, ms: ms) }
+      if step.name == "screen_sharing" {
+        guard await rfbProbe(ip, 5900, .seconds(60)) else {
+          done.append(
+            ProvisionStep(
+              name: step.name, command: recorded(step.command), status: .failed, exitCode: 0,
+              durationMs: Self.ms(clock.now - started),
+              error: "port 5900 did not answer RFB"))
+          writeReport(done)
+          throw failure("screen_sharing", "port 5900 did not answer RFB", nil)
+        }
+        append("screen_sharing: RFB answers on \(ip):5900")
       }
-      append("screen_sharing: RFB answers on \(ip):5900")
+      done.append(
+        ProvisionStep(
+          name: step.name, command: recorded(step.command), status: .succeeded, exitCode: 0,
+          durationMs: Self.ms(clock.now - started)))
     }
     try? FileManager.default.removeItem(at: session.askpass)
+    writeReport(done)
     do {
       try Data("\(ISO8601DateFormatter().string(from: Date()))\n".utf8).write(
         to: Self.marker(in: vmDirectory))
@@ -127,6 +178,17 @@ public struct MacProvisioner: Sendable {
       throw failure("marker", "cannot write \(Self.marker(in: vmDirectory).path)", nil)
     }
     append("provisioned")
+  }
+
+  static func ms(_ duration: Duration) -> Int { Int(duration / .milliseconds(1)) }
+
+  /// `<vm>/provision.json` with `steps`; a write failure is logged, not thrown.
+  func writeReport(_ steps: [ProvisionStep]) {
+    do {
+      try ProvisionReport(vm: vmDirectory.lastPathComponent, steps: steps).write(to: vmDirectory)
+    } catch {
+      append("cannot write \(ProvisionReport.url(in: vmDirectory).path): \(error)")
+    }
   }
 
   func failure(_ step: String, _ reason: String, _ output: CommandOutput?) -> VMLabError {

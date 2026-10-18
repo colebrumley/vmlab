@@ -230,8 +230,11 @@ create) with ARD's `kickstart`, sets `VNCAlwaysStartOnConsole` (without it macOS
 password-only VNC viewer a lock screen of its own instead of the logged-in console), enables and
 restarts Screen Sharing and checks that port 5900 answers RFB. The display is then the guest's
 Screen Sharing (`DisplayEndpoint.forVM`, `hostSide: false`, R-607). Steps
-go to `<vm>/provision.log`; a failure is `provision_failed` naming the step, and the runner is
-killed. Password authentication stays enabled.
+go to `<vm>/provision.log` and, as `ProvisionStep`s (`ssh`, `authorized_keys`, `hostname`,
+`screen_sharing`, the VNC password shown as `<vnc.pass>`), to `<vm>/provision.json`, so `vm_inspect`
+surfaces a failed first boot as `provision_failed`; a failure is `provision_failed` naming the step,
+and the runner is killed. `SSHProvisioner` then appends the request's `runCommands` to that report
+(`ProvisionReport.hasRequestedSteps` says whether they ran; nothing runs after a failed first boot). Password authentication stays enabled.
 
 **`VMLabRFB`** (library). A VNC (RFB) client: framebuffer updates to PNG, pointer and key events. It
 gives both engines a screen to look at and click on. `RFBClient` (an actor) speaks RFB 3.8 over an

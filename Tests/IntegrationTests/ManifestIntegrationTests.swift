@@ -90,12 +90,62 @@ import VMLabQEMU
     await guest.shutdown()
   }
 
-  /// R-801 Verify (integration, macOS): a macOS manifest lists `com.apple.dock`.
-  @Test(.disabled("TODO(R-606): vz-macos guests are not provisioned on main yet"))
-  func macOSManifestListsTheDock() async throws {}
+  /// Calls `tool` on a macOS guest.
+  static func call(
+    _ tool: String, _ arguments: [String: JSONValue], mac: VZMacGuestIntegrationTests.Guest,
+    context: ToolContext
+  ) async throws(VMLabError) -> JSONValue {
+    var arguments = arguments
+    arguments["vm"] = .string(mac.record.id)
+    return try await ToolHandlers.call(tool, arguments: .object(arguments), context: context)
+      .value
+  }
 
-  /// R-802 Verify (integration, macOS): `defaults write com.apple.dock autohide -bool true`
-  /// between two manifests shows the key with `0 → 1` in the diff.
-  @Test(.disabled("TODO(R-606): vz-macos guests are not provisioned on main yet"))
-  func macOSDiffShowsTheDockAutohideKey() async throws {}
+  /// R-801 Verify (integration, macOS): a macOS manifest lists `com.apple.dock`; and R-802 Verify:
+  /// `defaults write com.apple.dock autohide -bool true` between two manifests shows the key with
+  /// `0 → 1` in the diff. One guest for both (the host runs at most two macOS guests). The key is
+  /// written `false` first so the base manifest holds `0` (the image leaves it unset).
+  @Test(
+    .enabled(if: VZMacGuestIntegrationTests.ready && VZMacGuestIntegrationTests.hostHasRoom()),
+    .timeLimit(.minutes(12)))
+  func macOSManifestListsTheDockAndDiffShowsAutohide() async throws {
+    let mac = try await VZMacGuestIntegrationTests.makeGuest(features: [.execSSH], suffix: "f")
+    do {
+      _ = try await mac.manager.perform(.start, on: mac.record.id)
+      let context = ToolContext(home: mac.home, backends: mac.registry)
+      let reset = try await Self.call(
+        "vm_exec", ["command": .string("defaults write com.apple.dock autohide -bool false")],
+        mac: mac, context: context)
+      #expect(reset["exitCode"] == .number(0), "\(reset)")
+
+      let base = try await Self.call("vm_manifest", [:], mac: mac, context: context)
+      let id = try #require(base["id"]?.stringValue, "\(base)")
+      let manifest = try context.store.loadManifest(vm: mac.record.id, id: id)
+      #expect(manifest.profile == .macos)
+      #expect(manifest.defaults["com.apple.dock"] != nil, "\(manifest.defaults.keys.sorted())")
+      #expect(manifest.defaults["com.apple.dock"]?["autohide"] == "0")
+
+      let change = try await Self.call(
+        "vm_exec", ["command": .string("defaults write com.apple.dock autohide -bool true")],
+        mac: mac, context: context)
+      #expect(change["exitCode"] == .number(0), "\(change)")
+      let after = try await Self.call("vm_manifest", [:], mac: mac, context: context)
+      let afterID = try #require(after["id"]?.stringValue)
+      let diff = try await Self.call(
+        "vm_checkpoint",
+        ["action": .string("diff"), "from": .string(id), "to": .string(afterID)], mac: mac,
+        context: context)
+      let entries = diff["defaults"]?["entries"]?.arrayValue ?? []
+      let autohide = entries.first {
+        $0["domain"] == .string("com.apple.dock") && $0["key"] == .string("autohide")
+      }
+      #expect(autohide?["old"] == .string("0"), "\(diff)")
+      #expect(autohide?["new"] == .string("1"), "\(diff)")
+      #expect(autohide?["change"] == .string("changed"))
+    } catch {
+      await mac.teardown()
+      throw error
+    }
+    await mac.teardown()
+  }
 }
