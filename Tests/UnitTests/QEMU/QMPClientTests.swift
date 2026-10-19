@@ -169,14 +169,14 @@ actor ScriptedQMPTransport: QMPTransport {
 /// Answers the greeting, `qmp_capabilities` and `query-status` on each accepted connection.
 final class FakeQMPServer: @unchecked Sendable {
   let path: String
-  private let fd: Int32
+  private let listener: TestListener
   private let lock = NSLock()
   private var count = 0
 
   init(path: String, connections: Int) throws {
     self.path = path
     unlink(path)
-    fd = socket(AF_UNIX, SOCK_STREAM, 0)
+    let fd = socket(AF_UNIX, SOCK_STREAM, 0)
     var addr = sockaddr_un()
     addr.sun_family = sa_family_t(AF_UNIX)
     withUnsafeMutableBytes(of: &addr.sun_path) { buf in
@@ -188,12 +188,19 @@ final class FakeQMPServer: @unchecked Sendable {
         bind(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
       }
     }
-    guard rc == 0, listen(fd, 1) == 0 else { throw POSIXError(.EADDRINUSE) }
-    let listener = fd
-    let thread = Thread { [self] in
+    guard rc == 0, listen(fd, 1) == 0 else {
+      Darwin.close(fd)
+      throw POSIXError(.EADDRINUSE)
+    }
+    let listener = TestListener(fd)
+    self.listener = listener
+    let thread = Thread { [weak self] in
       for _ in 0..<connections {
-        let client = accept(listener, nil, nil)
-        guard client >= 0 else { return }
+        guard let client = listener.accept() else { return }
+        guard let self else {
+          Darwin.close(client)
+          return
+        }
         serve(client)
         Darwin.close(client)
         lock.withLock { count += 1 }
@@ -205,7 +212,7 @@ final class FakeQMPServer: @unchecked Sendable {
   func served() -> Int { lock.withLock { count } }
 
   func stop() {
-    Darwin.close(fd)
+    listener.close()
     unlink(path)
   }
 

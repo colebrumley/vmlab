@@ -32,7 +32,11 @@ import VMLabCore
 
   @Test func aShutdownDescriptorEndsTheWrite() throws {
     let (fd, peer) = pair()
+    let shutDone = DispatchSemaphore(value: 0)
     defer {
+      // The thread uses `fd` until it signals; closing first would let it shut down a number
+      // another test has since been given.
+      shutDone.wait()
       close(fd)
       close(peer)
     }
@@ -44,6 +48,7 @@ import VMLabCore
         open = false
         _ = shutdown(fd, SHUT_RDWR)
       }
+      shutDone.signal()
     }
     shut.start()
     let started = ContinuousClock.now
@@ -57,13 +62,18 @@ import VMLabCore
 
   @Test func everyByteArrives() throws {
     let (fd, peer) = pair()
+    let exited = DispatchSemaphore(value: 0)
     defer {
+      // The reader uses `peer` until it exits; shutting `fd` down ends it on any path.
+      _ = shutdown(fd, SHUT_RDWR)
+      exited.wait()
       close(fd)
       close(peer)
     }
     let payload = (0..<(1 << 20)).map { UInt8($0 & 0xFF) }
     let done = DispatchSemaphore(value: 0)
     let reader = Thread {
+      defer { exited.signal() }
       var got: [UInt8] = []
       var buffer = [UInt8](repeating: 0, count: 65536)
       while got.count < payload.count {
