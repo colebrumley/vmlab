@@ -377,10 +377,14 @@ public struct SegmentStore: Sendable {
     environment["VMLAB_HOME"] = home.path
     process.environment = environment
     process.standardInput = FileHandle.nullDevice
-    let log = FileHandle(
-      fileDescriptor: open(
-        logFile(of: name).path, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0o644),
-      closeOnDealloc: true)
+    let logFD = open(logFile(of: name).path, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0o644)
+    guard logFD >= 0 else {
+      throw VMLabError(
+        code: .internal,
+        message: "Cannot open \(logFile(of: name).path): \(String(cString: strerror(errno)))",
+        hint: "Check that VMLAB_HOME is writable.")
+    }
+    let log = FileHandle(fileDescriptor: logFD, closeOnDealloc: true)
     process.standardOutput = log
     process.standardError = log
     do { try process.run() } catch {
