@@ -39,12 +39,15 @@ func sha256(_ bytes: [UInt8]) -> String {
     let transport = ReplayTransport(serverBytes: try rfbFixture("qemu-ramfb-640x480.bin"))
     let client = try await RFBClient.handshake(over: transport)
     try await client.requestUpdate(incremental: false)
-    let expected: [UInt8] =
-      Array("RFB 003.008\n".utf8) + [1]  // version, security None
-      + [1]  // ClientInit shared
-      + [0, 0, 0, 0, 32, 24, 0, 1, 0, 255, 0, 255, 0, 255, 16, 8, 0, 0, 0, 0]  // BGRX
-      + [2, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 1, 0xff, 0xff, 0xff, 0x21]  // Raw, CopyRect, DesktopSize
-      + [3, 0, 0, 0, 0, 0, 0x02, 0x80, 0x01, 0xe0]  // full update request 640x480
+    // Typed parts joined, not one `+` chain: older type checkers time out on the long sum.
+    let parts: [[UInt8]] = [
+      Array("RFB 003.008\n".utf8), [1],  // version, security None
+      [1],  // ClientInit shared
+      [0, 0, 0, 0, 32, 24, 0, 1, 0, 255, 0, 255, 0, 255, 16, 8, 0, 0, 0, 0],  // BGRX
+      [2, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 1, 0xff, 0xff, 0xff, 0x21],  // Raw, CopyRect, DesktopSize
+      [3, 0, 0, 0, 0, 0, 0x02, 0x80, 0x01, 0xe0],  // full update request 640x480
+    ]
+    let expected = Array(parts.joined())
     #expect(await transport.written == expected)
   }
 
@@ -136,8 +139,11 @@ func sha256(_ bytes: [UInt8]) -> String {
 @Suite struct RFBClientLimitsTests {
   static func be16(_ v: Int) -> [UInt8] { [UInt8(v >> 8 & 0xff), UInt8(v & 0xff)] }
   static func serverInit(_ w: Int, _ h: Int) -> [UInt8] {
-    Array("RFB 003.008\n".utf8) + [1, 1, 0, 0, 0, 0] + be16(w) + be16(h)
-      + PixelFormat.bgrx.bytes + [0, 0, 0, 0]
+    let parts: [[UInt8]] = [
+      Array("RFB 003.008\n".utf8), [1, 1, 0, 0, 0, 0], be16(w), be16(h), PixelFormat.bgrx.bytes,
+      [0, 0, 0, 0],
+    ]
+    return Array(parts.joined())
   }
   static func update(_ count: Int) -> [UInt8] { [0, 0] + be16(count) }
   static func rect(_ x: Int, _ y: Int, _ w: Int, _ h: Int, _ encoding: Int32) -> [UInt8] {

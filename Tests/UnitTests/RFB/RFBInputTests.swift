@@ -98,10 +98,12 @@ private func connectedClient() async throws -> (RFBClient, ReplayTransport, Int)
     try await client.type("Hello, World!", gap: .zero)
     func plain(_ c: UInt8) -> [UInt8] { ev(UInt32(c), true) + ev(UInt32(c), false) }
     func shifted(_ c: UInt8) -> [UInt8] { ev(0xffe1, true) + plain(c) + ev(0xffe1, false) }
-    let expected =
-      shifted(0x48) + plain(0x65) + plain(0x6c) + plain(0x6c) + plain(0x6f) + plain(0x2c)
-      + plain(0x20) + shifted(0x57) + plain(0x6f) + plain(0x72) + plain(0x6c) + plain(0x64)
-      + shifted(0x21)
+    let parts: [[UInt8]] = [
+      shifted(0x48), plain(0x65), plain(0x6c), plain(0x6c), plain(0x6f), plain(0x2c),
+      plain(0x20), shifted(0x57), plain(0x6f), plain(0x72), plain(0x6c), plain(0x64),
+      shifted(0x21),
+    ]
+    let expected = Array(parts.joined())
     #expect(Array(await transport.written[start...]) == expected)
   }
 

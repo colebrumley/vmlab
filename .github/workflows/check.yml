@@ -10,12 +10,7 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
+      # The image defaults to Xcode 16.4 (Swift 6.1); the package needs Swift 6.2 (exit tests).
       - run: sudo xcode-select -s /Applications/Xcode_26.3.app
       - run: swift --version
       - run: scripts/check.sh
-  build-swift61:  # TEMP fix-ci probe: does the package still build on Xcode 16.4 / Swift 6.1?
-    runs-on: macos-15
-    steps:
-      - uses: actions/checkout@v4
-      - run: sudo xcode-select -s /Applications/Xcode_16.4.app
-      - run: swift build --build-tests -Xswiftc -continue-building-after-errors 2>&1 | grep -E "error:|Compiling|Build" | sort -u | grep -v Compiling ; exit ${PIPESTATUS[0]}
