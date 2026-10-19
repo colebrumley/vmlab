@@ -189,6 +189,7 @@ public actor QEMUMachine {
       try? FileManager.default.removeItem(at: stale)
     }
     let binary = request.installation.systemBinary(for: request.plan.guest.arch)
+    ConsoleRun.markStart(vmDirectory: layout.directory)
     try await daemonize(
       binary, arguments, log: layout.log, pidFile: layout.pidFile, vmDirectory: layout.directory)
     guard let pid = readPID(layout) else {
@@ -274,7 +275,9 @@ public actor QEMUMachine {
   ) async throws -> QEMUMachine {
     let qmp = try await connectFirst(
       monitors ?? [layout.qmpSocket.path], connectTimeout: timeout)
-    let serial = SerialChannel(socketPath: layout.serialSocket.path, logURL: layout.serialLog)
+    // Offsets are positions in console.log, which QEMU appends to whoever holds the socket.
+    let serial = SerialChannel(
+      socketPath: layout.serialSocket.path, logURL: layout.serialLog, consoleLog: layout.consoleLog)
     // R-304: panic lines go to the event log, both those QEMU logged to console.log while no
     // vmlab process held the socket and this channel's live lines.
     let panics = ConsolePanicWatch(vmDirectory: layout.directory, console: layout.consoleLog)

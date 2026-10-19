@@ -3,10 +3,12 @@ import VMLabCore
 
 /// `vm_serial`: the guest's serial console through the backend's `SerialChannel` (QEMU's
 /// `serial.sock`, or the VZ runner's bridge of the virtio console, R-602). Offsets are byte offsets
-/// in the channel's buffer; every result returns the one to pass as `since` next.
+/// in the VM's `console.log`, the same in every process and across server restarts; every result
+/// returns the one to pass as `since` next.
 ///
-/// `since` defaults to the start of the buffer for `wait` as for `read`, so `wait "login:"` after
-/// the prompt was printed still matches; pass the last `offset` to wait only for new output.
+/// `since` defaults to where the VM's current run began in the log (`ConsoleRun`) for `wait` as
+/// for `read`, so `wait "login:"` after the prompt was printed still matches, and a prompt from
+/// an earlier run does not; pass the last `offset` to wait only for new output, or 0 for every run.
 struct VMSerialHandler: ToolHandler {
   /// The most `read` returns at once; `truncated` says there is more.
   static let maxReadBytes = 256 * 1024
@@ -59,7 +61,10 @@ struct VMSerialHandler: ToolHandler {
 
     let vm = try await context.manager.attach(try arguments.string("vm") ?? "")
     let serial = try vm.channel(.serial)
-    let from = UInt64(since ?? 0)
+    // The log spans every run; by default only this run's output counts.
+    let from =
+      since.map(UInt64.init)
+      ?? ConsoleRun.start(vmDirectory: context.store.directory(of: vm.id))
     switch action {
     case "read":
       return Self.result(await serial.read(since: from, maxBytes: Self.maxReadBytes))

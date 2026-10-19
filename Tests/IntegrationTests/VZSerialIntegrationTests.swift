@@ -87,11 +87,17 @@ import VMLabVZ
     // Synced above; kill rather than stop, since a guest still busy with cloud-init can take
     // minutes to honour a shutdown request on a loaded host.
     _ = try await context.manager.perform(.kill, on: created.id)
+    // Offsets are console.log's, which keeps every boot: the second starts where the first ended.
+    let secondBoot =
+      (try? FileManager.default.attributesOfItem(atPath: dir.appending(path: "console.log").path))?[
+        .size] as? NSNumber
+    let since = Double(secondBoot?.uint64Value ?? 0)
     started = try #require(try await context.manager.performAdmitted(.start, on: created.id))
     _ = try await serial([
-      "action": .string("wait"), "pattern": .string("login: "), "timeoutSeconds": .number(90),
+      "action": .string("wait"), "pattern": .string("login: "), "since": .number(since),
+      "timeoutSeconds": .number(90),
     ])
-    let boot = try await serial(["action": .string("read"), "since": .number(0)])
+    let boot = try await serial(["action": .string("read"), "since": .number(since)])
     let text = boot.value["text"]?.stringValue ?? ""
     print("second boot transcript head:\n\(text.prefix(600))")
     // The kernel's own lines, from when the virtio console registered (the boot console before

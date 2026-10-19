@@ -3,7 +3,8 @@ import VMLabCore
 
 /// `vm_logs`: a VM's logs read from its directory, so it works on a stopped VM. `events` renders
 /// `events.jsonl` one event per line (timestamp, level, kind, message, then any data as JSON);
-/// `serial` and `provision` are the tails of `serial.log` and `provision.log`. Lines carry no
+/// `serial` and `provision` are the tails of `console.log` (the engine's serial log; `serial.log`
+/// for a VM that has none) and `provision.log`. Lines carry no
 /// common clock, so `all` is each source's tail in turn, every line prefixed with its source.
 struct VMLogsHandler: ToolHandler {
   static let defaultTail = 100
@@ -38,11 +39,19 @@ struct VMLogsHandler: ToolHandler {
       lines += events.map { prefix ? "[events] \($0)" : $0 }
     }
     for name in ["serial", "provision"] where source == name || prefix {
-      let file = directory.appending(path: "\(name).log")
+      let file = Self.logFile(name, in: directory)
       let text = Self.tailLines(of: file, count: tail, warnings: &warnings)
       lines += text.map { prefix ? "[\(name)] \($0)" : $0 }
     }
     return ToolResult(["lines": .array(lines.map { .string($0) })], warnings: warnings)
+  }
+
+  /// The file behind a text source: the serial console is the engine's `console.log`, which
+  /// `vm_serial` offsets also count in; `serial.log` is what older channels wrote.
+  static func logFile(_ name: String, in directory: URL) -> URL {
+    let console = directory.appending(path: "console.log")
+    if name == "serial", FileManager.default.fileExists(atPath: console.path) { return console }
+    return directory.appending(path: "\(name).log")
   }
 
   static func eventLines(_ directory: URL, tail: Int, warnings: inout [String]) async -> [String] {

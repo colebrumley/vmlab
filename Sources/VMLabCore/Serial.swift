@@ -1,7 +1,8 @@
 import Foundation
 
-/// Bytes read back from a serial channel. Offsets count bytes from the first byte the channel
-/// received.
+/// Bytes read back from a serial channel. Offsets are byte offsets into the VM's console log when
+/// the channel has one (`SerialChannel.consoleLog`), else they count bytes from the first byte the
+/// channel received.
 public struct SerialRead: Sendable, Hashable {
   /// The returned bytes, decoded as UTF-8 (invalid sequences become U+FFFD).
   public var text: String
@@ -54,9 +55,20 @@ public struct SerialLine: Sendable, Hashable {
 }
 
 /// A guest's serial console over a unix stream socket (QEMU's `-serial unix:...,server,nowait`, or
-/// the `vmlab-vz` runner's bridge, R-602). A background reader appends every byte to
+/// the `vmlab-vz` runner's bridge, R-602).
+///
+/// With a `consoleLog` (every engine has one: QEMU's chardev `logfile`, the VZ runner's
+/// `console.log`), the engine's own durable log is the record. Offsets are byte offsets into that
+/// file, so they mean the same in every process: a CLI call, the MCP server, the server after a
+/// restart. `start` loads the log's tail into the ring, then follows the file (woken by the socket,
+/// and polled every `followInterval`); reads and waits older than the ring are served from the
+/// file. Bytes on the socket only wake the channel; writes go to the socket. The engine appends to
+/// the log for the life of the VM directory and nothing rotates it, since the engine holds it
+/// open (G6: offsets never move).
+///
+/// Without one (tests, older callers), a background reader appends every socket byte to
 /// `serial.log` (rotated to `serial.log.1` past `rotateBytes`) and to a ring of the last
-/// `ringCapacity` bytes, so `read`, `tail` and `wait` work on absolute byte offsets.
+/// `ringCapacity` bytes, and offsets count bytes this channel received.
 public actor SerialChannel {
   public static let defaultRingCapacity = 4 * 1024 * 1024
   public static let defaultRotateBytes: UInt64 = 64 * 1024 * 1024
@@ -67,6 +79,11 @@ public actor SerialChannel {
 
   public let socketPath: String
   public let logURL: URL
+  /// The engine's durable console log, when offsets are positions in it.
+  public let consoleLog: URL?
+  /// How often a channel with a `consoleLog` checks the file for output the socket did not wake
+  /// it for (the engine logs a chunk just after sending it).
+  static let followInterval: Duration = .milliseconds(25)
   public let ringCapacity: Int
   public let rotateBytes: UInt64
 
@@ -74,6 +91,11 @@ public actor SerialChannel {
   private var log: SerialLog
   private var socket: SocketBox?
   private var readerTask: Task<Void, Never>?
+  /// The open console log and how far it has been read into the ring.
+  private var console: ConsoleFile?
+  private var followTask: Task<Void, Never>?
+  /// Lines are handed to observers only from this log offset on (`observeLines(from:)`).
+  private var linesFrom: UInt64?
   private var closed = false
   /// Every line observer, by key; key 0 is `setLineObserver`'s slot.
   private var lineObservers: [UInt64: @Sendable (SerialLine) -> Void] = [:]
@@ -133,11 +155,12 @@ public actor SerialChannel {
   public init(
     socketPath: String, logURL: URL, ringCapacity: Int = SerialChannel.defaultRingCapacity,
     rotateBytes: UInt64 = SerialChannel.defaultRotateBytes,
-    matcherPath: String? = SerialMatcher.defaultPath
+    matcherPath: String? = SerialMatcher.defaultPath, consoleLog: URL? = nil
   ) {
     self.matcherPath = matcherPath
     self.socketPath = socketPath
     self.logURL = logURL
+    self.consoleLog = consoleLog
     self.ringCapacity = max(1, ringCapacity)
     self.rotateBytes = rotateBytes
     self.ring = ByteRing(capacity: max(1, ringCapacity))
@@ -169,6 +192,11 @@ public actor SerialChannel {
 
   public func removeLineObserver(_ key: UInt64) { lineObservers[key] = nil }
 
+  /// With a `consoleLog`: hand observers the lines from log offset `offset` on, including those
+  /// already in the log when `start` runs (by default, only lines that arrive after it). Call it
+  /// before `start`.
+  public func observeLines(from offset: UInt64) { linesFrom = offset }
+
   /// Hangs a `PanicDetector` writing to `<vmDirectory>/events.jsonl` on this channel's lines
   /// (R-304); call it once per channel, before `start`, so no line is missed.
   public func watchForPanics(vmDirectory: URL) {
@@ -197,7 +225,11 @@ public actor SerialChannel {
       }
     }
     do {
-      try log.open()
+      if let consoleLog {
+        console = try ConsoleFile(url: consoleLog)
+      } else {
+        try log.open()
+      }
     } catch {
       Darwin.close(fd)
       throw error
@@ -225,15 +257,52 @@ public actor SerialChannel {
       thread.start()
     }
     refillSpare()
-    readerTask = Task { [weak self] in
-      for await chunk in chunks { await self?.ingest(chunk) }
-      await self?.readerFinished()
+    if let console {
+      // The ring starts at the log's tail (or where line observers start, if earlier).
+      let size = console.size
+      let tail = size > UInt64(ringCapacity) ? size - UInt64(ringCapacity) : 0
+      let observeFrom = min(linesFrom ?? size, size)
+      linesFrom = observeFrom
+      ring = ByteRing(capacity: ringCapacity, base: min(tail, observeFrom))
+      partialLineStart = ring.end
+      follow()
+      readerTask = Task { [weak self] in
+        for await _ in chunks { await self?.follow() }
+        await self?.readerFinished()
+      }
+      followTask = Task { [weak self] in
+        while !Task.isCancelled {
+          try? await Task.sleep(for: Self.followInterval)
+          guard let self else { return }
+          await self.follow()
+        }
+      }
+    } else {
+      readerTask = Task { [weak self] in
+        for await chunk in chunks { await self?.ingest(chunk) }
+        await self?.readerFinished()
+      }
+    }
+  }
+
+  /// Reads what the console log gained since the last look into the ring.
+  private func follow() {
+    guard let console else { return }
+    let size = console.size
+    // A log that shrank was replaced under the engine; offsets past its end wait for it to grow.
+    while ring.end < size {
+      let to = min(size, ring.end + (1 << 20))
+      let chunk = console.read(from: ring.end, to: to)
+      guard !chunk.isEmpty else { return }
+      ingest(chunk)
     }
   }
 
   /// Stops the reader and closes the socket and log. Pending waits fail with `guest_unreachable`.
   public func stop() async {
     closed = true
+    followTask?.cancel()
+    followTask = nil
     socket?.shutdown()
     await readerTask?.value
     readerFinished(failingAll: true)
@@ -242,22 +311,33 @@ public actor SerialChannel {
   /// The offset after the last byte received.
   public var endOffset: UInt64 { ring.end }
 
-  /// The offset of the oldest byte still in the ring.
-  public var startOffset: UInt64 { ring.start }
+  /// The oldest offset `read` and `wait` can reach: 0 with a console log (the file has every
+  /// byte), else the oldest byte still in the ring.
+  public var startOffset: UInt64 { retainedStart }
+
+  private var retainedStart: UInt64 { console != nil ? 0 : ring.start }
+
+  /// The bytes in `[from, to)`: from the ring, and from the console log below the ring's start.
+  private func bytes(from: UInt64, to: UInt64) -> [UInt8] {
+    guard let console, from < ring.start else { return ring.bytes(from: from, to: to) }
+    return console.read(from: from, to: min(to, ring.start)) + ring.bytes(from: ring.start, to: to)
+  }
 
   /// True while the reader is connected.
   public var isConnected: Bool { socket != nil && !closed }
 
-  /// Bytes from `since` to the end, at most `maxBytes` of them. A `since` older than the ring
-  /// starts at the oldest retained byte with `truncated` set; one past the end returns nothing.
+  /// Bytes from `since` to the end, at most `maxBytes` of them. A `since` older than what is
+  /// retained (`startOffset`) starts at the oldest retained byte with `truncated` set; one past the
+  /// end returns nothing.
   public func read(since: UInt64, maxBytes: Int? = nil) -> SerialRead {
-    let from = min(max(since, ring.start), ring.end)
+    let oldest = retainedStart
+    let from = min(max(since, oldest), ring.end)
     var to = ring.end
     if let maxBytes, maxBytes >= 0 { to = min(to, from + UInt64(maxBytes)) }
-    let bytes = ring.bytes(from: from, to: to)
+    let bytes = bytes(from: from, to: to)
     return SerialRead(
       text: String(decoding: bytes, as: UTF8.self), start: from, offset: to,
-      truncated: since < ring.start || to < ring.end)
+      truncated: since < oldest || to < ring.end)
   }
 
   /// The last `lines` lines in the ring (a trailing partial line counts as one).
@@ -346,13 +426,15 @@ public actor SerialChannel {
     }
     let from = since ?? ring.end
     let connected = !closed && socket != nil
-    guard connected || max(from, ring.start) < ring.end else { throw Self.unreachable(socketPath) }
+    guard connected || max(from, retainedStart) < ring.end else {
+      throw Self.unreachable(socketPath)
+    }
     let id = nextWaiterID
     nextWaiterID += 1
     return try await withTaskCancellationHandler {
       try await withCheckedThrowingContinuation { continuation in
         waiters[id] = Waiter(
-          pattern: pattern, literal: literal, since: from, scanFrom: max(from, ring.start),
+          pattern: pattern, literal: literal, since: from, scanFrom: max(from, retainedStart),
           scannedTo: from,
           continuation: continuation, timer: nil)
         arm(id, after: timeout, pattern: pattern, timeout: timeout)
@@ -444,8 +526,17 @@ public actor SerialChannel {
   private func ingest(_ chunk: [UInt8]) {
     let chunkStart = ring.end
     ring.append(chunk)
-    log.write(chunk)
-    emitLines(chunk, startingAt: chunkStart)
+    if console == nil { log.write(chunk) }
+    if let linesFrom, chunkStart < linesFrom {
+      // Bytes before the observers' start (the log's history at `start`) are not lines to report.
+      let skip = Int(min(UInt64(chunk.count), linesFrom - chunkStart))
+      if skip < chunk.count {
+        partialLineStart = linesFrom
+        emitLines(Array(chunk[skip...]), startingAt: linesFrom)
+      }
+    } else {
+      emitLines(chunk, startingAt: chunkStart)
+    }
     checkWaiters()
   }
 
@@ -487,7 +578,7 @@ public actor SerialChannel {
       if socket == nil { finish(id, throwing: Self.unreachable(socketPath)) }
       return
     }
-    let from = max(waiter.scanFrom, ring.start)
+    let from = max(waiter.scanFrom, retainedStart)
     guard from < ring.end else {
       waiters[id]?.scannedTo = ring.end
       if socket == nil { finish(id, throwing: Self.unreachable(socketPath)) }
@@ -496,7 +587,7 @@ public actor SerialChannel {
     let to = min(ring.end, from + Self.scanWindow)
     if let literal = waiter.literal {
       let found = SerialMatcher.search(
-        literal: literal, in: ring.bytes(from: from, to: to), base: from)
+        literal: literal, in: bytes(from: from, to: to), base: from)
       scanFinished(id, outcome: found.map { .found($0) } ?? .none, through: to, pid: nil)
       return
     }
@@ -528,7 +619,7 @@ public actor SerialChannel {
       waiters[id]?.matcher = matcher
       refillSpare()
     }
-    let bytes = ring.bytes(from: from, to: to)
+    let bytes = bytes(from: from, to: to)
     scanning.insert(id)
     let thread = Thread { [weak self] in
       let outcome = matcher.scan(bytes, base: from)
@@ -604,6 +695,10 @@ public actor SerialChannel {
   /// The reader stopped. A waiter still matching output that arrived before the end keeps going
   /// (and fails once caught up); the rest fail now. `stop` fails them all.
   private func readerFinished(failingAll: Bool = false) {
+    // The engine logged the last bytes before the socket closed.
+    if !failingAll { follow() }
+    followTask?.cancel()
+    followTask = nil
     socket = nil
     log.close()
     partialLine.removeAll()
@@ -646,7 +741,7 @@ public actor SerialChannel {
     // Partial data (R-1101): what the guest printed while the wait ran, its last 4 KB at most.
     let end = ring.end
     let from = max(
-      waiter.since, ring.start, end >= Self.timeoutTextBytes ? end - Self.timeoutTextBytes : 0)
+      waiter.since, retainedStart, end >= Self.timeoutTextBytes ? end - Self.timeoutTextBytes : 0)
     let seen = read(since: from)
     finish(
       id,
@@ -714,7 +809,11 @@ struct ByteRing: Sendable {
   /// The offset after the newest byte.
   private(set) var end: UInt64 = 0
 
-  init(capacity: Int) { storage = [UInt8](repeating: 0, count: capacity) }
+  /// An empty ring whose first byte will be at offset `base`.
+  init(capacity: Int, base: UInt64 = 0) {
+    storage = [UInt8](repeating: 0, count: capacity)
+    end = base
+  }
 
   var capacity: Int { storage.count }
   /// The offset of the oldest retained byte.
@@ -746,6 +845,72 @@ struct ByteRing: Sendable {
     let length = Int(hi - lo)
     if first + length <= capacity { return Array(storage[first..<(first + length)]) }
     return Array(storage[first..<capacity]) + Array(storage[0..<(first + length - capacity)])
+  }
+}
+
+/// Where the VM's current run begins in `<vm>/console.log`, which spans every run: the backend
+/// records the log's size in `<vm>/console.start` just before it launches the engine, and
+/// `vm_serial` reads and waits from there unless told otherwise.
+public enum ConsoleRun {
+  static func file(_ vmDirectory: URL) -> URL { vmDirectory.appending(path: "console.start") }
+
+  /// Records the console log's current size (0 when there is none) as the run's start.
+  public static func markStart(vmDirectory: URL) {
+    let size =
+      ((try? FileManager.default.attributesOfItem(
+        atPath: vmDirectory.appending(path: "console.log").path))?[.size] as? NSNumber)?
+      .uint64Value ?? 0
+    try? Data("\(size)\n".utf8).write(to: file(vmDirectory), options: .atomic)
+  }
+
+  /// The offset where the current run's output begins, or 0 when none was recorded.
+  public static func start(vmDirectory: URL) -> UInt64 {
+    (try? String(contentsOf: file(vmDirectory), encoding: .utf8))
+      .flatMap { UInt64($0.trimmingCharacters(in: .whitespacesAndNewlines)) } ?? 0
+  }
+}
+
+/// The engine's console log, opened read-only (created empty if the engine has not yet) and read by
+/// offset. The descriptor is closed when the last reference goes.
+final class ConsoleFile: Sendable {
+  let url: URL
+  private let fd: Int32
+
+  init(url: URL) throws {
+    self.url = url
+    try FileManager.default.createDirectory(
+      at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+    fd = Darwin.open(url.path, O_RDONLY | O_CREAT | O_CLOEXEC, 0o644)
+    guard fd >= 0 else {
+      throw VMLabError(
+        code: .internal, message: "Could not open the console log.",
+        hint: "Check permissions on \(url.path).",
+        data: ["path": .string(url.path), "errno": .number(Double(errno))])
+    }
+  }
+
+  deinit { Darwin.close(fd) }
+
+  /// The file's size now.
+  var size: UInt64 {
+    var info = stat()
+    return fstat(fd, &info) == 0 ? UInt64(info.st_size) : 0
+  }
+
+  /// The bytes in `[from, to)` that the file holds.
+  func read(from: UInt64, to: UInt64) -> [UInt8] {
+    guard from < to else { return [] }
+    var bytes = [UInt8](repeating: 0, count: Int(to - from))
+    var got = 0
+    while got < bytes.count {
+      let n = bytes[got...].withUnsafeMutableBytes {
+        pread(fd, $0.baseAddress, $0.count, off_t(from) + off_t(got))
+      }
+      if n < 0 && errno == EINTR { continue }
+      guard n > 0 else { break }
+      got += n
+    }
+    return Array(bytes[0..<got])
   }
 }
 

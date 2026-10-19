@@ -53,6 +53,27 @@ import VMLabCore
     await f.cleanUp()
   }
 
+  /// The console log spans every run of the VM: without `since`, read and wait start where the
+  /// last start began (`<vm>/console.start`), so an old run's prompt does not match.
+  @Test func readAndWaitDefaultToTheCurrentRun() async throws {
+    let f = try await Fixture()
+    await guest(f, "old login: \nnew boot\n")
+    #expect(await eventually { await f.channel.endOffset == 21 })
+    let directory = f.base.context.store.directory(of: f.vm)
+    try Data("12\n".utf8).write(to: directory.appending(path: "console.start"))
+    let read = try await f.call(["action": .string("read")])
+    #expect(read.value["text"] == .string("new boot\n"))
+    let waiting = Task {
+      try await f.call(["action": .string("wait"), "pattern": .string("login: ")])
+    }
+    await guest(f, "debian login: ")
+    let match = try await waiting.value
+    #expect(match.value["offset"] == .number(35))
+    let all = try await f.call(["action": .string("read"), "since": .number(0)])
+    #expect(all.value["text"]?.stringValue?.hasPrefix("old login: ") == true)
+    await f.cleanUp()
+  }
+
   /// `wait` starts at the beginning of the buffer by default, so a prompt printed before the call
   /// still matches; `since` the returned offset waits only for new output.
   @Test func waitDefaultsToTheStartAndReturnsTheOffsetAfterTheMatch() async throws {

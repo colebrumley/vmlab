@@ -487,9 +487,10 @@ struct SerialCommand: ToolCommand {
     commandName: "serial",
     abstract: "Read, tail, write or wait on a VM's serial console (the vm_serial tool).",
     discussion: """
-      Offsets count bytes the channel received; each result prints the offset to pass as \
-      --since next. A CLI process has its own channel, so offsets do not carry over between \
-      invocations; serial.log (vmlab logs --source serial) has the whole run.
+      Offsets are byte offsets into the VM's console log, which the engine writes whether or \
+      not anyone is reading, so they carry over between invocations: write, then wait \
+      --since <the offset write printed> in a later call sees the reply. Each result prints the \
+      offset to pass as --since next; vmlab logs --source serial has the whole log.
       """)
   static let toolName = "vm_serial"
 

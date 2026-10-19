@@ -172,12 +172,13 @@ public struct VZBackend: Backend {
         SegmentStore(home: store.home).attachSocket(of: $0.segment).path
       })
     await serialChannels.drop(record.id)
+    ConsoleRun.markStart(vmDirectory: dir)
     let handle = try await launcher.launch(vmDirectory: dir, config: config)
     watchExit(id: record.id, pid: handle.runtime.pid)
     var runtime = handle.runtime
     if let socket = config.serialSocket {
       runtime.serialSocket = socket
-      // Connect now so serial.log follows the boot; a failure here is retried on attach.
+      // Connect now so panic detection follows the boot; a failure here is retried on attach.
       if record.features.contains(.serial) {
         _ = try? await serialChannels.channel(for: record.id, socket: socket, vmDirectory: dir)
       }
@@ -422,16 +423,20 @@ final class VZExitWatchers: Sendable {
 final class VZSerialChannels: Sendable {
   private let channels = Mutex<[String: Task<SerialChannel, any Error>]>([:])
 
-  /// The guest's connected channel, connecting (and logging to `<vm>/serial.log`) when there is
+  /// The guest's connected channel (reading `<vm>/console.log`), connecting when there is
   /// none or the last one lost its socket.
   func channel(for id: String, socket: String, vmDirectory: URL) async throws -> SerialChannel {
     while true {
       let (task, fresh) = channels.withLock { tasks -> (Task<SerialChannel, any Error>, Bool) in
         if let cached = tasks[id] { return (cached, false) }
         let task = Task {
+          // Offsets are positions in the runner's console.log, as for QEMU.
+          let console = vmDirectory.appending(path: "console.log")
           let channel = SerialChannel(
-            socketPath: socket, logURL: vmDirectory.appending(path: "serial.log"))
-          await channel.watchForPanics(vmDirectory: vmDirectory)  // R-304
+            socketPath: socket, logURL: vmDirectory.appending(path: "serial.log"),
+            consoleLog: console)
+          // R-304, including panics logged while no channel was connected.
+          await ConsolePanicWatch(vmDirectory: vmDirectory, console: console).attach(to: channel)
           try await channel.start()
           return channel
         }

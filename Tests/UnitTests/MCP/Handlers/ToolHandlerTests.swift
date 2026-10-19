@@ -197,6 +197,19 @@ import VMLabMCP
     #expect(missing?.code == .vmNotFound)
   }
 
+  @Test func serialLogsComeFromTheConsoleLogWhenThereIsOne() async throws {
+    let context = try Self.context()
+    defer { try? FileManager.default.removeItem(at: context.home) }
+    let record = try context.store.create(Self.record("web"))
+    let directory = context.store.directory(of: record.id)
+    try Data("old channel copy\n".utf8).write(to: directory.appending(path: "serial.log"))
+    try Data("boot\ndebian login: \n".utf8).write(to: directory.appending(path: "console.log"))
+    let serial = try await Self.call(
+      "vm_logs", .object(["vm": .string("web"), "source": .string("serial"), "tail": .number(1)]),
+      in: context)
+    #expect(serial.value["lines"] == .array([.string("debian login: ")]))
+  }
+
   @Test func logsListPanicsAndInspectSurfacesTheLatest() async throws {
     let context = try Self.context()
     defer { try? FileManager.default.removeItem(at: context.home) }

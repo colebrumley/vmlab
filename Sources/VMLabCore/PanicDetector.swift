@@ -230,15 +230,22 @@ public final class ConsolePanicWatch: Sendable {
     return size
   }
 
-  /// Scans what the log gained since the last check, then watches `channel`'s lines.
+  /// Scans what the log gained since the last check, then watches `channel`'s lines. A channel
+  /// that reads this same log (`SerialChannel.consoleLog`) counts offsets in it, so its lines
+  /// start where the scan stopped and its offsets are saved as they are.
   public func attach(to channel: SerialChannel) async {
-    catchUp()
+    let reached = catchUp()
+    if channel.consoleLog?.standardizedFileURL.path == console.standardizedFileURL.path {
+      base.withLock { $0 = 0 }
+      await channel.observeLines(from: reached)
+    }
     await channel.addLineObserver { [self] line in
       if detector.observe(line) { checkpoint(channelOffset: line.end) }
     }
   }
 
-  /// Saves the position the channel has reached (`channelOffset`, from its first byte).
+  /// Saves the position the channel has reached (`channelOffset`: from its first byte, or a log
+  /// offset for a channel on this log).
   public func checkpoint(channelOffset: UInt64) {
     save(base.withLock { $0 } + channelOffset)
   }
