@@ -31,10 +31,12 @@ import VMLabMCP
     #expect(vmlab["env"] as? [String: String] == ["VMLAB_HOME": "/Users/me/.vmlab"])
   }
 
+  /// The name precedes `-e`, whose values would otherwise swallow it (claude reported "Invalid
+  /// environment variable format: vmlab").
   @Test func claudeCommandAddsToUserScope() {
     #expect(
       entry.claudeCommand == [
-        "claude", "mcp", "add", "--scope", "user", "-e", "VMLAB_HOME=/Users/me/.vmlab", "vmlab",
+        "claude", "mcp", "add", "vmlab", "--scope", "user", "-e", "VMLAB_HOME=/Users/me/.vmlab",
         "--", "/opt/vmlab/bin/vmlab", "serve",
       ])
   }

@@ -48,9 +48,10 @@ public struct MCPServerEntry: Sendable, Equatable {
     try Self.encode(["mcpServers": [name: object(for: client)]])
   }
 
-  /// The `claude mcp add` command that installs the same entry in Claude Code's user scope.
+  /// The `claude mcp add` command that installs the same entry in Claude Code's user scope. The
+  /// name comes first: `-e` takes several values, so a name after it is read as another variable.
   public var claudeCommand: [String] {
-    ["claude", "mcp", "add", "--scope", "user", "-e", "VMLAB_HOME=\(vmlabHome)", name, "--"]
+    ["claude", "mcp", "add", name, "--scope", "user", "-e", "VMLAB_HOME=\(vmlabHome)", "--"]
       + [command] + args
   }
 

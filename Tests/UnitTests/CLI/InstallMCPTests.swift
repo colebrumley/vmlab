@@ -40,7 +40,7 @@ import VMLabMCP
     #expect(text.contains("\"mcpServers\""))
     #expect(
       text.contains(
-        "claude mcp add --scope user -e VMLAB_HOME=/h vmlab -- '/Apps/My Tools/vmlab' serve"))
+        "claude mcp add vmlab --scope user -e VMLAB_HOME=/h -- '/Apps/My Tools/vmlab' serve"))
   }
 
   @Test func userHomeReadsHOME() {
