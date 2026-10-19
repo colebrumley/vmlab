@@ -36,6 +36,13 @@ import VMLabVZ
         _ = try? await Tart.locate().delete(URL(filePath: clone).lastPathComponent)
       }
       try? FileManager.default.removeItem(at: home)
+      try? FileManager.default.removeItem(at: Self.shareDirectory(home: home))
+    }
+
+    /// A host share directory beside (never inside) the test home: the write policy refuses a
+    /// share inside VMLAB_HOME.
+    static func shareDirectory(home: URL) -> URL {
+      URL(filePath: home.path + "-share", directoryHint: .isDirectory)
     }
   }
 
@@ -173,7 +180,8 @@ import VMLabVZ
     let guest = try await Self.makeGuest(
       features: [.execSSH, .sharedDir], suffix: "h",
       share: { home in
-        let host = home.appending(path: "hostshare", directoryHint: .isDirectory)
+        let host = Guest.shareDirectory(home: home)
+        try? FileManager.default.removeItem(at: host)
         try? FileManager.default.createDirectory(at: host, withIntermediateDirectories: true)
         return SharedDirSpec(host: host.path, guest: mount)
       })
