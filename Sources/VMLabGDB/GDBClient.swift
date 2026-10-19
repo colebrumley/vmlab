@@ -6,6 +6,12 @@ import VMLabCore
 /// Commands are serialised: one packet is in flight at a time. `cont`, `step` and `vCont` return
 /// once the stub acknowledges them and leave the target `running`; `waitForStop` blocks until the
 /// stop reply. While the target runs, only `interrupt` and `waitForStop` are legal.
+///
+/// Replies carry no tag, so the client keeps them in step with its commands: a packet that
+/// arrives while no command waits (QEMU's stop reply to a debugger that stopped a running guest,
+/// a stop after the wait for it gave up) is taken in before the next command goes out, a stop
+/// reply that arrives while a command other than `?` waits is recorded and skipped, and a reply
+/// that cannot be the command's closes the connection rather than shift every later reply.
 public actor GDBClient {
   public struct Options: Sendable {
     /// How long a command waits for its ack and its reply: the dead-peer window (R-1101). A stub
@@ -97,7 +103,9 @@ public actor GDBClient {
 
   /// `qSupported`: what the stub offers.
   public func handshake() async throws -> StubFeatures {
-    let reply = try await exclusive { try await self.request(GDBCommand.qSupported) }
+    let reply = try await exclusive {
+      try await self.request(GDBCommand.qSupported, expecting: .any)
+    }
     let parsed = StubFeatures.parse(reply)
     features = parsed
     return parsed
@@ -106,7 +114,7 @@ public actor GDBClient {
   /// `?`: why the target is stopped.
   public func haltReason() async throws -> StopReason {
     try await exclusive {
-      let reply = try await self.request(GDBCommand.haltReason)
+      let reply = try await self.request(GDBCommand.haltReason, expecting: .stop)
       return try await self.recordStop(try StopReply.parse(reply))
     }
   }
@@ -114,7 +122,8 @@ public actor GDBClient {
   /// `vCont?`: the action letters the stub supports, or `nil` when it has no `vCont`.
   public func vContActions() async throws -> Set<String>? {
     try await exclusive {
-      let reply = try await self.request(GDBCommand.vContQuery, emptyMeansUnsupported: false)
+      let reply = try await self.request(
+        GDBCommand.vContQuery, expecting: .any, emptyMeansUnsupported: false)
       return parseVContActions(reply)
     }
   }
@@ -147,7 +156,7 @@ public actor GDBClient {
     try await exclusive {
       if self.state == .stopped {
         if let last = self.lastStop { return last }
-        let reply = try await self.request(GDBCommand.haltReason)
+        let reply = try await self.request(GDBCommand.haltReason, expecting: .stop)
         return try await self.recordStop(try StopReply.parse(reply))
       }
       while true {
@@ -163,7 +172,8 @@ public actor GDBClient {
           throw error
         }
         guard StopReply.isStopReply(text) else {
-          throw GDBError.malformedReply("expected a stop reply, got \(text.prefix(64))")
+          // Nothing but a stop answers a resume: a reply to some command is a lost step.
+          throw await self.outOfStep("a stop reply", got: text)
         }
         return try await self.recordStop(try StopReply.parse(text))
       }
@@ -188,7 +198,7 @@ public actor GDBClient {
   public func readRegistersRaw(thread: String? = nil) async throws -> String {
     try await exclusive {
       if let thread { try await self.expectOK(GDBCommand.selectThread(thread)) }
-      return try await self.request(GDBCommand.readRegisters)
+      return try await self.request(GDBCommand.readRegisters, expecting: .hex)
     }
   }
 
@@ -251,7 +261,8 @@ public actor GDBClient {
       while out.count < length {
         let chunk = min(length - out.count, self.maxReadChunk)
         let reply = try await self.request(
-          GDBCommand.readMemory(address: address &+ UInt64(out.count), length: chunk))
+          GDBCommand.readMemory(address: address &+ UInt64(out.count), length: chunk),
+          expecting: .hex)
         guard let bytes = Hex.decode(reply), !bytes.isEmpty else {
           throw GDBError.malformedReply("bad m reply: \(reply.prefix(64))")
         }
@@ -344,7 +355,8 @@ public actor GDBClient {
       let reply: [UInt8]
       do {
         reply = try await requestBytes(
-          GDBCommand.readFeatures(annex: annex, offset: data.count, length: length))
+          GDBCommand.readFeatures(annex: annex, offset: data.count, length: length),
+          expecting: .transfer)
       } catch GDBError.unsupported {
         return nil
       } catch GDBError.stubError where data.isEmpty {
@@ -364,7 +376,7 @@ public actor GDBClient {
   }
 
   private func readRegisterLocked(_ number: Int) async throws -> [UInt8] {
-    let reply = try await request(GDBCommand.readRegister(number))
+    let reply = try await request(GDBCommand.readRegister(number), expecting: .hex)
     guard let bytes = Hex.decode(reply) else {
       throw GDBError.malformedReply("bad p reply: \(reply.prefix(64))")
     }
@@ -400,28 +412,89 @@ public actor GDBClient {
     }
   }
 
+  /// Commands answered `OK` (or `E nn`): `Z`, `z`, `Hg`, `M`, `G`, `P`.
   private func expectOK(_ payload: String) async throws {
-    let reply = try await request(payload)
-    guard reply == "OK" else {
-      throw GDBError.malformedReply("expected OK to \(payload.prefix(16)), got \(reply.prefix(64))")
-    }
+    _ = try await request(payload, expecting: .ok)
   }
 
-  private func request(_ payload: String, emptyMeansUnsupported: Bool = true) async throws
-    -> String
-  {
-    let bytes = try await requestBytes(payload, emptyMeansUnsupported: emptyMeansUnsupported)
+  private func request(
+    _ payload: String, expecting shape: ReplyShape, emptyMeansUnsupported: Bool = true
+  ) async throws -> String {
+    let bytes = try await requestBytes(
+      payload, expecting: shape, emptyMeansUnsupported: emptyMeansUnsupported)
     return String(decoding: bytes, as: UTF8.self)
   }
 
+  /// What the reply to a command looks like, besides `E nn` and the empty packet.
+  enum ReplyShape: Sendable {
+    /// A stop reply (`?`).
+    case stop
+    /// `OK`.
+    case ok
+    /// Hex digits, `x` for unavailable bytes (`g`, `p`, `m`).
+    case hex
+    /// `m` or `l` and data (`qXfer`).
+    case transfer
+    /// Anything but a stop reply (`qSupported`, `vCont?`).
+    case any
+  }
+
+  enum Verdict: Equatable {
+    /// The command's reply.
+    case reply
+    /// A packet the stub sent unasked (a stop, console output): recorded, then skipped.
+    case unsolicited
+    /// Neither: the replies are out of step with the commands.
+    case outOfStep
+  }
+
+  /// Whether `reply` answers a command whose replies have `shape`.
+  static func verdict(_ reply: [UInt8], for shape: ReplyShape) -> Verdict {
+    if reply.isEmpty || stubError(reply) != nil { return .reply }
+    let text = String(decoding: reply, as: UTF8.self)
+    if StopReply.isStopReply(text) { return shape == .stop ? .reply : .unsolicited }
+    if isConsoleOutput(text) { return .unsolicited }
+    switch shape {
+    case .stop: return .outOfStep
+    case .ok: return text == "OK" ? .reply : .outOfStep
+    case .hex:
+      let hex = reply.allSatisfy { Hex.nibble($0) != nil || $0 == UInt8(ascii: "x") }
+      return hex ? .reply : .outOfStep
+    case .transfer:
+      return reply.first == UInt8(ascii: "m") || reply.first == UInt8(ascii: "l")
+        ? .reply : .outOfStep
+    case .any: return .reply
+    }
+  }
+
+  /// An `O` packet: console output, hex after the letter (`OK` is not one).
+  static func isConsoleOutput(_ text: String) -> Bool {
+    text.count > 1 && text.first == "O" && Hex.decode(text.dropFirst()) != nil
+  }
+
   /// Sends a command and returns its reply payload, mapping `E nn` and empty replies to errors.
-  private func requestBytes(_ payload: String, emptyMeansUnsupported: Bool = true) async throws
-    -> [UInt8]
-  {
+  /// Stop replies and console output the stub sends while it waits are recorded and skipped; a
+  /// packet that cannot be the reply closes the connection.
+  private func requestBytes(
+    _ payload: String, expecting shape: ReplyShape, emptyMeansUnsupported: Bool = true
+  ) async throws -> [UInt8] {
     guard state == .stopped else { throw GDBError.targetRunning }
     try await transmit(payload)
-    let reply = try await fromPeer("the reply to \(Self.name(payload))") {
-      try await self.nextPacket(timeout: self.options.replyTimeout)
+    var reply: [UInt8]
+    while true {
+      reply = try await fromPeer("the reply to \(Self.name(payload))") {
+        try await self.nextPacket(timeout: self.options.replyTimeout)
+      }
+      switch Self.verdict(reply, for: shape) {
+      case .reply: break
+      case .unsolicited:
+        takeUnsolicited(reply)
+        continue
+      case .outOfStep:
+        throw await outOfStep(
+          "the reply to \(Self.name(payload))", got: String(decoding: reply, as: UTF8.self))
+      }
+      break
     }
     if reply.isEmpty {
       if emptyMeansUnsupported {
@@ -445,31 +518,62 @@ public actor GDBClient {
     return nil
   }
 
-  /// Sends a frame and waits for the stub's `+`, resending on `-`. A packet that arrives before
-  /// any ack (a stub not sending acks) is kept for the reader of the reply.
+  /// Sends a frame and waits for the stub's `+`, resending on `-`. What the stub sent while no
+  /// command waited is taken in first: on a stopped target it answers nothing of ours. A packet
+  /// that arrives before the ack (QEMU's stop reply for a guest it stopped as this client
+  /// connected) is kept, in order, for the reader of the reply.
   private func transmit(_ payload: String) async throws {
     startReader()
+    if state == .stopped {
+      while !events.isEmpty {
+        if case .packet(let stray) = events.removeFirst() { takeUnsolicited(stray) }
+      }
+    }
     let frame = GDBPacket.frame(payload)
     var attempts = 0
+    var early: [GDBEvent] = []
+    defer { events.insert(contentsOf: early, at: 0) }
     while true {
       if let error = closedError { throw error }
       try await send(frame)
-      let event = try await fromPeer("the ack of \(Self.name(payload))") {
-        try await self.nextEvent(timeout: self.options.replyTimeout)
+      var acked: Bool?
+      while acked == nil {
+        let event = try await fromPeer("the ack of \(Self.name(payload))") {
+          try await self.nextEvent(timeout: self.options.replyTimeout)
+        }
+        switch event {
+        case .ack: acked = true
+        case .nack: acked = false
+        case .packet: early.append(event)
+        case .corrupt: break
+        }
       }
-      switch event {
-      case .ack:
-        return
-      case .nack:
-        attempts += 1
-        if attempts > options.maxRetransmits { throw GDBError.tooManyRetransmits }
-      case .packet:
-        events.insert(event, at: 0)
-        return
-      case .corrupt:
-        return
-      }
+      if acked == true { return }
+      attempts += 1
+      if attempts > options.maxRetransmits { throw GDBError.tooManyRetransmits }
     }
+  }
+
+  /// Records a packet the stub sent unasked: a stop becomes the last stop, console output is
+  /// kept; anything else (a stale reply) is dropped.
+  private func takeUnsolicited(_ payload: [UInt8]) {
+    let text = String(decoding: payload, as: UTF8.self)
+    if Self.isConsoleOutput(text), let bytes = Hex.decode(text.dropFirst()) {
+      consoleOutput.append(contentsOf: bytes)
+    } else if let reply = try? StopReply.parse(text) {
+      lastStop = StopReason(reply: reply, pcRegister: cachedMap?.programCounter?.number)
+    }
+  }
+
+  /// Closes the connection after a reply that cannot answer the command in flight, so no later
+  /// command takes a reply meant for an earlier one; the session layer reconnects.
+  private func outOfStep(_ expected: String, got text: String) async -> GDBError {
+    closedError = closedError ?? .connectionClosed
+    await transport.close()
+    reader?.cancel()
+    return GDBError.malformedReply(
+      "out of step with the stub: expected \(expected), got \(text.prefix(64)); "
+        + "the connection was closed to resynchronise")
   }
 
   /// The next packet, skipping stray acks.

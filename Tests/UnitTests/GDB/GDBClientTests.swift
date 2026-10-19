@@ -378,3 +378,99 @@ final class SilentStub: GDBTransport, @unchecked Sendable {
     continuation.finish()
   }
 }
+
+/// Every command gets its own reply: unsolicited stop replies (QEMU sends one when it stops a
+/// running guest for a new debugger), stale packets and late stops never shift the replies.
+@Suite struct GDBReplyOrderTests {
+  /// The arm64 stub with breakpoints and a CPU that runs on `c` and stops on the interrupt.
+  static func handler() throws -> FakeGDBStub.Handler {
+    let base = try GDBClientTests.arm64Handler(chunk: 2000)
+    return { packet in
+      if packet.hasPrefix("Z") || packet.hasPrefix("z") { return ["OK"] }
+      if packet == "c" { return [] }
+      if packet == "^C" { return ["T02thread:p01.01;"] }
+      return base(packet)
+    }
+  }
+
+  static let hit = 0xffff_8000_1020_3040 as UInt64
+
+  @Test func aStopReplySentBeforeTheFirstAckIsNotTheHandshakeReply() async throws {
+    let stub = FakeGDBStub(greeting: ["T02thread:p01.01;"], handler: try Self.handler())
+    let client = GDBClient(transport: stub)
+    let features = try await client.handshake()
+    #expect(features.packetSize == 0x1000)
+    #expect(features.supports("qXfer:features:read"))
+    #expect(await client.lastStop?.signal == 2)
+    #expect(try await client.registerMap().architecture == "aarch64")
+    try await client.insertBreakpoint(.hardware, address: Self.hit, kind: 4)
+    try await client.cont()
+    stub.push("T05thread:p01.01;hwbreak:;20:" + GDBFixtures.littleEndian(Self.hit) + ";")
+    let stop = try await client.waitForStop(timeout: .seconds(2))
+    #expect(stop.pc == Self.hit)
+    #expect(stop.breakpoint == .hardware)
+    try await client.removeBreakpoint(.hardware, address: Self.hit, kind: 4)
+    #expect(await !client.isClosed)
+  }
+
+  @Test func aStopReplyQueuedBeforeTheHandshakeIsNotItsReply() async throws {
+    let stub = FakeGDBStub(handler: try Self.handler())
+    stub.push("T02thread:p01.01;")
+    let client = GDBClient(transport: stub)
+    #expect(try await client.handshake().packetSize == 0x1000)
+    try await client.insertBreakpoint(.hardware, address: Self.hit, kind: 4)
+    #expect(try await client.register(named: "pc").uint64 == 0x4008_0000)
+  }
+
+  @Test func stalePacketsWhileStoppedAreNotTheNextReply() async throws {
+    let stub = FakeGDBStub(handler: try Self.handler())
+    let client = GDBClient(transport: stub)
+    _ = try await client.handshake()
+    _ = try await client.registerMap()
+    stub.push("OK")
+    stub.push("S05")
+    // Let the reader take them in before the next command goes out.
+    try await Task.sleep(for: .milliseconds(50))
+    #expect(try await client.register(named: "x0").uint64 == 0x1000)
+    try await client.insertBreakpoint(.hardware, address: Self.hit, kind: 4)
+    #expect(await !client.isClosed)
+  }
+
+  /// A stop that arrives after `wait` gave up is the next wait's; one that arrives after the
+  /// halt already took a stop is dropped, not taken as the reply to the next command.
+  @Test func lateStopsAreNotRepliesToLaterCommands() async throws {
+    let stub = FakeGDBStub(handler: try Self.handler())
+    let client = GDBClient(transport: stub, options: .init(replyTimeout: .seconds(2)))
+    _ = try await client.handshake()
+    try await client.cont()
+    await #expect(throws: GDBError.timeout(seconds: 0.05)) {
+      try await client.waitForStop(timeout: .milliseconds(50))
+    }
+    stub.push("T05thread:p01.01;hwbreak:;20:" + GDBFixtures.littleEndian(Self.hit) + ";")
+    #expect(try await client.waitForStop(timeout: .seconds(2)).pc == Self.hit)
+
+    try await client.cont()
+    #expect(try await client.halt(timeout: .seconds(2)).signal == 2)
+    stub.push("T05thread:p01.01;")
+    try await Task.sleep(for: .milliseconds(50))
+    #expect(try await client.register(named: "sp").uint64 == 0xffff_0000_8000_fff0)
+    try await client.insertBreakpoint(.software, address: 0x4008_0000, kind: 4)
+    #expect(await !client.isClosed)
+  }
+
+  /// A reply that cannot be the answer to the command is a lost step: the client closes the
+  /// connection (the session reconnects) instead of taking every later reply one behind.
+  @Test func aReplyOutOfStepClosesTheConnection() async throws {
+    let base = try Self.handler()
+    let stub = FakeGDBStub { packet in
+      packet.hasPrefix("Z1") ? ["PacketSize=1000;qXfer:features:read+"] : base(packet)
+    }
+    let client = GDBClient(transport: stub)
+    _ = try await client.handshake()
+    await #expect(throws: GDBError.self) {
+      try await client.insertBreakpoint(.hardware, address: Self.hit, kind: 4)
+    }
+    #expect(await client.isClosed)
+    #expect(stub.closed)
+  }
+}

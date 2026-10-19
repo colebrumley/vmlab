@@ -307,3 +307,160 @@ import VMLabCore
     #expect(registers.first { $0.name == "pc" } != nil)
   }
 }
+
+/// The reproduction of the reply desync: QEMU stops a running guest when a debugger connects and
+/// sends its stop reply unasked, and keeps breakpoints across connections. Each server process
+/// is a fresh `DebugSessions` on the same VM directory.
+@Suite struct DebugSessionReconnectTests {
+  /// A stub with QEMU's connection behaviour: the CPU state and the inserted hardware points
+  /// outlive a client, and a client that connects to a running CPU stops it and is told so.
+  final class QEMULike: @unchecked Sendable {
+    let lock = NSLock()
+    var running = false
+    var pc: UInt64 = 0x4008_0000
+    var points: Set<String> = []
+    /// Answers `Z1` with an error after inserting the point (a reply lost on the way).
+    var failInsert = false
+    var stub: LoopbackGDBStub!
+
+    init() throws {
+      let base = try GDBClientTests.arm64Handler(chunk: 2000)
+      stub = try LoopbackGDBStub(
+        greeting: { [unowned self] in
+          lock.withLock {
+            guard running else { return [] }
+            running = false
+            return ["T02thread:p01.01;"]
+          }
+        },
+        handler: { [unowned self] packet in
+          lock.withLock {
+            switch packet {
+            case "c":
+              running = true
+              return []
+            case "^C":
+              guard running else { return [] }
+              running = false
+              return ["T02thread:p01.01;"]
+            case "s":
+              pc += 4
+              return ["T05thread:p01.01;20:" + GDBFixtures.littleEndian(pc) + ";"]
+            case "g":
+              var block = Array(base("g")[0])
+              block.replaceSubrange(512..<528, with: Array(GDBFixtures.littleEndian(pc)))
+              return [String(block)]
+            case let p where p.hasPrefix("Z1,"):
+              points.insert(String(p.dropFirst(3)))
+              return [failInsert ? "E01" : "OK"]
+            case let p where p.hasPrefix("z1,"):
+              return [points.remove(String(p.dropFirst(3))) != nil ? "OK" : "E22"]
+            default:
+              return base(packet)
+            }
+          }
+        })
+    }
+
+    /// The CPU reaches `address` and stops on the hardware breakpoint there.
+    func hit(_ address: UInt64) {
+      lock.withLock {
+        running = false
+        pc = address
+      }
+      stub.push("T05thread:p01.01;hwbreak:;20:" + GDBFixtures.littleEndian(address) + ";")
+    }
+
+    var inserted: Set<String> { lock.withLock { points } }
+  }
+
+  static func directory() throws -> URL {
+    let dir = FileManager.default.temporaryDirectory.appending(path: "vmlab-desync-\(UUID())")
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    return dir
+  }
+
+  static func session(_ qemu: QEMULike, _ dir: URL) async throws -> DebugSession {
+    try await DebugSessions(connector: GDBDebugConnector(replyTimeout: .seconds(5))).session(
+      vm: "vm-a", endpoint: GDBDebugTargetTests.endpoint(qemu.stub), arch: .arm64,
+      directory: dir)
+  }
+
+  static let address = 0xffff_8000_1020_3040 as UInt64
+
+  @Test func aSecondServerAfterAContinueKeepsEveryReplyInStep() async throws {
+    let qemu = try QEMULike()
+    let dir = try Self.directory()
+    defer { try? FileManager.default.removeItem(at: dir) }
+
+    // Process A: halt, registers, step, continue, exit with the guest running.
+    let a = try await Self.session(qemu, dir)
+    _ = try await a.halt()
+    #expect(try await a.registers().contains { $0.name == "pc" })
+    #expect(try await a.step().reason == .step)
+    try await a.resume()
+    await a.detach()
+    // The stub sees the close before the next client is accepted.
+    try await Task.sleep(for: .milliseconds(100))
+
+    // Process B: a hardware breakpoint, continue, the hit, remove, continue.
+    let b = try await Self.session(qemu, dir)
+    let point = DebugPoint(address: Self.address, kind: .hardware)
+    #expect(try await b.add(point) == [point])
+    #expect(qemu.inserted == ["ffff800010203040,4"])
+    try await b.resume()
+    #expect(await b.running() == true)
+    qemu.hit(Self.address)
+    let stop = try await b.wait(timeout: .seconds(5))
+    #expect(stop.reason == .breakpoint)
+    #expect(stop.pc == Self.address)
+    #expect(try await b.remove(address: Self.address, kind: .hardware) == [])
+    #expect(qemu.inserted.isEmpty)
+    try await b.resume()
+    await b.detach()
+    try await Task.sleep(for: .milliseconds(100))
+
+    // Process C: nothing is left behind.
+    let c = try await Self.session(qemu, dir)
+    #expect(try await c.halt().pc != nil)
+    #expect(await c.points == [])
+    #expect(qemu.inserted.isEmpty)
+    try await c.resume()
+    await c.detach()
+  }
+
+  /// A breakpoint whose insert failed is removed again, so the stub keeps no point the session
+  /// does not list.
+  @Test func aFailedAddLeavesNoPointInTheStub() async throws {
+    let qemu = try QEMULike()
+    qemu.lock.withLock { qemu.failInsert = true }
+    let dir = try Self.directory()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let session = try await Self.session(qemu, dir)
+    _ = try await session.halt()
+    await #expect(throws: VMLabError.self) {
+      try await session.add(DebugPoint(address: Self.address, kind: .hardware))
+    }
+    #expect(await session.points == [])
+    #expect(qemu.inserted.isEmpty)
+    await session.detach()
+  }
+
+  /// A point whose insert a server began but never saw finish (it exited mid-way) is removed
+  /// when the next server connects.
+  @Test func aPointLeftInFlightIsRemovedOnConnect() async throws {
+    let qemu = try QEMULike()
+    qemu.lock.withLock { _ = qemu.points.insert("ffff800010203040,4") }
+    let dir = try Self.directory()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let saved = #"{"points":[],"pending":[{"address":18446603336491741248,"kind":"hardware"}]}"#
+    try Data(saved.utf8).write(to: dir.appending(path: "debug.json"))
+    let session = try await Self.session(qemu, dir)
+    _ = try await session.halt()
+    #expect(qemu.inserted.isEmpty)
+    #expect(await session.points == [])
+    let file = try String(contentsOf: dir.appending(path: "debug.json"), encoding: .utf8)
+    #expect(!file.contains("18446603336491741248"))
+    await session.detach()
+  }
+}
