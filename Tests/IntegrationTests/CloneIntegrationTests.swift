@@ -18,10 +18,11 @@ import VMLabQEMU
       let port = try #require(guest.record.runtime?.sshPort)
       try await GuestSSH.waitForSSH(guest, port: port)
       #expect(
-        try GuestSSH.run(guest, port: port, "echo cp > /home/debian/at-checkpoint && sync") == 0)
+        try await GuestSSH.run(guest, port: port, "echo cp > /home/debian/at-checkpoint && sync")
+          == 0)
       _ = try await manager.createCheckpoint(id, name: "A")
       #expect(
-        try GuestSSH.run(
+        try await GuestSSH.run(
           guest, port: port, "rm /home/debian/at-checkpoint && echo l > /home/debian/later && sync")
           == 0)
 
@@ -39,13 +40,15 @@ import VMLabQEMU
       cloneGuest = twin
       let clonePort = try #require(started.runtime?.sshPort)
       try await GuestSSH.waitForSSH(twin, port: clonePort)
-      #expect(try GuestSSH.run(twin, port: clonePort, "test -e /home/debian/at-checkpoint") == 0)
-      #expect(try GuestSSH.run(twin, port: clonePort, "test -e /home/debian/later") == 1)
       #expect(
-        try GuestSSH.run(twin, port: clonePort, "echo c > /home/debian/clone-only && sync") == 0)
+        try await GuestSSH.run(twin, port: clonePort, "test -e /home/debian/at-checkpoint") == 0)
+      #expect(try await GuestSSH.run(twin, port: clonePort, "test -e /home/debian/later") == 1)
+      #expect(
+        try await GuestSSH.run(twin, port: clonePort, "echo c > /home/debian/clone-only && sync")
+          == 0)
 
-      #expect(try GuestSSH.run(guest, port: port, "test -e /home/debian/clone-only") == 1)
-      #expect(try GuestSSH.run(guest, port: port, "test -e /home/debian/later") == 0)
+      #expect(try await GuestSSH.run(guest, port: port, "test -e /home/debian/clone-only") == 1)
+      #expect(try await GuestSSH.run(guest, port: port, "test -e /home/debian/later") == 0)
     } catch {
       if let cloneGuest { try? await guest.backend.kill(cloneGuest.record) }
       await guest.shutdown()

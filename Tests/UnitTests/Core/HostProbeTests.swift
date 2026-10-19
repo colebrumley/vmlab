@@ -69,7 +69,10 @@ struct FixtureRunner: CommandRunning {
     #expect(HostProbe.parseNestedSupported("vmlab-vz: unknown command") == nil)
   }
 
-  @Test func gatherCombinesFixturesAndStoredProbes() throws {
+  /// `gather` asks the system for the volume's free space, an IPC that can take a second when
+  /// the suite starts: the probes run off the cooperative pool, as `ToolContext.hostFacts` runs
+  /// them.
+  @Test func gatherCombinesFixturesAndStoredProbes() async throws {
     let home = FileManager.default.temporaryDirectory.appending(path: "vmlab-test-\(UUID())")
     defer { try? FileManager.default.removeItem(at: home) }
     try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
@@ -91,7 +94,7 @@ struct FixtureRunner: CommandRunning {
     let probe = HostProbe(
       home: home, runner: runner, runnerPath: "/build/vmlab-vz", searchPaths: ["/opt/homebrew/bin"],
       fileExists: { present.contains($0) }, isRoot: { false }, runningGuests: { (1, 3) })
-    let facts = probe.gather()
+    let facts = await OffPool.run { probe.gather() }
     #expect(facts.osVersion == "26.6.2")
     #expect(facts.chip.generation == 1)
     #expect(facts.memoryGB == 32)
@@ -112,7 +115,7 @@ struct FixtureRunner: CommandRunning {
     #expect(facts.probe(.qemuVmnet) == .unknown)
   }
 
-  @Test func unsignedOrMissingRunnerIsNotSigned() throws {
+  @Test func unsignedOrMissingRunnerIsNotSigned() async throws {
     let home = FileManager.default.temporaryDirectory.appending(path: "vmlab-test-\(UUID())")
     let runner = FixtureRunner(outputs: [
       "codesign -d --entitlements - /build/vmlab-vz": try Self.fixture("codesign/unsigned.txt")
@@ -120,10 +123,10 @@ struct FixtureRunner: CommandRunning {
     let unsigned = HostProbe(
       home: home, runner: runner, runnerPath: "/build/vmlab-vz", searchPaths: [],
       fileExists: { $0 == "/build/vmlab-vz" }, isRoot: { false })
-    #expect(!unsigned.gather().runnerSigned)
+    #expect(await !OffPool.run { unsigned.gather() }.runnerSigned)
     let missing = HostProbe(
       home: home, runner: runner, runnerPath: nil, searchPaths: [], fileExists: { _ in false })
-    let facts = missing.gather()
+    let facts = await OffPool.run { missing.gather() }
     #expect(!facts.runnerSigned)
     #expect(!facts.qemu.present)
     #expect(facts.unverifiedProbes == SlowProbe.allCases.sorted())

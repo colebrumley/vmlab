@@ -55,12 +55,14 @@ import VMLabCore
   // MARK: Reconcile
 
   /// The pid of a process that has run and been reaped.
-  static func finishedPID() throws -> Int32 {
-    let process = Process()
-    process.executableURL = URL(filePath: "/usr/bin/true")
-    try process.run()
-    process.waitUntilExit()
-    return process.processIdentifier
+  static func finishedPID() async throws -> Int32 {
+    try await OffPool.run { () throws -> Int32 in
+      let process = Process()
+      process.executableURL = URL(filePath: "/usr/bin/true")
+      try process.run()
+      process.waitUntilExit()
+      return process.processIdentifier
+    }
   }
 
   static func record(
@@ -88,7 +90,7 @@ import VMLabCore
     let home = try StoreTests.tempHome()
     defer { try? FileManager.default.removeItem(at: home) }
     let store = Store(home: home)
-    let pid = try Self.finishedPID()
+    let pid = try await Self.finishedPID()
     let vm = try Self.record(
       in: store, state: .running, runtime: Self.runtime(pid: pid, home: home))
 
@@ -113,9 +115,9 @@ import VMLabCore
     let home = try StoreTests.tempHome()
     defer { try? FileManager.default.removeItem(at: home) }
     let store = Store(home: home)
+    let pid = try await Self.finishedPID()
     let vm = try Self.record(
-      in: store, state: .paused, runtime: Self.runtime(pid: try Self.finishedPID(), home: home),
-      disk: false)
+      in: store, state: .paused, runtime: Self.runtime(pid: pid, home: home), disk: false)
 
     let changes = try await store.reconcile()
 
@@ -194,9 +196,9 @@ import VMLabCore
     #expect(store.diskCandidates(of: record).count == 2)
   }
 
-  @Test func systemProbe() throws {
+  @Test func systemProbe() async throws {
     #expect(LivenessProbe.processExists(getpid()))
-    #expect(!LivenessProbe.processExists(try Self.finishedPID()))
+    #expect(!LivenessProbe.processExists(try await Self.finishedPID()))
     #expect(!LivenessProbe.processExists(0))
     #expect(!LivenessProbe.processExists(-1))
 
@@ -274,7 +276,7 @@ import VMLabCore
     defer { try? FileManager.default.removeItem(at: home) }
     let store = Store(home: home)
     let vm = try LifecycleTests.record(in: store, state: .stopped, runtime: nil)
-    let engine = try FakeEngine(vmDirectory: store.directory(of: vm.id))
+    let engine = try await FakeEngine(vmDirectory: store.directory(of: vm.id))
     try await Task.sleep(for: .milliseconds(100))
 
     // A process holding the VM's lock may be starting it now: hands off.

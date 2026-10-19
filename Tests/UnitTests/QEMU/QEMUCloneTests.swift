@@ -23,7 +23,7 @@ import VMLabCore
     let source: VMRecord
     let base: URL
 
-    init() throws {
+    init() async throws {
       home = FileManager.default.temporaryDirectory.appending(path: "vmlab-clone-\(UUID())")
       store = Store(home: home)
       let installation = try #require(QEMUCloneTests.installation)
@@ -33,8 +33,8 @@ import VMLabCore
           id: "", name: "src", profile: .qemuHVF, guest: GuestSpec(os: .linux, arch: .arm64),
           features: [.checkpointDisk], image: "tiny", state: .stopped))
       base = home.appending(path: "base.qcow2")
-      try Self.img(["create", "-q", "-f", "qcow2", base.path, "1M"])
-      try Self.img([
+      try await Self.img(["create", "-q", "-f", "qcow2", base.path, "1M"])
+      try await Self.img([
         "create", "-q", "-f", "qcow2", "-F", "qcow2", "-b", base.path,
         backend.layout(of: source.id).disk.path,
       ])
@@ -46,17 +46,17 @@ import VMLabCore
       return try store.create(draft)
     }
 
-    static func img(_ arguments: [String]) throws {
+    static func img(_ arguments: [String]) async throws {
       let tool = try #require(QEMUCloneTests.installation).qemuImg.path
-      let result = try #require(ProcessRunner().run(tool, arguments))
+      let result = try #require(await ProcessRunner().run(tool, arguments))
       #expect(result.status == 0, "\(result.output)")
     }
 
     /// Writes `pattern` over the first 64 KB of `disk`, or checks it is there.
-    static func io(_ disk: URL, _ op: String, _ pattern: UInt8) throws -> Bool {
+    static func io(_ disk: URL, _ op: String, _ pattern: UInt8) async throws -> Bool {
       let io = try #require(QEMUCloneTests.qemuIO).path
       let command = "\(op) -P 0x\(String(pattern, radix: 16)) 0 64k"
-      let result = try #require(ProcessRunner().run(io, ["-c", command, disk.path]))
+      let result = try #require(await ProcessRunner().run(io, ["-c", command, disk.path]))
       return result.status == 0 && !result.output.contains("Pattern verification failed")
     }
 
@@ -67,7 +67,7 @@ import VMLabCore
   /// manager records the chain left no record of it, and gc deleted the layer under the clone.
   /// The layer is in the clone's backingChain before anything is made.
   @Test(.enabled(if: ready)) func theFrozenLayerIsRecordedBeforeTheOverlay() async throws {
-    let f = try Fixture()
+    let f = try await Fixture()
     defer { try? FileManager.default.removeItem(at: f.home) }
     let target = try f.target("copy")
     // The overlay cannot be made where a directory is.
@@ -83,12 +83,12 @@ import VMLabCore
   }
 
   @Test(.enabled(if: ready)) func clonesTheCurrentDiskAndACheckpoint() async throws {
-    let f = try Fixture()
+    let f = try await Fixture()
     defer { f.cleanUp() }
     let disk = f.backend.layout(of: f.source.id).disk
-    #expect(try Fixture.io(disk, "write", 0xab))
-    try Fixture.img(["snapshot", "-c", "cp-aaaaaa", disk.path])
-    #expect(try Fixture.io(disk, "write", 0xcd))
+    #expect(try await Fixture.io(disk, "write", 0xab))
+    try await Fixture.img(["snapshot", "-c", "cp-aaaaaa", disk.path])
+    #expect(try await Fixture.io(disk, "write", 0xcd))
     let node = CheckpointNode(id: "cp-aaaaaa", name: "A", mode: .disk, state: .stopped)
 
     let fromCheckpoint = try f.target("a")
@@ -96,16 +96,16 @@ import VMLabCore
     let frozen = f.store.directory(of: f.source.id).appending(path: "backing/cp-aaaaaa.qcow2")
     #expect(chain.map(\.path) == [frozen.path, f.base.path])
     let cloneDisk = f.backend.layout(of: fromCheckpoint.id).disk
-    #expect(try Fixture.io(cloneDisk, "read", 0xab))
+    #expect(try await Fixture.io(cloneDisk, "read", 0xab))
 
     let fromDisk = try f.target("b")
     let current = try await f.backend.clone(f.source, checkpoint: nil, into: fromDisk)
     #expect(current.first?.lastPathComponent == "disk-\(fromDisk.id).qcow2")
-    #expect(try Fixture.io(f.backend.layout(of: fromDisk.id).disk, "read", 0xcd))
+    #expect(try await Fixture.io(f.backend.layout(of: fromDisk.id).disk, "read", 0xcd))
 
     // Writes to a clone stay in the clone.
-    #expect(try Fixture.io(cloneDisk, "write", 0xee))
-    #expect(try Fixture.io(disk, "read", 0xcd))
+    #expect(try await Fixture.io(cloneDisk, "write", 0xee))
+    #expect(try await Fixture.io(disk, "read", 0xcd))
     let qemuImg = try #require(QEMUCloneTests.installation).qemuImg
     #expect(try await QEMUImageSnapshots.tags(qemuImg, disk: disk) == ["cp-aaaaaa"])
 

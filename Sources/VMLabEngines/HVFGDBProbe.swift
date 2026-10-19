@@ -49,15 +49,23 @@ public struct HVFGDBProbe: SlowProbeRunner {
     } catch {
       throw Self.failure("could not start \(qemu.systemBinary(for: .arm64).path): \(error)")
     }
-    defer {
-      if process.isRunning {
-        process.terminate()
-        process.waitUntilExit()
-      }
+    let result: Result<ProbeResult, VMLabError>
+    do throws(VMLabError) {
+      let client = try await Self.connect(port: port, process: process, errors: errors)
+      defer { Task { await client.close() } }
+      result = .success(try await Self.lift { try await exercise(client) })
+    } catch {
+      result = .failure(error)
     }
-    let client = try await Self.connect(port: port, process: process, errors: errors)
-    defer { Task { await client.close() } }
-    return try await Self.lift { try await exercise(client) }
+    await Self.end(process)
+    return try result.get()
+  }
+
+  /// Ends QEMU and waits for it off the cooperative pool (`waitUntilExit` blocks its thread).
+  static func end(_ process: Process) async {
+    guard process.isRunning else { return }
+    process.terminate()
+    await OffPool.run("vmlab.qemu-hvf-gdb.wait") { process.waitUntilExit() }
   }
 
   /// The QEMU arguments: arm64 `virt` under HVF, 128 MB, nothing attached, halted, GDB on `port`.
@@ -112,8 +120,11 @@ public struct HVFGDBProbe: SlowProbeRunner {
           port: UInt16(port), options: .init(fallbackArchitecture: .arm64))
       } catch {
         if !process.isRunning {
+          let reader = errors.fileHandleForReading
           let text = String(
-            decoding: errors.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+            decoding: await OffPool.run("vmlab.qemu-hvf-gdb.stderr") {
+              reader.readDataToEndOfFile()
+            }, as: UTF8.self)
           throw failure("QEMU exited (\(process.terminationStatus)): \(text.prefix(400))")
         }
         if ContinuousClock.now > deadline {

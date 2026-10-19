@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import VMLabCore
 
 /// R-1102: no tool runs a host shell with model-supplied strings. Every host subprocess is a
 /// `Process` with an executable and an argument array; the only `sh -c` in the tree runs *inside
@@ -69,24 +70,31 @@ import Testing
     return found
   }
 
-  @Test func noHostShellAnywhereInSources() throws {
-    let root = BoundariesTests.root
-    let sources = root.appending(path: "Sources")
-    let enumerator = FileManager.default.enumerator(at: sources, includingPropertiesForKeys: nil)
-    var found: [String] = []
-    var seenGuestShell: Set<String> = []
-    var files = 0
-    while let url = enumerator?.nextObject() as? URL {
-      guard url.pathExtension == "swift" else { continue }
-      files += 1
-      let path = url.path.replacingOccurrences(of: root.path + "/", with: "")
-      let source = try String(contentsOf: url, encoding: .utf8)
-      found += Self.violations(path: path, source: source)
-      if source.split(separator: "\n").map(Self.code).contains(where: {
-        $0.contains(Self.shellLiteral)
-      }) {
-        seenGuestShell.insert(path)
+  /// Seconds of CPU in a debug build: scanned on a thread of its own, so the cooperative pool
+  /// stays free for the rest of the suite.
+  @Test func noHostShellAnywhereInSources() async throws {
+    let (files, found, seenGuestShell) = try await OffPool.run {
+      () throws -> (Int, [String], Set<String>) in
+      let root = BoundariesTests.root
+      let sources = root.appending(path: "Sources")
+      let enumerator = FileManager.default.enumerator(
+        at: sources, includingPropertiesForKeys: nil)
+      var found: [String] = []
+      var seenGuestShell: Set<String> = []
+      var files = 0
+      while let url = enumerator?.nextObject() as? URL {
+        guard url.pathExtension == "swift" else { continue }
+        files += 1
+        let path = url.path.replacingOccurrences(of: root.path + "/", with: "")
+        let source = try String(contentsOf: url, encoding: .utf8)
+        found += Self.violations(path: path, source: source)
+        if source.split(separator: "\n").map(Self.code).contains(where: {
+          $0.contains(Self.shellLiteral)
+        }) {
+          seenGuestShell.insert(path)
+        }
       }
+      return (files, found, seenGuestShell)
     }
     #expect(files > 50)
     #expect(found == [])

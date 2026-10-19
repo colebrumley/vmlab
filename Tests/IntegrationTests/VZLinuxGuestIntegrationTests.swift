@@ -28,8 +28,9 @@ import VMLabVZ
     return false
   }
 
-  static func ssh(key: URL, user: String, host: String, command: String) -> CommandOutput? {
-    ProcessRunner().run(
+  /// The async overload: ssh is waited for off the cooperative pool.
+  static func ssh(key: URL, user: String, host: String, command: String) async -> CommandOutput? {
+    await ProcessRunner().run(
       "/usr/bin/ssh",
       [
         "-i", key.path, "-o", "IdentitiesOnly=yes", "-o", "BatchMode=yes",
@@ -90,7 +91,7 @@ import VMLabVZ
     var output: CommandOutput? = nil
     let deadline = clock.now.advanced(by: .seconds(120))
     while clock.now < deadline {
-      output = Self.ssh(
+      output = await Self.ssh(
         key: dir.appending(path: "id_ed25519"), user: "debian", host: ip, command: "hostname")
       if output?.status == 0 { break }
       try await Task.sleep(for: .seconds(2))
@@ -212,7 +213,7 @@ import VMLabVZ
     }
     print("vz gui after \(clock.now - begun): \(last)")
     if shown == nil, let ip = try context.store.load(id: created.id).runtime?.ip {
-      let state = Self.ssh(
+      let state = await Self.ssh(
         key: dir.appending(path: "id_ed25519"), user: "debian", host: ip,
         command: "cloud-init status --long; systemctl --no-pager status lightdm vmlab-vnc; "
           + "sudo tail -n 30 /var/log/Xorg.0.log")

@@ -17,7 +17,16 @@ import VMLabQEMU
   }
 
   /// `ssh -p <port> debian@127.0.0.1 <command>` with the VM's key; the exit status and stdout.
-  static func ssh(_ key: URL, port: Int, _ command: String) throws -> (Int32, String) {
+  /// ssh is waited for off the cooperative pool.
+  static func ssh(_ key: URL, port: Int, _ command: String) async throws -> (Int32, String) {
+    try await OffPool.run { () throws -> (Int32, String) in
+      try sshBlocking(key, port: port, command)
+    }
+  }
+
+  private static func sshBlocking(_ key: URL, port: Int, _ command: String) throws -> (
+    Int32, String
+  ) {
     let ssh = Process()
     ssh.executableURL = URL(filePath: "/usr/bin/ssh")
     ssh.arguments = [
@@ -55,12 +64,12 @@ import VMLabQEMU
       let deadline = ContinuousClock.now + .seconds(150)
       var result: (Int32, String) = (-1, "")
       while ContinuousClock.now < deadline {
-        result = try Self.ssh(key, port: sshPort, "echo vmlab-ok")
+        result = try await Self.ssh(key, port: sshPort, "echo vmlab-ok")
         if result.0 == 0 { break }
         try await Task.sleep(for: .seconds(3))
       }
       #expect(result.0 == 0 && result.1.contains("vmlab-ok"), "ssh via runtime.sshPort: \(result)")
-      let viaForward = try Self.ssh(key, port: forwarded, "hostname")
+      let viaForward = try await Self.ssh(key, port: forwarded, "hostname")
       #expect(viaForward.0 == 0, "ssh via the ephemeral forward \(forwarded)")
     } catch {
       await guest.shutdown()

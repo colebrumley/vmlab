@@ -18,11 +18,17 @@ enum GuestSSH {
   }
 
   /// Runs `command` as `debian` over the forwarded port; returns the exit status (255: no SSH).
-  static func run(_ guest: QEMUGuest, port: Int, _ command: String) throws -> Int32 {
+  /// ssh is waited for off the cooperative pool.
+  static func run(_ guest: QEMUGuest, port: Int, _ command: String) async throws -> Int32 {
+    let key = guest.home.appending(path: "vms/\(guest.record.id)/id_ed25519").path
+    return try await OffPool.run { () throws -> Int32 in try run(key: key, port: port, command) }
+  }
+
+  private static func run(key: String, port: Int, _ command: String) throws -> Int32 {
     let process = Process()
     process.executableURL = URL(filePath: "/usr/bin/ssh")
     process.arguments = [
-      "-i", guest.home.appending(path: "vms/\(guest.record.id)/id_ed25519").path,
+      "-i", key,
       "-p", "\(port)", "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null",
       "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", "-o", "LogLevel=ERROR",
       "debian@127.0.0.1", command,
@@ -40,7 +46,7 @@ enum GuestSSH {
     async throws
   {
     let deadline = ContinuousClock.now + timeout
-    while try run(guest, port: port, "true") != 0 {
+    while try await run(guest, port: port, "true") != 0 {
       guard ContinuousClock.now < deadline else {
         throw VMLabError(code: .timeout, message: "SSH did not come up", hint: "")
       }
@@ -66,8 +72,9 @@ enum GuestSSH {
       var running = try #require(try await guest.manager.performAdmitted(.start, on: id))
       var port = try #require(running.runtime?.sshPort)
       try await GuestSSH.waitForSSH(guest, port: port)
-      #expect(try GuestSSH.run(guest, port: port, "echo hi > /home/debian/marker && sync") == 0)
-      #expect(try GuestSSH.run(guest, port: port, "test -e /home/debian/marker") == 0)
+      #expect(
+        try await GuestSSH.run(guest, port: port, "echo hi > /home/debian/marker && sync") == 0)
+      #expect(try await GuestSSH.run(guest, port: port, "test -e /home/debian/marker") == 0)
 
       // A running guest has no disk checkpoints on QEMU: wrong_state, nothing stopped for us.
       await #expect {
@@ -79,7 +86,7 @@ enum GuestSSH {
       running = try #require(try await guest.manager.performAdmitted(.start, on: id))
       port = try #require(running.runtime?.sshPort)
       try await GuestSSH.waitForSSH(guest, port: port)
-      #expect(try GuestSSH.run(guest, port: port, "test -e /home/debian/marker") == 1)
+      #expect(try await GuestSSH.run(guest, port: port, "test -e /home/debian/marker") == 1)
     } catch {
       await guest.shutdown()
       throw error
@@ -114,7 +121,7 @@ enum GuestSSH {
       let port = try #require(guest.record.runtime?.sshPort)
       try await GuestSSH.waitForSSH(guest, port: port)
       #expect(
-        try GuestSSH.run(guest, port: port, "echo 'debian:vmlab-test' | sudo chpasswd") == 0)
+        try await GuestSSH.run(guest, port: port, "echo 'debian:vmlab-test' | sudo chpasswd") == 0)
 
       let serial = guest.machine.serial
       var mark = try await serial.write("\r")

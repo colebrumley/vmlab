@@ -42,7 +42,7 @@ import VMLabCore
   @Test func startKillsAStrandedEngineFirst() async throws {
     let f = try Fixture()
     let vm = try await f.create()
-    let engine = try FakeEngine(vmDirectory: f.store.directory(of: vm.id))
+    let engine = try await FakeEngine(vmDirectory: f.store.directory(of: vm.id))
     try await Task.sleep(for: .milliseconds(100))
     let outcome = try await f.manager.run(.start, on: vm.id)
     #expect(outcome.record?.state == .running)

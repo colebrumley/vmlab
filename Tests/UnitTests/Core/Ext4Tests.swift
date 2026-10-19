@@ -357,7 +357,7 @@ struct Ext4Fixture {
     defer { try? FileManager.default.removeItem(at: home) }
     try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
     let kernel = home.appending(path: "Image.gz")
-    try GzipTests.compressed(GzipTests.payload, name: "Image").write(to: kernel)
+    try await GzipTests.compressed(GzipTests.payload, name: "Image").write(to: kernel)
     let files = try await ImageStore(home: home).registerKernel("gz", kernel: kernel)
     #expect(try Data(contentsOf: files.kernel) == GzipTests.payload)
   }

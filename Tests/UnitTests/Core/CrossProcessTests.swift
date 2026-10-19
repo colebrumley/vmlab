@@ -32,7 +32,7 @@ import VMLabCore
   /// The lock dies with its holder: a child process takes it with flock(2) (perl's flock is
   /// flock(2) on macOS) and is SIGKILLed while holding it; the kernel frees it.
   @Test(.enabled(if: FileManager.default.isExecutableFile(atPath: "/usr/bin/perl")))
-  func aLockDiesWithAKilledHolderProcess() throws {
+  func aLockDiesWithAKilledHolderProcess() async throws {
     let path = try Self.home().appending(path: "locks/x.lock").path
     _ = FileLock.tryLock(path)?.unlock()  // creates locks/
     let child = Process()
@@ -47,12 +47,13 @@ import VMLabCore
     child.standardOutput = out
     try child.run()
     defer { if child.isRunning { child.terminate() } }
-    let line = out.fileHandleForReading.availableData
+    let reader = out.fileHandleForReading
+    let line = await OffPool.run { reader.availableData }
     #expect(String(decoding: line, as: UTF8.self) == "locked\n")
     #expect(FileLock.isHeld(path))
     #expect(FileLock.tryLock(path) == nil)
     kill(child.processIdentifier, SIGKILL)
-    child.waitUntilExit()
+    await OffPool.run { child.waitUntilExit() }
     #expect(!FileLock.isHeld(path))
     #expect(FileLock.tryLock(path) != nil)
   }

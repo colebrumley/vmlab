@@ -69,7 +69,7 @@ import VMLabVZ
     var output: CommandOutput? = nil
     let deadline = clock.now.advanced(by: .seconds(150))
     while clock.now < deadline {
-      output = VZLinuxGuestIntegrationTests.ssh(
+      output = await VZLinuxGuestIntegrationTests.ssh(
         key: dir.appending(path: "id_ed25519"), user: "ubuntu", host: ip,
         command: ". /etc/os-release; echo $ID $VERSION_ID")
       if output?.status == 0 { break }

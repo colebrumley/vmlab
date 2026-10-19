@@ -12,23 +12,23 @@ final class FakeEngine: Sendable {
 
   var pid: Int32 { process.processIdentifier }
 
-  init(vmDirectory: URL) throws {
-    root = URL(filePath: "/tmp/vmlab-fe-\(getpid())-\(UInt32.random(in: 0...UInt32.max))")
+  /// Codesigning the copy, and its first exec (macOS assesses a new executable then), wait off
+  /// the cooperative pool.
+  init(vmDirectory: URL) async throws {
+    let root = URL(filePath: "/tmp/vmlab-fe-\(getpid())-\(UInt32.random(in: 0...UInt32.max))")
+    self.root = root
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
     let fake = root.appending(path: "qemu-system-aarch64")
     try FileManager.default.copyItem(atPath: "/bin/bash", toPath: fake.path)
-    let sign = Process()
-    sign.executableURL = URL(filePath: "/usr/bin/codesign")
-    sign.arguments = ["--force", "--sign", "-", fake.path]
-    sign.standardError = FileHandle.nullDevice
-    try sign.run()
-    sign.waitUntilExit()
-    try #require(sign.terminationStatus == 0, "codesign of the fake engine failed")
+    let sign = try await TestProcess.run(
+      "/usr/bin/codesign", ["--force", "--sign", "-", fake.path])
+    try #require(sign.status == 0, "codesign of the fake engine failed")
     let pidFile = vmDirectory.appending(path: "qemu.pid")
-    process = Process()
+    let process = Process()
     process.executableURL = fake
     process.arguments = ["-c", "sleep 60; :", "qemu", pidFile.path]
-    try process.run()
+    try await TestProcess.start(process)
+    self.process = process
     try "\(process.processIdentifier)\n".write(to: pidFile, atomically: true, encoding: .utf8)
   }
 

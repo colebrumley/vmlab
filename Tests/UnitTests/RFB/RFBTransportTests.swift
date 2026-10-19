@@ -6,18 +6,13 @@ import Testing
 @Suite struct RFBTransportTests {
   /// Codex P3: a TCP connect had no deadline, so an address that drops the SYN (TEST-NET-1 here)
   /// held the caller for the kernel's timeout. It now fails within the one it is given.
-  /// Measured in a high-priority task: the connect waits off the pool (`RFBTransportPoolTests`),
-  /// and its resumption should not queue behind the thousand tasks a parallel suite starts at
-  /// once, which is not what this test is about.
   @Test func tcpConnectHasADeadline() async {
-    let elapsed = await Task(priority: .high) {
-      await ContinuousClock().measure {
-        await #expect(throws: RFBError.self) {
-          _ = try await SocketTransport.connect(
-            .tcp(host: "192.0.2.1", port: 5900), timeout: .milliseconds(300))
-        }
+    let elapsed = await ContinuousClock().measure {
+      await #expect(throws: RFBError.self) {
+        _ = try await SocketTransport.connect(
+          .tcp(host: "192.0.2.1", port: 5900), timeout: .milliseconds(300))
       }
-    }.value
+    }
     #expect(elapsed < .seconds(2))
   }
 

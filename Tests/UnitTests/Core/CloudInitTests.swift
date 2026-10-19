@@ -272,10 +272,13 @@ enum RubyYAML {
         "/usr/bin/hdiutil",
         ["attach", "-readonly", "-nobrowse", "-mountpoint", mount.path, iso.path]))
     #expect(attach.status == 0, "\(attach.output)")
-    defer { _ = runner.run("/usr/bin/hdiutil", ["detach", mount.path, "-force"]) }
-    let names = try FileManager.default.contentsOfDirectory(atPath: mount.path)
-    #expect(Set(names).isSuperset(of: ["user-data", "meta-data", "network-config"]))
-    let userData = try String(contentsOf: mount.appending(path: "user-data"), encoding: .utf8)
-    #expect(userData == (try CloudInit.userData(config)))
+    let names = Result { try FileManager.default.contentsOfDirectory(atPath: mount.path) }
+    let userData = Result {
+      try String(contentsOf: mount.appending(path: "user-data"), encoding: .utf8)
+    }
+    // Detached before any check can throw; awaited, so hdiutil is waited for off the pool.
+    _ = await runner.run("/usr/bin/hdiutil", ["detach", mount.path, "-force"])
+    #expect(Set(try names.get()).isSuperset(of: ["user-data", "meta-data", "network-config"]))
+    #expect(try userData.get() == (try CloudInit.userData(config)))
   }
 }

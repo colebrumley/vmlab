@@ -22,33 +22,42 @@ final class FakeSerialServer: @unchecked Sendable {
     #expect(listen(listener, 1) == 0)
   }
 
-  /// Accepts the channel's connection (call after `start`, which has connected by then).
-  func accept() {
-    peer = Darwin.accept(listener, nil, nil)
+  /// Accepts the channel's connection (call after `start`, which has connected by then). Like
+  /// `send` and `receive`, it blocks in a syscall, so it runs off the cooperative pool.
+  func accept() async {
+    let listener = listener
+    peer = await OffPool.run { Darwin.accept(listener, nil, nil) }
     #expect(peer >= 0)
   }
 
-  func send(_ text: String) { send(Array(text.utf8)) }
+  func send(_ text: String) async { await send(Array(text.utf8)) }
 
-  func send(_ bytes: [UInt8]) {
-    var written = 0
-    while written < bytes.count {
-      let n = bytes[written...].withUnsafeBytes { Darwin.write(peer, $0.baseAddress, $0.count) }
-      guard n > 0 else { return }
-      written += n
+  /// Writes all of `bytes`; blocks while the channel's socket buffer is full.
+  func send(_ bytes: [UInt8]) async {
+    let peer = peer
+    await OffPool.run {
+      var written = 0
+      while written < bytes.count {
+        let n = bytes[written...].withUnsafeBytes { Darwin.write(peer, $0.baseAddress, $0.count) }
+        guard n > 0 else { return }
+        written += n
+      }
     }
   }
 
   /// Reads exactly `count` bytes the channel wrote.
-  func receive(_ count: Int) -> String {
-    var bytes = [UInt8](repeating: 0, count: count)
-    var got = 0
-    while got < count {
-      let n = bytes[got...].withUnsafeMutableBytes { Darwin.read(peer, $0.baseAddress, $0.count) }
-      guard n > 0 else { break }
-      got += n
+  func receive(_ count: Int) async -> String {
+    let peer = peer
+    return await OffPool.run {
+      var bytes = [UInt8](repeating: 0, count: count)
+      var got = 0
+      while got < count {
+        let n = bytes[got...].withUnsafeMutableBytes { Darwin.read(peer, $0.baseAddress, $0.count) }
+        guard n > 0 else { break }
+        got += n
+      }
+      return String(decoding: bytes[0..<got], as: UTF8.self)
     }
-    return String(decoding: bytes[0..<got], as: UTF8.self)
   }
 
   func closePeer() {
@@ -85,16 +94,16 @@ func eventually(_ condition: () async -> Bool) async -> Bool {
       socketPath: server.path, logURL: server.logURL, ringCapacity: ringCapacity,
       rotateBytes: rotateBytes)
     try await channel.start()
-    server.accept()
+    await server.accept()
     return (server, channel)
   }
 
   @Test func offsetsAndReadSince() async throws {
     let (server, channel) = try await connected()
     defer { server.cleanUp() }
-    server.send("hello\n")
+    await server.send("hello\n")
     #expect(await eventually { await channel.endOffset == 6 })
-    server.send("world\n")
+    await server.send("world\n")
     #expect(await eventually { await channel.endOffset == 12 })
 
     let all = await channel.read(since: 0)
@@ -114,7 +123,7 @@ func eventually(_ condition: () async -> Bool) async -> Bool {
   @Test func ringDropsOldBytesButKeepsAbsoluteOffsets() async throws {
     let (server, channel) = try await connected(ringCapacity: 8)
     defer { server.cleanUp() }
-    server.send("0123456789abcdef")
+    await server.send("0123456789abcdef")
     #expect(await eventually { await channel.endOffset == 16 })
     #expect(await channel.startOffset == 8)
     let read = await channel.read(since: 2)
@@ -128,12 +137,12 @@ func eventually(_ condition: () async -> Bool) async -> Bool {
   @Test func tailReturnsLastLines() async throws {
     let (server, channel) = try await connected()
     defer { server.cleanUp() }
-    server.send("one\ntwo\nthree\nfour\n")
+    await server.send("one\ntwo\nthree\nfour\n")
     #expect(await eventually { await channel.endOffset == 19 })
     let tail = await channel.read(tail: 2)
     #expect(tail == SerialRead(text: "three\nfour\n", start: 8, offset: 19, truncated: false))
     #expect(await channel.read(tail: 10).text == "one\ntwo\nthree\nfour\n")
-    server.send("partial")
+    await server.send("partial")
     #expect(await eventually { await channel.endOffset == 26 })
     #expect(await channel.read(tail: 2).text == "four\npartial")
     #expect(await channel.read(tail: 0).text == "")
@@ -143,13 +152,13 @@ func eventually(_ condition: () async -> Bool) async -> Bool {
   @Test func waitFindsPatternInLaterOutput() async throws {
     let (server, channel) = try await connected()
     defer { server.cleanUp() }
-    server.send("Booting...\n")
+    await server.send("Booting...\n")
     #expect(await eventually { await channel.endOffset == 11 })
     async let found = channel.wait(for: "log[a-z]+:", timeout: .seconds(5))
     try await Task.sleep(for: .milliseconds(50))
-    server.send("debian ")
+    await server.send("debian ")
     try await Task.sleep(for: .milliseconds(20))
-    server.send("login: ")
+    await server.send("login: ")
     let match = try await found
     #expect(match == SerialMatch(match: "login:", start: 18, offset: 24))
     await channel.stop()
@@ -158,7 +167,7 @@ func eventually(_ condition: () async -> Bool) async -> Bool {
   @Test func waitSinceZeroSeesEarlierOutputAndDefaultDoesNot() async throws {
     let (server, channel) = try await connected()
     defer { server.cleanUp() }
-    server.send("prompt$ ")
+    await server.send("prompt$ ")
     #expect(await eventually { await channel.endOffset == 8 })
     let early = try await channel.wait(for: "\\$ ", since: 0, timeout: .seconds(1))
     #expect(early.offset == 8)
@@ -171,7 +180,7 @@ func eventually(_ condition: () async -> Bool) async -> Bool {
   @Test func waitTimesOutWithTimeoutCode() async throws {
     let (server, channel) = try await connected()
     defer { server.cleanUp() }
-    server.send("nothing here\n")
+    await server.send("nothing here\n")
     let started = ContinuousClock.now
     do {
       _ = try await channel.wait(for: "login:", since: 0, timeout: .milliseconds(200))
@@ -219,11 +228,11 @@ func eventually(_ condition: () async -> Bool) async -> Bool {
   @Test func writeReachesTheGuest() async throws {
     let (server, channel) = try await connected()
     defer { server.cleanUp() }
-    server.send("login: ")
+    await server.send("login: ")
     #expect(await eventually { await channel.endOffset == 7 })
     let offset = try await channel.write("root\n")
     #expect(offset == 7)
-    #expect(server.receive(5) == "root\n")
+    #expect(await server.receive(5) == "root\n")
     await channel.stop()
   }
 
@@ -234,7 +243,7 @@ func eventually(_ condition: () async -> Bool) async -> Bool {
     defer { server.cleanUp() }
     let big = String(repeating: "x", count: 8 << 20)
     let write = Task { try await channel.write(big, stallTimeout: .milliseconds(300)) }
-    server.send("still here")
+    await server.send("still here")
     #expect(await eventually { await channel.endOffset == 10 })
     do {
       _ = try await write.value
@@ -269,10 +278,10 @@ func eventually(_ condition: () async -> Bool) async -> Bool {
     let lines = LineCollector()
     await channel.setLineObserver { lines.add($0) }
     try await channel.start()
-    server.accept()
-    server.send("first\r\nsec")
+    await server.accept()
+    await server.send("first\r\nsec")
     try await Task.sleep(for: .milliseconds(20))
-    server.send("ond\nthird")
+    await server.send("ond\nthird")
     #expect(await eventually { await channel.endOffset == 19 })
     #expect(
       lines.all == [
@@ -293,8 +302,8 @@ func eventually(_ condition: () async -> Bool) async -> Bool {
     let key = await channel.addLineObserver { second.add($0) }
     await channel.watchForPanics(vmDirectory: vmDirectory)
     try await channel.start()
-    server.accept()
-    server.send("[   12.5] Kernel panic - not syncing: sysrq triggered crash\nok\n")
+    await server.accept()
+    await server.send("[   12.5] Kernel panic - not syncing: sysrq triggered crash\nok\n")
     #expect(await eventually { second.all.count == 2 })
     #expect(first.all.map(\.text) == second.all.map(\.text))
     let log = EventLog(vmDirectory: vmDirectory)
@@ -304,7 +313,7 @@ func eventually(_ condition: () async -> Bool) async -> Bool {
     #expect(panic?.data?["pattern"] == .string("Kernel panic - not syncing"))
     await channel.removeLineObserver(key)
     await channel.setLineObserver(nil)
-    server.send("later\n")
+    await server.send("later\n")
     #expect(await eventually { await channel.endOffset > 64 })
     #expect(second.all.count == 2 && first.all.count == 2)
     await channel.stop()
@@ -317,8 +326,8 @@ func eventually(_ condition: () async -> Bool) async -> Bool {
     let channel = SerialChannel(
       socketPath: server.path, logURL: server.logURL, rotateBytes: 20)
     try await channel.start()
-    server.accept()
-    server.send("0123456789\n")
+    await server.accept()
+    await server.send("0123456789\n")
     #expect(await eventually { await channel.endOffset == 11 })
     await channel.stop()
     let rotated = server.directory.appending(path: "serial.log.1")
@@ -344,9 +353,9 @@ func eventually(_ condition: () async -> Bool) async -> Bool {
     defer { server.cleanUp() }
     // "é" is two bytes; send it split across chunks.
     let bytes = Array("café ok".utf8)
-    server.send(Array(bytes[0..<4]))
+    await server.send(Array(bytes[0..<4]))
     try await Task.sleep(for: .milliseconds(20))
-    server.send(Array(bytes[4...]))
+    await server.send(Array(bytes[4...]))
     let match = try await channel.wait(for: "é ok", since: 0, timeout: .seconds(2))
     #expect(match == SerialMatch(match: "é ok", start: 3, offset: 8))
     await channel.stop()
@@ -361,7 +370,7 @@ func eventually(_ condition: () async -> Bool) async -> Bool {
   @Test(.timeLimit(.minutes(1))) func runawayPatternTimesOutAndLeavesNoMatcher() async throws {
     let (server, channel) = try await connected()
     defer { server.cleanUp() }
-    server.send(String(repeating: "=", count: 30))
+    await server.send(String(repeating: "=", count: 30))
     #expect(await eventually { await channel.endOffset == 30 })
     let started = ContinuousClock.now
     async let waited: SerialMatch = channel.wait(
@@ -371,7 +380,7 @@ func eventually(_ condition: () async -> Bool) async -> Bool {
     let readStarted = ContinuousClock.now
     #expect(await channel.read(since: 0).text.count == 30)
     #expect(ContinuousClock.now - readStarted < .milliseconds(500))
-    server.send("more\n")
+    await server.send("more\n")
     #expect(await eventually { await channel.endOffset == 35 })
     do {
       _ = try await waited
@@ -387,7 +396,7 @@ func eventually(_ condition: () async -> Bool) async -> Bool {
     // A second wait on the same channel still works, with a matcher of its own.
     async let next = channel.wait(for: "ready", timeout: .seconds(2))
     try await Task.sleep(for: .milliseconds(50))
-    server.send("ready\n")
+    await server.send("ready\n")
     #expect(try await next.match == "ready")
     await channel.stop()
   }
@@ -397,7 +406,7 @@ func eventually(_ condition: () async -> Bool) async -> Bool {
   @Test(.timeLimit(.minutes(1))) func runawayWaitsQueueForMatchersAndAllEnd() async throws {
     let (server, channel) = try await connected()
     defer { server.cleanUp() }
-    server.send(String(repeating: "=", count: 30))
+    await server.send(String(repeating: "=", count: 30))
     #expect(await eventually { await channel.endOffset == 30 })
     let count = SerialChannel.maxMatchers + 2
     let started = ContinuousClock.now
@@ -431,7 +440,7 @@ func eventually(_ condition: () async -> Bool) async -> Bool {
     let channel = SerialChannel(
       socketPath: server.path, logURL: server.logURL, matcherPath: "/nonexistent/vmlab-match")
     try await channel.start()
-    server.accept()
+    await server.accept()
     do {
       _ = try await channel.wait(for: "log[a-z]+:", timeout: .seconds(1))
       Issue.record("expected engine_error")
@@ -451,8 +460,8 @@ func eventually(_ condition: () async -> Bool) async -> Bool {
     let broken = SerialChannel(
       socketPath: other.path, logURL: other.logURL, matcherPath: "/usr/bin/true")
     try await broken.start()
-    other.accept()
-    other.send("abc")
+    await other.accept()
+    await other.send("abc")
     #expect(await eventually { await broken.endOffset == 3 })
     do {
       _ = try await broken.wait(for: "x+", since: 0, timeout: .seconds(2))
@@ -484,8 +493,8 @@ func eventually(_ condition: () async -> Bool) async -> Bool {
     defer { server.cleanUp() }
     let channel = SerialChannel(socketPath: server.path, logURL: server.logURL, matcherPath: nil)
     try await channel.start()
-    server.accept()
-    server.send("café prompt$ ")
+    await server.accept()
+    await server.send("café prompt$ ")
     #expect(await eventually { await channel.endOffset == 14 })
     let match = try await channel.wait(for: "prompt\\$ ", since: 0, timeout: .seconds(1))
     #expect(match == SerialMatch(match: "prompt$ ", start: 6, offset: 14))
@@ -506,8 +515,8 @@ func eventually(_ condition: () async -> Bool) async -> Bool {
     let channel = SerialChannel(
       socketPath: server.path, logURL: server.logURL, matcherPath: script.path)
     try await channel.start()
-    server.accept()
-    server.send("== done\n")
+    await server.accept()
+    await server.send("== done\n")
     #expect(await eventually { await channel.endOffset == 8 })
     // The first wait gets the spare while it is still starting; the second starts a matcher.
     let first = try await channel.wait(for: "=+ done", since: 0, timeout: .milliseconds(500))
@@ -526,7 +535,7 @@ func eventually(_ condition: () async -> Bool) async -> Bool {
     try await Task.sleep(for: .milliseconds(50))
     let text = String(repeating: "booting...\n", count: 20) + "debian login: "
     for byte in text.utf8 {
-      server.send([byte])
+      await server.send([byte])
       try await Task.sleep(for: .milliseconds(1))
     }
     let match = try await found
@@ -561,7 +570,7 @@ func eventually(_ condition: () async -> Bool) async -> Bool {
     let (server, channel) = try await connected()
     defer { server.cleanUp() }
     let filler = String(repeating: "x", count: 200_000)
-    server.send(filler + "MARK" + filler)
+    await server.send(filler + "MARK" + filler)
     #expect(await eventually { await channel.endOffset == 400_004 })
     let match = try await channel.wait(for: "MARK", since: 0, timeout: .seconds(5))
     #expect(match == SerialMatch(match: "MARK", start: 200_000, offset: 200_004))

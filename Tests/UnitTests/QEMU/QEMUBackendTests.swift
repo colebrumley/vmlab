@@ -133,7 +133,7 @@ import VMLabCore
   /// may name a backing file anywhere (another VM's disk, a file outside the roots), which QEMU
   /// then opens. Every file in the chain passes the policy now.
   @Test(.enabled(if: QEMUCloneTests.installation != nil))
-  func aDriveImageBackedByAFileOutsideThePolicyIsRefused() throws {
+  func aDriveImageBackedByAFileOutsideThePolicyIsRefused() async throws {
     let qemuImg = try #require(QEMUCloneTests.installation).qemuImg
     let root = URL(filePath: "/tmp/vmlab-qc-\(getpid())-\(UInt32.random(in: 0...UInt32.max))")
     let home = root.appending(path: "home")
@@ -151,16 +151,25 @@ import VMLabCore
       ["create", "-q", "-f", "qcow2", "-F", "qcow2", "-b", secret.path, overlay.path],
       ["create", "-q", "-f", "qcow2", plain.path, "1M"],
     ] {
-      let result = try #require(ProcessRunner().run(qemuImg.path, args))
+      let result = try #require(await ProcessRunner().run(qemuImg.path, args))
       try #require(result.status == 0, "\(result.output)")
     }
     let policy = PathPolicy(roots: [root.path])
     let refused = ExtraSpec(qemuArgs: ["-drive", "if=none,id=d1,file=\(overlay.path)"])
+    // The check runs qemu-img, so off the cooperative pool.
+    let check = { @Sendable (extra: ExtraSpec) async -> Result<Void, VMLabError> in
+      await OffPool.run {
+        Result { () throws(VMLabError) in
+          try QEMUBackend.checkImageChains(
+            extra, policy: policy, vmlabHome: home, qemuImg: qemuImg)
+        }
+      }
+    }
+    let refusal = await check(refused)
     #expect {
-      try QEMUBackend.checkImageChains(
-        refused, policy: policy, vmlabHome: home, qemuImg: qemuImg)
+      try refusal.get()
     } throws: { ($0 as? VMLabError)?.code == .invalidRequest }
     let fine = ExtraSpec(qemuArgs: ["-drive", "if=none,id=d1,file=\(plain.path)"])
-    try QEMUBackend.checkImageChains(fine, policy: policy, vmlabHome: home, qemuImg: qemuImg)
+    try await check(fine).get()
   }
 }

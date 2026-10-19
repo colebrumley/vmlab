@@ -52,7 +52,7 @@ import VMLabVZ
     var output: CommandOutput? = nil
     let deadline = clock.now.advanced(by: .seconds(150))
     while clock.now < deadline {
-      output = VZLinuxGuestIntegrationTests.ssh(
+      output = await VZLinuxGuestIntegrationTests.ssh(
         key: dir.appending(path: "id_ed25519"), user: "vmlab", host: ip, command: "id -un")
       if output?.status == 0 { break }
       try await Task.sleep(for: .seconds(2))

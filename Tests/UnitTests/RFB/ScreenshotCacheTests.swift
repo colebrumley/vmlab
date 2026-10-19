@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import VMLabCore
 
 @testable import VMLabRFB
 
@@ -34,10 +35,15 @@ import Testing
         == PixelRect(x: 6, y: 4, width: 1, height: 1))
   }
 
-  @Test func everyResultHasAnIdSizeAndScale() throws {
-    var cache = ScreenshotCache()
-    let one = try cache.capture(solidScreen(2560, 1600), options: .init(maxEdge: 1280))
-    let two = try cache.capture(solidScreen(2560, 1600), options: .init(maxEdge: 1280))
+  /// Two full-size captures take seconds of CPU in a debug build: on a thread of their own, so
+  /// the cooperative pool stays free for the rest of the suite.
+  @Test func everyResultHasAnIdSizeAndScale() async throws {
+    let (one, two) = try await OffPool.run { () throws -> (Screenshot, Screenshot) in
+      var cache = ScreenshotCache()
+      let one = try cache.capture(solidScreen(2560, 1600), options: .init(maxEdge: 1280))
+      let two = try cache.capture(solidScreen(2560, 1600), options: .init(maxEdge: 1280))
+      return (one, two)
+    }
     #expect(one.id != two.id)
     #expect(one.width == 2560 && one.height == 1600 && one.scale == 0.5)
     #expect(one.image?.width == 1280 && one.changedRegion == nil && !one.unchanged)

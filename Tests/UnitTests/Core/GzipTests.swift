@@ -8,38 +8,34 @@ import Testing
   static let gzip = "/usr/bin/gzip"
 
   /// `data` compressed by the system gzip, keeping `name` in the header when given.
-  static func compressed(_ data: Data, name: String? = nil) throws -> Data {
+  static func compressed(_ data: Data, name: String? = nil) async throws -> Data {
     let dir = FileManager.default.temporaryDirectory.appending(path: "vmlab-gz-\(UUID())")
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: dir) }
     let file = dir.appending(path: name ?? "payload")
     try data.write(to: file)
-    let process = Process()
-    process.executableURL = URL(filePath: gzip)
-    process.arguments = name == nil ? ["-n", file.path] : [file.path]
-    try process.run()
-    process.waitUntilExit()
+    _ = try await TestProcess.run(gzip, name == nil ? ["-n", file.path] : [file.path])
     return try Data(contentsOf: dir.appending(path: file.lastPathComponent + ".gz"))
   }
 
   static let payload = Data((0..<200_000).map { UInt8(truncatingIfNeeded: $0 &* 31 >> 3) })
 
   @Test(.enabled(if: FileManager.default.isExecutableFile(atPath: gzip)))
-  func decompressesWithAndWithoutAName() throws {
+  func decompressesWithAndWithoutAName() async throws {
     for name in [nil, "Image"] {
-      let gz = try Self.compressed(Self.payload, name: name)
+      let gz = try await Self.compressed(Self.payload, name: name)
       #expect(Gzip.isGzip(gz))
       #expect(try Gzip.decompress(gz) == Self.payload)
     }
   }
 
   @Test(.enabled(if: FileManager.default.isExecutableFile(atPath: gzip)))
-  func decompressInPlaceRewritesOnlyGzipFiles() throws {
+  func decompressInPlaceRewritesOnlyGzipFiles() async throws {
     let dir = FileManager.default.temporaryDirectory.appending(path: "vmlab-gz-\(UUID())")
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: dir) }
     let packed = dir.appending(path: "vmlinuz")
-    try Self.compressed(Self.payload, name: "Image").write(to: packed)
+    try await Self.compressed(Self.payload, name: "Image").write(to: packed)
     try Gzip.decompressInPlace(packed)
     #expect(try Data(contentsOf: packed) == Self.payload)
     let plain = dir.appending(path: "Image")
@@ -49,8 +45,8 @@ import Testing
   }
 
   @Test(.enabled(if: FileManager.default.isExecutableFile(atPath: gzip)))
-  func corruptStreamIsInvalidRequest() throws {
-    var gz = try Self.compressed(Self.payload)
+  func corruptStreamIsInvalidRequest() async throws {
+    var gz = try await Self.compressed(Self.payload)
     gz.replaceSubrange((gz.count - 4)..<gz.count, with: [1, 2, 3, 4])
     #expect {
       try Gzip.decompress(gz)

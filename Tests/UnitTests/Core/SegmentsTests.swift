@@ -52,7 +52,8 @@ import VMLabCore
     let lock = try #require(
       FileLock.tryLock(home.appending(path: "locks/segment-lab.lock").path))
     let destroying = Task.detached { () -> VMLabError? in
-      do { try segments.destroy("lab") } catch { return error as? VMLabError }
+      // The async overload: the sync one would wait for the lock on a cooperative thread.
+      do { try await segments.destroy("lab") } catch { return error as? VMLabError }
       return nil
     }
     try await Task.sleep(for: .milliseconds(200))

@@ -144,7 +144,7 @@ extension MacProvisioningTests {
   }
 
   /// The script's awk finds the service of a device in `networksetup -listnetworkserviceorder`.
-  @Test func segmentScriptFindsTheServiceOfADevice() throws {
+  @Test func segmentScriptFindsTheServiceOfADevice() async throws {
     let script = MacProvisioner.segmentScript
     let line = try #require(
       script.split(separator: "\n").first { $0.contains("listnetworkserviceorder") })
@@ -159,18 +159,10 @@ extension MacProvisioningTests {
       (Hardware Port: Ethernet, Device: en1)
 
       """
-    let process = Process()
-    process.executableURL = URL(filePath: "/usr/bin/awk")
-    process.arguments = ["-v", "d=en1", String(program)]
-    let input = Pipe()
-    let output = Pipe()
-    process.standardInput = input
-    process.standardOutput = output
-    try process.run()
-    input.fileHandleForWriting.write(Data(sample.utf8))
-    try input.fileHandleForWriting.close()
-    process.waitUntilExit()
-    let text = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+    let output = try await TestProcess.run(
+      "/usr/bin/awk", ["-v", "d=en1", String(program)], stdin: Data(sample.utf8)
+    ).output
+    let text = String(decoding: output, as: UTF8.self)
     #expect(text == "Ethernet 2\n")
   }
 }
@@ -214,7 +206,7 @@ extension MacProvisioningTests {
 
   /// The plist parses, and its ProgramArguments carry the path verbatim (an argument, never shell
   /// text); the share_mount command quotes it as one shell word.
-  @Test func sharePathsAreQuotedNotInterpreted() throws {
+  @Test func sharePathsAreQuotedNotInterpreted() async throws {
     let data = Data(MacProvisioner.sharePlist(path: Self.awkwardPath).utf8)
     let plist = try #require(
       try PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any])
@@ -224,7 +216,7 @@ extension MacProvisioningTests {
     #expect(
       arguments == ["/bin/sh", "-c", MacProvisioner.shareScript, Self.awkwardPath, "vmlab-share0"])
     for path in [Self.awkwardPath, "/a b/'c'", "/$(touch /tmp/x)`id`"] {
-      let echoed = ProcessRunner().run(
+      let echoed = await ProcessRunner().run(
         "/bin/sh", ["-c", "printf %s " + MacProvisioner.shellQuote(path)])
       #expect(echoed?.output == path)
     }
@@ -233,10 +225,11 @@ extension MacProvisioningTests {
     let mount = try #require(provisioner.steps().first { $0.name == "share_mount" })
     #expect(mount.command.hasSuffix(" " + MacProvisioner.shellQuote(Self.awkwardPath)))
     // Both scripts parse, and share_mount finds a mount `mount` lists (here the host's own /).
-    #expect(ProcessRunner().run("/bin/sh", ["-n", "-c", MacProvisioner.shareScript])?.status == 0)
+    #expect(
+      await ProcessRunner().run("/bin/sh", ["-n", "-c", MacProvisioner.shareScript])?.status == 0)
     provisioner.sharePath = "/"
     let root = try #require(provisioner.steps().first { $0.name == "share_mount" })
-    #expect(ProcessRunner().run("/bin/sh", ["-c", root.command])?.status == 0)
+    #expect(await ProcessRunner().run("/bin/sh", ["-c", root.command])?.status == 0)
     // The automount path, or no share, needs no steps.
     provisioner.sharePath = nil
     #expect(!provisioner.steps().contains { $0.name.hasPrefix("share_") })

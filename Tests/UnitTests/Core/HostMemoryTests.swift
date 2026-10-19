@@ -193,13 +193,18 @@ import VMLabCore
     #expect(HostProcesses.parseProcArgs([1]) == nil)
   }
 
-  @Test func theLiveReaderAnswersOnThisHost() {
-    let snapshot = LiveHostMemory(recognizers: GuestProcessRecognizers()).snapshot()
+  /// Reading every host process's arguments takes seconds of CPU in a debug build: it runs on a
+  /// thread of its own, so the cooperative pool stays free for the rest of the suite.
+  @Test func theLiveReaderAnswersOnThisHost() async {
+    let (snapshot, me) = await OffPool.run {
+      let snapshot = LiveHostMemory(recognizers: GuestProcessRecognizers()).snapshot()
+      // This test process is listed with its own arguments.
+      let me = HostProcesses.list { _ in true }.first { $0.pid == getpid() }
+      return (snapshot, me)
+    }
     #expect([1, 2, 4].contains(snapshot.pressure.rawValue))
     #expect(snapshot.availableGB > 0)
     #expect(snapshot.guests.isEmpty)
-    // This test process is listed with its own arguments.
-    let me = HostProcesses.list { _ in true }.first { $0.pid == getpid() }
     #expect(me != nil)
   }
 

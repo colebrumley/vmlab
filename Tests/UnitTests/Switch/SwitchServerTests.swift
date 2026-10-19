@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import VMLabCore
 import VMLabSwitch
 
 /// Three in-process ports on a running switch, the way QEMU's `-netdev dgram` attaches: each port
@@ -37,26 +38,31 @@ import VMLabSwitch
       Darwin.close(fd)
     }
 
-    func stop() {
+    func stop() async {
       server.stop()
       let deadline = Date().addingTimeInterval(5)
       while FileManager.default.fileExists(atPath: paths.pidFile.path), Date() < deadline {
-        usleep(10_000)
+        try? await Task.sleep(for: .milliseconds(10))
       }
       for fd in fds { Darwin.close(fd) }
       try? FileManager.default.removeItem(at: root)
     }
 
-    func stats() throws -> SwitchStats {
-      let fd = try UnixSocket.make(SOCK_STREAM)
-      defer { close(fd) }
-      try UnixSocket.connect(fd, path: paths.statsSocket.path)
-      var data = Data()
-      var buf = [UInt8](repeating: 0, count: 4096)
-      while true {
-        let n = read(fd, &buf, buf.count)
-        if n <= 0 { break }
-        data.append(contentsOf: buf[..<n])
+    /// Reads the stats socket off the cooperative pool: the read waits for the switch thread.
+    func stats() async throws -> SwitchStats {
+      let path = paths.statsSocket.path
+      let data = try await OffPool.run { () throws -> Data in
+        let fd = try UnixSocket.make(SOCK_STREAM)
+        defer { Darwin.close(fd) }
+        try UnixSocket.connect(fd, path: path)
+        var data = Data()
+        var buf = [UInt8](repeating: 0, count: 4096)
+        while true {
+          let n = read(fd, &buf, buf.count)
+          if n <= 0 { break }
+          data.append(contentsOf: buf[..<n])
+        }
+        return data
       }
       return try JSONDecoder().decode(SwitchStats.self, from: data)
     }
@@ -64,12 +70,12 @@ import VMLabSwitch
     /// Stats once the switch has received `count` frames (sends are asynchronous to it). The
     /// deadline is generous: the wait ends as soon as the count is reached, and a loaded host can
     /// leave the switch thread unscheduled for seconds.
-    func stats(afterReceiving count: Int) throws -> SwitchStats {
+    func stats(afterReceiving count: Int) async throws -> SwitchStats {
       let deadline = Date().addingTimeInterval(30)
-      var stats = try self.stats()
+      var stats = try await self.stats()
       while stats.received < count, Date() < deadline {
-        usleep(5_000)
-        stats = try self.stats()
+        try await Task.sleep(for: .milliseconds(5))
+        stats = try await self.stats()
       }
       return stats
     }
@@ -82,106 +88,121 @@ import VMLabSwitch
 
   /// The next frame on `fd`, or nil after `timeout` milliseconds. The default is for frames that
   /// must arrive, so it is generous; a frame that must not arrive passes a short timeout.
-  static func receive(_ fd: Int32, timeout: Int32 = 20_000) -> [UInt8]? {
-    var p = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
-    guard poll(&p, 1, timeout) == 1 else { return nil }
-    var buf = [UInt8](repeating: 0, count: 4096)
-    let n = recv(fd, &buf, buf.count, 0)
-    return n >= 0 ? Array(buf[..<n]) : nil
+  /// It waits in `poll`, so off the cooperative pool.
+  static func receive(_ fd: Int32, timeout: Int32 = 20_000) async -> [UInt8]? {
+    await OffPool.run {
+      var p = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
+      guard poll(&p, 1, timeout) == 1 else { return nil }
+      var buf = [UInt8](repeating: 0, count: 4096)
+      let n = recv(fd, &buf, buf.count, 0)
+      return n >= 0 ? Array(buf[..<n]) : nil
+    }
+  }
+
+  /// Runs `body` on a fresh harness and stops it afterwards, whether or not `body` threw.
+  static func withHarness(_ body: (Harness) async throws -> Void) async throws {
+    let h = try Harness()
+    do {
+      try await body(h)
+    } catch {
+      await h.stop()
+      throw error
+    }
+    await h.stop()
   }
 
   let a = SwitchCoreTests.mac(0xa)
   let b = SwitchCoreTests.mac(0xb)
 
-  @Test func unicastReachesTheLearnedPortOnlyAndBroadcastReachesAllOthers() throws {
-    let h = try Harness()
-    defer { h.stop() }
-    let (pa, pb, pc) = (try h.port("a"), try h.port("b"), try h.port("c"))
-    // Register every port with the switch: a frame to nobody from each, before any learning test.
-    for (fd, n) in [(pa, UInt8(0xa)), (pb, 0xb), (pc, 0xc)] {
-      Self.send(
-        fd, SwitchCoreTests.frame(to: SwitchCoreTests.mac(0xee), from: SwitchCoreTests.mac(n)))
+  @Test func unicastReachesTheLearnedPortOnlyAndBroadcastReachesAllOthers() async throws {
+    try await Self.withHarness { h in
+      let (pa, pb, pc) = (try h.port("a"), try h.port("b"), try h.port("c"))
+      // Register every port with the switch: a frame to nobody from each, before any learning test.
+      for (fd, n) in [(pa, UInt8(0xa)), (pb, 0xb), (pc, 0xc)] {
+        Self.send(
+          fd, SwitchCoreTests.frame(to: SwitchCoreTests.mac(0xee), from: SwitchCoreTests.mac(n)))
+      }
+      _ = try await h.stats(afterReceiving: 3)
+      for fd in [pa, pb, pc] { while await Self.receive(fd, timeout: 50) != nil {} }
+
+      let hello = SwitchCoreTests.frame(to: SwitchCoreTests.broadcast, from: a)
+      Self.send(pa, hello)
+      #expect(await Self.receive(pb) == hello)
+      #expect(await Self.receive(pc) == hello)
+      #expect(await Self.receive(pa, timeout: 100) == nil)
+
+      let reply = SwitchCoreTests.frame(to: a, from: b, payload: 100)
+      Self.send(pb, reply)
+      #expect(await Self.receive(pa) == reply)
+      #expect(await Self.receive(pc, timeout: 100) == nil)
+      #expect(await Self.receive(pb, timeout: 0) == nil)
+
+      let stats = try await h.stats(afterReceiving: 5)
+      #expect(stats.ports == 3)
+      #expect(stats.unicast == 1)
+      #expect(stats.flooded == 4)
     }
-    _ = try h.stats(afterReceiving: 3)
-    for fd in [pa, pb, pc] { while Self.receive(fd, timeout: 50) != nil {} }
-
-    let hello = SwitchCoreTests.frame(to: SwitchCoreTests.broadcast, from: a)
-    Self.send(pa, hello)
-    #expect(Self.receive(pb) == hello)
-    #expect(Self.receive(pc) == hello)
-    #expect(Self.receive(pa, timeout: 100) == nil)
-
-    let reply = SwitchCoreTests.frame(to: a, from: b, payload: 100)
-    Self.send(pb, reply)
-    #expect(Self.receive(pa) == reply)
-    #expect(Self.receive(pc, timeout: 100) == nil)
-    #expect(Self.receive(pb, timeout: 0) == nil)
-
-    let stats = try h.stats(afterReceiving: 5)
-    #expect(stats.ports == 3)
-    #expect(stats.unicast == 1)
-    #expect(stats.flooded == 4)
   }
 
-  @Test func malformedAndOversizedFramesAreCountedAndDropped() throws {
-    let h = try Harness()
-    defer { h.stop() }
-    let (pa, pb) = (try h.port("a"), try h.port("b"))
-    Self.send(pb, SwitchCoreTests.frame(to: SwitchCoreTests.broadcast, from: b))
-    Self.send(pa, [1, 2, 3])
-    Self.send(pa, SwitchCoreTests.frame(to: SwitchCoreTests.broadcast, from: a, payload: 1700))
-    let stats = try h.stats(afterReceiving: 3)
-    #expect(stats.malformed == 1)
-    #expect(stats.oversized == 1)
-    #expect(Self.receive(pb, timeout: 100) == nil)
-  }
-
-  @Test func socketpairPortsJoinTheSegment() throws {
-    let h = try Harness()
-    defer { h.stop() }
-    let pa = try h.port("a")
-    // A port exists once the switch has seen a frame from it.
-    Self.send(pa, SwitchCoreTests.frame(to: SwitchCoreTests.mac(0xee), from: a))
-    _ = try h.stats(afterReceiving: 1)
-    var pair: [Int32] = [0, 0]
-    try #require(socketpair(AF_UNIX, SOCK_DGRAM, 0, &pair) == 0)
-    defer { close(pair[1]) }
-    h.server.attach(fd: pair[0])
-    let fromPair = SwitchCoreTests.frame(to: SwitchCoreTests.broadcast, from: b)
-    Self.send(pair[1], fromPair)
-    #expect(Self.receive(pa) == fromPair)
-    let toPair = SwitchCoreTests.frame(to: b, from: a)
-    Self.send(pa, toPair)
-    #expect(Self.receive(pair[1]) == toPair)
-  }
-
-  @Test func aDeadPortIsRemovedOnSend() throws {
-    let h = try Harness()
-    defer { h.stop() }
-    let pa = try h.port("a")
-    let pb = try h.port("b")
-    Self.send(pa, SwitchCoreTests.frame(to: SwitchCoreTests.mac(0xee), from: a))
-    _ = try h.stats(afterReceiving: 1)
-    Self.send(pb, SwitchCoreTests.frame(to: SwitchCoreTests.broadcast, from: b))
-    #expect(Self.receive(pa) != nil)
-    h.close(pb)
-    unlink(h.paths.portsDirectory.appending(path: "b.sock").path)
-    // Sent until the port goes: a send that races the peer's teardown may still succeed, and
-    // every later one fails.
-    let deadline = Date().addingTimeInterval(30)
-    var stats = try h.stats()
-    while stats.ports != 1, Date() < deadline {
-      Self.send(pa, SwitchCoreTests.frame(to: b, from: a))
-      usleep(20_000)
-      stats = try h.stats()
+  @Test func malformedAndOversizedFramesAreCountedAndDropped() async throws {
+    try await Self.withHarness { h in
+      let (pa, pb) = (try h.port("a"), try h.port("b"))
+      Self.send(pb, SwitchCoreTests.frame(to: SwitchCoreTests.broadcast, from: b))
+      Self.send(pa, [1, 2, 3])
+      Self.send(pa, SwitchCoreTests.frame(to: SwitchCoreTests.broadcast, from: a, payload: 1700))
+      let stats = try await h.stats(afterReceiving: 3)
+      #expect(stats.malformed == 1)
+      #expect(stats.oversized == 1)
+      #expect(await Self.receive(pb, timeout: 100) == nil)
     }
-    #expect(stats.ports == 1)
-    #expect(stats.macs == 1)
   }
 
-  @Test func attachAndStopAfterTheSwitchHasStoppedTouchNoClosedFd() throws {
+  @Test func socketpairPortsJoinTheSegment() async throws {
+    try await Self.withHarness { h in
+      let pa = try h.port("a")
+      // A port exists once the switch has seen a frame from it.
+      Self.send(pa, SwitchCoreTests.frame(to: SwitchCoreTests.mac(0xee), from: a))
+      _ = try await h.stats(afterReceiving: 1)
+      var pair: [Int32] = [0, 0]
+      try #require(socketpair(AF_UNIX, SOCK_DGRAM, 0, &pair) == 0)
+      defer { close(pair[1]) }
+      h.server.attach(fd: pair[0])
+      let fromPair = SwitchCoreTests.frame(to: SwitchCoreTests.broadcast, from: b)
+      Self.send(pair[1], fromPair)
+      #expect(await Self.receive(pa) == fromPair)
+      let toPair = SwitchCoreTests.frame(to: b, from: a)
+      Self.send(pa, toPair)
+      #expect(await Self.receive(pair[1]) == toPair)
+    }
+  }
+
+  @Test func aDeadPortIsRemovedOnSend() async throws {
+    try await Self.withHarness { h in
+      let pa = try h.port("a")
+      let pb = try h.port("b")
+      Self.send(pa, SwitchCoreTests.frame(to: SwitchCoreTests.mac(0xee), from: a))
+      _ = try await h.stats(afterReceiving: 1)
+      Self.send(pb, SwitchCoreTests.frame(to: SwitchCoreTests.broadcast, from: b))
+      #expect(await Self.receive(pa) != nil)
+      h.close(pb)
+      unlink(h.paths.portsDirectory.appending(path: "b.sock").path)
+      // Sent until the port goes: a send that races the peer's teardown may still succeed, and
+      // every later one fails.
+      let deadline = Date().addingTimeInterval(30)
+      var stats = try await h.stats()
+      while stats.ports != 1, Date() < deadline {
+        Self.send(pa, SwitchCoreTests.frame(to: b, from: a))
+        try await Task.sleep(for: .milliseconds(20))
+        stats = try await h.stats()
+      }
+      #expect(stats.ports == 1)
+      #expect(stats.macs == 1)
+    }
+  }
+
+  @Test func attachAndStopAfterTheSwitchHasStoppedTouchNoClosedFd() async throws {
     let h = try Harness()
-    h.stop()
+    await h.stop()
     var pair: [Int32] = [0, 0]
     try #require(socketpair(AF_UNIX, SOCK_DGRAM, 0, &pair) == 0)
     defer { close(pair[1]) }
@@ -194,13 +215,13 @@ import VMLabSwitch
     #expect(sent == -1)
   }
 
-  @Test func aSecondSwitchOnALiveSegmentIsRefusedAndStopCleansUp() throws {
+  @Test func aSecondSwitchOnALiveSegmentIsRefusedAndStopCleansUp() async throws {
     let h = try Harness()
     #expect(throws: SwitchError.alreadyRunning(pid: getpid())) {
       try SwitchServer(paths: h.paths)
     }
     let paths = h.paths
-    h.stop()
+    await h.stop()
     #expect(!FileManager.default.fileExists(atPath: paths.switchSocket.path))
     #expect(!FileManager.default.fileExists(atPath: paths.pidFile.path))
   }
@@ -208,32 +229,35 @@ import VMLabSwitch
 
 extension SwitchServerTests {
   /// R-901: a VZ guest's port arrives as one end of a `socketpair` over `attach.sock`.
-  @Test func socketpairHandedOverAttachSocketBecomesAPort() throws {
-    let h = try Harness()
-    defer { h.stop() }
-    let pa = try h.port("a")
-    var pair: [Int32] = [0, 0]
-    #expect(socketpair(AF_UNIX, SOCK_DGRAM, 0, &pair) == 0)
-    defer { close(pair[0]) }
-    let control = try UnixSocket.make(SOCK_STREAM)
-    try UnixSocket.connect(control, path: h.paths.attachSocket.path)
-    try UnixSocket.sendDescriptor(pair[1], over: control)
-    var answer = [UInt8](repeating: 0, count: 8)
-    let count = read(control, &answer, answer.count)
-    close(control)
-    // As the VZ runner does: its copy is closed once the switch has answered (closing a
-    // descriptor still in flight lets the kernel's unix-socket GC discard it).
-    close(pair[1])
-    #expect(Array(answer[..<max(0, count)]) == Array("ok\n".utf8))
+  @Test func socketpairHandedOverAttachSocketBecomesAPort() async throws {
+    try await Self.withHarness { h in
+      let pa = try h.port("a")
+      var pair: [Int32] = [0, 0]
+      #expect(socketpair(AF_UNIX, SOCK_DGRAM, 0, &pair) == 0)
+      defer { close(pair[0]) }
+      let control = try UnixSocket.make(SOCK_STREAM)
+      try UnixSocket.connect(control, path: h.paths.attachSocket.path)
+      try UnixSocket.sendDescriptor(pair[1], over: control)
+      let answer = await OffPool.run {
+        var answer = [UInt8](repeating: 0, count: 8)
+        let count = read(control, &answer, answer.count)
+        return Array(answer[..<max(0, count)])
+      }
+      close(control)
+      // As the VZ runner does: its copy is closed once the switch has answered (closing a
+      // descriptor still in flight lets the kernel's unix-socket GC discard it).
+      close(pair[1])
+      #expect(answer == Array("ok\n".utf8))
 
-    // The attached end hears a broadcast from the dgram port, and its reply reaches that port.
-    Self.send(pa, SwitchCoreTests.frame(to: SwitchCoreTests.broadcast, from: a))
-    let heard = Self.receive(pair[0])
-    #expect(heard == SwitchCoreTests.frame(to: SwitchCoreTests.broadcast, from: a))
-    let reply = SwitchCoreTests.frame(to: a, from: b, payload: 64)
-    let sent = reply.withUnsafeBytes { Darwin.send(pair[0], $0.baseAddress, $0.count, 0) }
-    #expect(sent == reply.count, "errno \(errno)")
-    #expect(Self.receive(pa) == reply)
-    #expect(try h.stats(afterReceiving: 2).ports == 2)
+      // The attached end hears a broadcast from the dgram port, and its reply reaches that port.
+      Self.send(pa, SwitchCoreTests.frame(to: SwitchCoreTests.broadcast, from: a))
+      let heard = await Self.receive(pair[0])
+      #expect(heard == SwitchCoreTests.frame(to: SwitchCoreTests.broadcast, from: a))
+      let reply = SwitchCoreTests.frame(to: a, from: b, payload: 64)
+      let sent = reply.withUnsafeBytes { Darwin.send(pair[0], $0.baseAddress, $0.count, 0) }
+      #expect(sent == reply.count, "errno \(errno)")
+      #expect(await Self.receive(pa) == reply)
+      #expect(try await h.stats(afterReceiving: 2).ports == 2)
+    }
   }
 }

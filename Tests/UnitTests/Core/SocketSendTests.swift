@@ -13,24 +13,40 @@ import VMLabCore
     return (fds[0], fds[1])
   }
 
-  @Test func aPeerThatNeverReadsStallsAfterTheTimeout() throws {
+  static func isFree(_ lock: NSLock) -> Bool {
+    let free = lock.try()
+    if free { lock.unlock() }
+    return free
+  }
+
+  /// `sendAll` waits in `poll`, so the tests run it off the cooperative pool.
+  static func sendAllOffPool(
+    _ bytes: [UInt8], lock: NSLock, stall: Duration,
+    descriptor: @escaping @Sendable () -> Int32?
+  ) async -> Result<Void, SocketSend.Failure> {
+    await OffPool.run {
+      Result { () throws(SocketSend.Failure) in
+        try SocketSend.sendAll(bytes, lock: lock, stall: stall, descriptor: descriptor)
+      }
+    }
+  }
+
+  @Test func aPeerThatNeverReadsStallsAfterTheTimeout() async throws {
     let (fd, peer) = pair()
     defer {
       close(fd)
       close(peer)
     }
     let lock = NSLock()
-    #expect(throws: SocketSend.Failure.self) {
-      try SocketSend.sendAll(
-        [UInt8](repeating: 1, count: 8 << 20), lock: lock, stall: .milliseconds(200),
-        descriptor: { fd })
-    }
+    let result = await Self.sendAllOffPool(
+      [UInt8](repeating: 1, count: 8 << 20), lock: lock, stall: .milliseconds(200),
+      descriptor: { fd })
+    #expect(throws: SocketSend.Failure.self) { try result.get() }
     // The lock is free once the call has returned, and was never held across a wait.
-    #expect(lock.try())
-    lock.unlock()
+    #expect(Self.isFree(lock))
   }
 
-  @Test func aShutdownDescriptorEndsTheWrite() throws {
+  @Test func aShutdownDescriptorEndsTheWrite() async throws {
     let (fd, peer) = pair()
     defer {
       close(fd)
@@ -47,23 +63,21 @@ import VMLabCore
     }
     shut.start()
     let started = ContinuousClock.now
-    #expect(throws: SocketSend.Failure.self) {
-      try SocketSend.sendAll(
-        [UInt8](repeating: 1, count: 8 << 20), lock: lock, stall: .seconds(60),
-        descriptor: { open ? fd : nil })
-    }
+    let result = await Self.sendAllOffPool(
+      [UInt8](repeating: 1, count: 8 << 20), lock: lock, stall: .seconds(60),
+      descriptor: { open ? fd : nil })
+    #expect(throws: SocketSend.Failure.self) { try result.get() }
     #expect(ContinuousClock.now - started < .seconds(30))
   }
 
-  @Test func everyByteArrives() throws {
+  @Test func everyByteArrives() async throws {
     let (fd, peer) = pair()
     defer {
       close(fd)
       close(peer)
     }
     let payload = (0..<(1 << 20)).map { UInt8($0 & 0xFF) }
-    let done = DispatchSemaphore(value: 0)
-    let reader = Thread {
+    async let received = OffPool.run { () -> [UInt8] in
       var got: [UInt8] = []
       var buffer = [UInt8](repeating: 0, count: 65536)
       while got.count < payload.count {
@@ -71,11 +85,12 @@ import VMLabCore
         guard n > 0 else { break }
         got += buffer[0..<n]
       }
-      #expect(got == payload)
-      done.signal()
+      return got
     }
-    reader.start()
-    try SocketSend.sendAll(payload, lock: NSLock(), stall: .seconds(10), descriptor: { fd })
-    #expect(done.wait(timeout: .now() + 30) == .success)
+    let sent = await Self.sendAllOffPool(
+      payload, lock: NSLock(), stall: .seconds(10), descriptor: { fd })
+    if case .failure = sent { shutdown(peer, SHUT_RDWR) }  // ends the reader
+    #expect(throws: Never.self) { try sent.get() }
+    #expect(await received == payload)
   }
 }

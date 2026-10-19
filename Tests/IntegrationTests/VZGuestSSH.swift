@@ -1,4 +1,5 @@
 import Foundation
+import VMLabCore
 
 /// `ssh debian@<ip>` into a VZ test guest with its own key, killed after a hard limit so a stalled
 /// session (a guest busy installing packages) cannot hang a test.
@@ -32,7 +33,7 @@ enum VZGuestSSH {
     }
     if process.isRunning {
       process.terminate()
-      process.waitUntilExit()
+      await OffPool.run { process.waitUntilExit() }
       return nil
     }
     let text = (try? String(contentsOf: output, encoding: .utf8)) ?? ""

@@ -10,7 +10,7 @@ import VMLabQEMU
     defer { server.cleanUp() }
     let transport = try await UnixQMPTransport.connect(
       path: server.path, writeStall: .milliseconds(300))
-    server.accept()
+    await server.accept()
     do {
       try await transport.send(Data(repeating: 0x20, count: 8 << 20))
       Issue.record("expected timeout")
@@ -24,7 +24,7 @@ import VMLabQEMU
     let server = try FakeSerialServer()
     defer { server.cleanUp() }
     let transport = try await UnixQMPTransport.connect(path: server.path, writeStall: .seconds(120))
-    server.accept()
+    await server.accept()
     let send = Task { try await transport.send(Data(repeating: 0x20, count: 8 << 20)) }
     try await Task.sleep(for: .milliseconds(200))
     await transport.close()

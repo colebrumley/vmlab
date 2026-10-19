@@ -18,7 +18,7 @@ import VMLabCore
       guest = try FakeSerialServer()
       channel = SerialChannel(socketPath: guest.path, logURL: guest.logURL)
       try await channel.start()
-      guest.accept()
+      await guest.accept()
       base.backend.useSerial(channel)
       let created = try await base.create()
       vm = created.value["vm"]?["id"]?.stringValue ?? ""
@@ -40,7 +40,7 @@ import VMLabCore
 
   @Test func readTailAndOffsets() async throws {
     let f = try await Fixture()
-    guest(f, "line one\nline two\nline three\n")
+    await guest(f, "line one\nline two\nline three\n")
     #expect(await eventually { await f.channel.endOffset == 29 })
     let all = try await f.call(["action": .string("read")])
     #expect(all.value["text"] == .string("line one\nline two\nline three\n"))
@@ -57,7 +57,7 @@ import VMLabCore
   /// still matches; `since` the returned offset waits only for new output.
   @Test func waitDefaultsToTheStartAndReturnsTheOffsetAfterTheMatch() async throws {
     let f = try await Fixture()
-    guest(f, "boot...\ndebian login: ")
+    await guest(f, "boot...\ndebian login: ")
     #expect(await eventually { await f.channel.endOffset == 22 })
     let first = try await f.call(["action": .string("wait"), "pattern": .string("login: ")])
     #expect(first.value["matched"] == .string("login: "))
@@ -70,8 +70,8 @@ import VMLabCore
     }
     let wrote = try await f.call(["action": .string("write"), "text": .string("root\n")])
     #expect(wrote.value["offset"] == .number(22))
-    #expect(f.guest.receive(5) == "root\n")
-    guest(f, "root\nPassword: ")
+    #expect(await f.guest.receive(5) == "root\n")
+    await guest(f, "root\nPassword: ")
     let second = try await reply.value
     #expect(second.value["text"] == .string("root\nPassword:"))
     #expect(second.value["offset"] == .number(36))
@@ -107,5 +107,5 @@ import VMLabCore
     await f.cleanUp()
   }
 
-  private func guest(_ f: Fixture, _ text: String) { f.guest.send(text) }
+  private func guest(_ f: Fixture, _ text: String) async { await f.guest.send(text) }
 }

@@ -65,19 +65,19 @@ import VMLabCore
     #expect(SSHTarget.loginUser(of: unknown, home: home) == "admin")
   }
 
-  @Test func keygenArgumentsAndGeneration() throws {
+  @Test func keygenArgumentsAndGeneration() async throws {
     let dir = try Self.tempDir()
     #expect(
       SSHKeys.keygenArguments(vmDirectory: dir, comment: "vmlab-vm-a") == [
         "-t", "ed25519", "-N", "", "-C", "vmlab-vm-a", "-f", dir.appending(path: "id_ed25519").path,
         "-q",
       ])
-    let key = try SSHKeys.generate(in: dir, comment: "vmlab-vm-a")
+    let key = try await SSHKeys.generate(in: dir, comment: "vmlab-vm-a")
     #expect(key.hasPrefix("ssh-ed25519 "))
     #expect(key.hasSuffix(" vmlab-vm-a"))
     #expect(FileManager.default.fileExists(atPath: dir.appending(path: "id_ed25519").path))
     // A second call keeps the pair.
-    #expect(try SSHKeys.generate(in: dir, comment: "other") == key)
+    #expect(try await SSHKeys.generate(in: dir, comment: "other") == key)
   }
 
   @Test func keygenFailureIsProvisionFailed() throws {
