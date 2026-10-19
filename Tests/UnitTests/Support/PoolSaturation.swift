@@ -11,12 +11,14 @@ enum PoolSaturation {
 
   /// How long a peer that never answers holds each caller; a pool held for this long fails
   /// `budget` by a wide margin.
-  static let hold = Duration.seconds(6)
+  static let hold = Duration.seconds(12)
 
   /// What a sleep of 200 ms and a trivial task may take while `width` callers wait. Generous:
   /// when a whole suite starts at once its first second or two queue every task behind a
-  /// thousand others (measured with blockers that do nothing), which is not what is proved here.
-  static let budget = Duration.seconds(3)
+  /// thousand others (measured with blockers that do nothing), which is not what is proved here,
+  /// and a 3-core hosted CI runner adds about a second more. Half of `hold`, so a blocked pool
+  /// still fails it by six seconds.
+  static let budget = Duration.seconds(6)
 
   /// Runs `blocker` in `width` tasks at once and returns how long, beyond a 200 ms sleep, a
   /// trivial task took to run meanwhile; returns after every blocker has ended. The probe runs at
