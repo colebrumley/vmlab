@@ -39,7 +39,11 @@ import VMLabVZ
         as: UTF8.self)
     }
 
-    func cleanUp() { try? FileManager.default.removeItem(at: directory) }
+    /// Stops the bridge first: it writes to `input`'s raw descriptor, which closes with the pipe.
+    func cleanUp() {
+      bridge.stop()
+      try? FileManager.default.removeItem(at: directory)
+    }
   }
 
   @Test func bootOutputBeforeTheFirstClientIsDelivered() async throws {
@@ -76,6 +80,26 @@ import VMLabVZ
     let second = try await f.channel()
     defer { Task { await second.stop() } }
     #expect(try await second.wait(for: "while away", since: 0, timeout: .seconds(5)).start == 0)
+  }
+
+  /// `stop` drops the client and closes the listener, after which the bridge no longer writes to
+  /// the guest's input; it is safe twice (the fixture's clean-up calls it again).
+  @Test func stopDropsTheClientAndClosesTheListener() async throws {
+    let f = try Fixture()
+    defer { f.cleanUp() }
+    let channel = try await f.channel()
+    defer { Task { await channel.stop() } }
+    #expect(await eventually { f.bridge.hasClient })
+    f.bridge.stop()
+    #expect(!f.bridge.hasClient)
+    // Refused once the last copy of the listener is gone; a child another test is spawning may
+    // hold one for a few ms (`SpawnWindow`).
+    #expect(
+      await SpawnWindow.eventually {
+        guard let fd = try? UnixStream.connect(path: f.socket) else { return true }
+        close(fd)
+        return false
+      })
   }
 
   @Test func backlogKeepsTheNewestBytes() throws {

@@ -37,7 +37,7 @@ import VMLabSwitch
   /// P3: descriptors past the first in one message are closed, not leaked. Three copies of a
   /// pipe's write end are sent; once the first and the local copies are closed, the read end
   /// sees end of file only if the receiver closed the other two.
-  @Test func extraDescriptorsAreClosed() throws {
+  @Test func extraDescriptorsAreClosed() async throws {
     var pair: [Int32] = [-1, -1]
     #expect(socketpair(AF_UNIX, SOCK_STREAM, 0, &pair) == 0)
     defer {
@@ -52,8 +52,9 @@ import VMLabSwitch
     for fd in copies { close(fd) }
     let received = try #require(try UnixSocket.receiveDescriptor(from: pair[1]))
     close(received)
-    _ = fcntl(pipeEnds[0], F_SETFL, fcntl(pipeEnds[0], F_GETFL) | O_NONBLOCK)
-    var byte: UInt8 = 0
-    #expect(read(pipeEnds[0], &byte, 1) == 0, "a received copy of the write end is still open")
+    // Not at once: a child another test is spawning holds a copy for a few ms (`SpawnWindow`).
+    #expect(
+      await SpawnWindow.reachesEndOfFile(pipeEnds[0]),
+      "a received copy of the write end is still open")
   }
 }

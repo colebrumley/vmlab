@@ -21,7 +21,13 @@ import VMLabCore
       self.context = context
       let input = toServer.fileHandleForReading.fileDescriptor
       let output = fromServer.fileHandleForWriting.fileDescriptor
-      server = Task { try await VMLabServer.run(context: context, input: input, output: output) }
+      // The server uses the raw numbers, so it keeps their pipes alive until it returns: a
+      // session dropped early must not leave it reading or writing numbers reused elsewhere.
+      let pipes = (toServer, fromServer)
+      server = Task {
+        defer { withExtendedLifetime(pipes) {} }
+        try await VMLabServer.run(context: context, input: input, output: output)
+      }
       let handle = fromServer.fileHandleForReading
       let inbox = inbox
       reader = Task {
@@ -77,6 +83,9 @@ import VMLabCore
       try send(.object(["method": .string("notifications/initialized")]))
       return response
     }
+
+    /// A session a failed test never closed still ends its server (end of input).
+    deinit { try? toServer.fileHandleForWriting.close() }
 
     func close() async {
       try? toServer.fileHandleForWriting.close()

@@ -41,11 +41,10 @@ enum PoolSaturation {
   /// `hold`, from threads of its own.
   final class SilentTCPListener: @unchecked Sendable {
     let port: UInt16
-    private let listener: Int32
+    private let listener: TestListener
 
     init(hold: Duration = PoolSaturation.hold) throws {
       let server = socket(AF_INET, SOCK_STREAM, 0)
-      listener = server
       var address = sockaddr_in()
       address.sin_family = sa_family_t(AF_INET)
       address.sin_addr.s_addr = inet_addr("127.0.0.1")
@@ -62,20 +61,18 @@ enum PoolSaturation {
         $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(server, $0, &size) }
       }
       port = UInt16(bigEndian: address.sin_port)
-      PoolSaturation.acceptSilently(server, hold: hold)
+      listener = TestListener(server)
+      PoolSaturation.acceptSilently(listener, hold: hold)
     }
 
-    deinit {
-      shutdown(listener, SHUT_RDWR)
-      close(listener)
-    }
+    deinit { listener.close() }
   }
 
   /// A unix stream listener at a fresh path that accepts every connection, never answers, and
   /// closes each after `hold`.
   final class SilentUnixListener: @unchecked Sendable {
     let path: String
-    private let listener: Int32
+    private let listener: TestListener
 
     init(hold: Duration = PoolSaturation.hold) throws {
       let path = "/tmp/vmlab-pool-\(getpid())-\(UInt32.random(in: 0...UInt32.max)).sock"
@@ -88,7 +85,6 @@ enum PoolSaturation {
         raw[path.utf8.count] = 0
       }
       let server = socket(AF_UNIX, SOCK_STREAM, 0)
-      listener = server
       let bound = withUnsafePointer(to: &address) {
         $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
           bind(server, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
@@ -98,28 +94,23 @@ enum PoolSaturation {
         close(server)
         throw POSIXError(.EADDRINUSE)
       }
-      PoolSaturation.acceptSilently(server, hold: hold)
+      listener = TestListener(server)
+      PoolSaturation.acceptSilently(listener, hold: hold)
     }
 
     deinit {
       unlink(path)
-      shutdown(listener, SHUT_RDWR)
-      close(listener)
+      listener.close()
     }
   }
 
-  /// Accepts on `server` until it is closed; each connection is closed `hold` after its accept.
-  private static func acceptSilently(_ server: Int32, hold: Duration) {
+  /// Accepts on `listener` until it is closed; each connection is closed `hold` after its accept.
+  private static func acceptSilently(_ listener: TestListener, hold: Duration) {
     let micros = useconds_t(
       clamping: hold.components.seconds * 1_000_000 + hold.components.attoseconds
         / 1_000_000_000_000)
     Thread.detachNewThread {
-      while true {
-        let connection = accept(server, nil, nil)
-        if connection < 0 {
-          if errno == EINTR { continue }
-          return
-        }
+      while let connection = listener.accept() {
         Thread.detachNewThread {
           usleep(micros)
           close(connection)

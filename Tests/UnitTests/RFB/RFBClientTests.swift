@@ -235,13 +235,13 @@ func hex(_ s: String) -> [UInt8] {
 
 /// Accepts one connection on a unix socket, writes `reply`, then drains until the peer closes.
 final class OneShotServer: @unchecked Sendable {
-  let fd: Int32
   let path: String
+  private let listener: TestListener
 
   init(path: String, reply: [UInt8]) throws {
     self.path = path
     unlink(path)
-    fd = socket(AF_UNIX, SOCK_STREAM, 0)
+    let fd = socket(AF_UNIX, SOCK_STREAM, 0)
     var addr = sockaddr_un()
     addr.sun_family = sa_family_t(AF_UNIX)
     withUnsafeMutableBytes(of: &addr.sun_path) { buf in
@@ -253,11 +253,14 @@ final class OneShotServer: @unchecked Sendable {
         bind(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
       }
     }
-    guard rc == 0, listen(fd, 1) == 0 else { throw RFBError.connectFailed("bind \(path)") }
-    let listener = fd
+    guard rc == 0, listen(fd, 1) == 0 else {
+      close(fd)
+      throw RFBError.connectFailed("bind \(path)")
+    }
+    let listener = TestListener(fd)
+    self.listener = listener
     Thread.detachNewThread {
-      let conn = accept(listener, nil, nil)
-      guard conn >= 0 else { return }
+      guard let conn = listener.accept() else { return }
       var one: Int32 = 1
       setsockopt(conn, SOL_SOCKET, SO_NOSIGPIPE, &one, socklen_t(MemoryLayout<Int32>.size))
       var sent = 0
@@ -273,7 +276,7 @@ final class OneShotServer: @unchecked Sendable {
   }
 
   func stop() {
-    close(fd)
+    listener.close()
     unlink(path)
   }
 }

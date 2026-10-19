@@ -9,7 +9,7 @@ final class LoopbackGDBStub: @unchecked Sendable {
   enum Others { case ignore, hangUp }
 
   let port: Int
-  private let listener: Int32
+  private let listener: TestListener
   private let lock = NSLock()
   private var _received: [String] = []
   private var client: Int32 = -1
@@ -21,7 +21,6 @@ final class LoopbackGDBStub: @unchecked Sendable {
 
   init(others: Others = .ignore, handler: @escaping FakeGDBStub.Handler) throws {
     let server = socket(AF_INET, SOCK_STREAM, 0)
-    listener = server
     var address = sockaddr_in()
     address.sin_family = sa_family_t(AF_INET)
     address.sin_addr.s_addr = inet_addr("127.0.0.1")
@@ -30,17 +29,25 @@ final class LoopbackGDBStub: @unchecked Sendable {
     let bound = withUnsafePointer(to: &address) {
       $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(server, $0, size) }
     }
-    guard bound == 0, listen(server, 4) == 0 else { throw GDBError.connectionFailed("bind") }
+    guard bound == 0, listen(server, 4) == 0 else {
+      close(server)
+      throw GDBError.connectionFailed("bind")
+    }
     _ = withUnsafeMutablePointer(to: &address) {
       $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(server, $0, &size) }
     }
     port = Int(UInt16(bigEndian: address.sin_port))
-    Thread { [self] in
+    let listener = TestListener(server)
+    self.listener = listener
+    // Weak between clients, so a stub the test has let go closes its listener (deinit).
+    Thread { [weak self] in
       var first = true
       // One client at a time; the next is accepted when it has gone (QEMU's behaviour).
-      while true {
-        let fd = accept(server, nil, nil)
-        guard fd >= 0 else { return }
+      while let fd = listener.accept() {
+        guard let self else {
+          close(fd)
+          return
+        }
         lock.withLock {
           client = fd
           _accepted += 1
@@ -48,8 +55,7 @@ final class LoopbackGDBStub: @unchecked Sendable {
         if first && others == .hangUp {
           Thread {
             while true {
-              let other = accept(server, nil, nil)
-              guard other >= 0 else { return }
+              guard let other = listener.accept() else { return }
               close(other)
             }
           }.start()
@@ -81,6 +87,8 @@ final class LoopbackGDBStub: @unchecked Sendable {
       }
       if !out.isEmpty { _ = out.withUnsafeBytes { write(fd, $0.baseAddress, $0.count) } }
     }
+    // Forgotten before it closes: `hangUpClient` must never shut down a reused number.
+    lock.withLock { client = -1 }
     close(fd)
   }
 
@@ -91,8 +99,5 @@ final class LoopbackGDBStub: @unchecked Sendable {
     }
   }
 
-  deinit {
-    shutdown(listener, SHUT_RDWR)
-    close(listener)
-  }
+  deinit { listener.close() }
 }

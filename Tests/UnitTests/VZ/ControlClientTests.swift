@@ -6,7 +6,7 @@ import VMLabVZ
 /// A one-thread control socket that answers each request line with `answer` (nil: stay silent).
 final class FakeRunner: Sendable {
   let path: String
-  let fd: Int32
+  private let listener: TestListener
 
   init(path: String? = nil, answer: @escaping @Sendable (ControlRequest) -> ControlResponse?)
     throws
@@ -14,12 +14,10 @@ final class FakeRunner: Sendable {
     self.path = path ?? "/tmp/vmlab-cc-\(getpid())-\(UInt32.random(in: 0...UInt32.max)).sock"
     let path = self.path
     unlink(path)
-    fd = try UnixStream.listen(path: path)
-    let fd = fd
+    let listener = TestListener(try UnixStream.listen(path: path))
+    self.listener = listener
     Thread.detachNewThread {
-      while true {
-        let conn = accept(fd, nil, nil)
-        if conn < 0 { return }
+      while let conn = listener.accept() {
         var buffer = LineBuffer()
         while let bytes = try? UnixStream.read(conn), !bytes.isEmpty {
           for line in (try? buffer.feed(bytes)) ?? [] {
@@ -36,8 +34,7 @@ final class FakeRunner: Sendable {
 
   deinit {
     unlink(path)
-    shutdown(fd, SHUT_RDWR)
-    close(fd)
+    listener.close()
   }
 }
 
@@ -114,17 +111,15 @@ final class FakeRunner: Sendable {
 /// `answer` for each request (nil: stay silent). `answer` may change behaviour over time.
 final class ThreadedFakeRunner: Sendable {
   let path: String
-  let fd: Int32
+  private let listener: TestListener
 
   init(answer: @escaping @Sendable (ControlRequest) -> ControlResponse?) throws {
     path = "/tmp/vmlab-tr-\(getpid())-\(UInt32.random(in: 0...UInt32.max)).sock"
     unlink(path)
-    fd = try UnixStream.listen(path: path)
-    let fd = fd
+    let listener = TestListener(try UnixStream.listen(path: path))
+    self.listener = listener
     Thread.detachNewThread {
-      while true {
-        let conn = accept(fd, nil, nil)
-        if conn < 0 { return }
+      while let conn = listener.accept() {
         Thread.detachNewThread {
           var buffer = LineBuffer()
           while let bytes = try? UnixStream.read(conn), !bytes.isEmpty {
@@ -143,8 +138,7 @@ final class ThreadedFakeRunner: Sendable {
 
   deinit {
     unlink(path)
-    shutdown(fd, SHUT_RDWR)
-    close(fd)
+    listener.close()
   }
 }
 

@@ -49,23 +49,25 @@ import VMLabCore
   @Test func aShutdownDescriptorEndsTheWrite() async throws {
     let (fd, peer) = pair()
     defer {
+      // `shut` is awaited before this runs: it uses `fd` until then, and closing first would
+      // let it shut down a number another test has since been given.
       close(fd)
       close(peer)
     }
     let lock = NSLock()
     nonisolated(unsafe) var open = true
-    let shut = Thread {
+    async let shut: Void = OffPool.run {
       Thread.sleep(forTimeInterval: 0.2)
       lock.withLock {
         open = false
         _ = shutdown(fd, SHUT_RDWR)
       }
     }
-    shut.start()
     let started = ContinuousClock.now
     let result = await Self.sendAllOffPool(
       [UInt8](repeating: 1, count: 8 << 20), lock: lock, stall: .seconds(60),
       descriptor: { open ? fd : nil })
+    await shut
     #expect(throws: SocketSend.Failure.self) { try result.get() }
     #expect(ContinuousClock.now - started < .seconds(30))
   }
@@ -73,6 +75,7 @@ import VMLabCore
   @Test func everyByteArrives() async throws {
     let (fd, peer) = pair()
     defer {
+      // `received` is awaited on every path before this runs, so the reader is done with `peer`.
       close(fd)
       close(peer)
     }
