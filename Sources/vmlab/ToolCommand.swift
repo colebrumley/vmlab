@@ -460,9 +460,11 @@ struct CheckpointCommand: ToolCommand {
     func line(_ node: JSONValue, current: String? = nil) -> String {
       let id = node["id"]?.stringValue ?? "?"
       let mark = id == current ? "* " : "  "
-      return mark + Human.pad(node["name"]?.stringValue ?? "?", 20) + Human.pad(id, 11)
-        + Human.pad(node["mode"]?.stringValue ?? "", 5) + " parent "
-        + (node["parent"]?.stringValue ?? "-") + "  " + (node["createdAt"]?.stringValue ?? "")
+      let name: String = Human.pad(node["name"]?.stringValue ?? "?", 20)
+      let mode: String = Human.pad(node["mode"]?.stringValue ?? "", 5)
+      let parent: String = node["parent"]?.stringValue ?? "-"
+      let created: String = node["createdAt"]?.stringValue ?? ""
+      return "\(mark)\(name)\(Human.pad(id, 11))\(mode) parent \(parent)  \(created)"
     }
     if let nodes = v["nodes"]?.arrayValue {
       if nodes.isEmpty { return "no checkpoints" }
