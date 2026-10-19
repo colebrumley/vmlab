@@ -21,7 +21,10 @@ import VMLabVZ
       return try await ToolHandlers.call("vm_file", arguments: .object(arguments), context: context)
         .value
     }
-    let work = guest.home.appending(path: "work")
+    // Outside the test home: the write policy refuses a pull into VMLAB_HOME.
+    let work = URL(filePath: "/tmp/vmlab-test-\(getpid())-files")
+    try? FileManager.default.removeItem(at: work)
+    defer { try? FileManager.default.removeItem(at: work) }
     do {
       try FileManager.default.createDirectory(
         at: work.appending(path: "tree/sub"), withIntermediateDirectories: true)
