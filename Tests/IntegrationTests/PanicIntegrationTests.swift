@@ -37,15 +37,8 @@ struct PanicIntegrationTests {
     try #require(made.isError == false, "\(made.text)")
     try #require(made.value["plan"]?["profile"]?.stringValue == profile, "\(made.text)")
     try #require(made.value["warnings"]?.arrayValue?.isEmpty == true, "\(made.text)")
-    if profile == "vz-linux" {
-      // The kernel console moves to hvc0 (where the serial channel listens) from the second boot:
-      // cloud-init writes the GRUB drop-in on the first.
-      for action in ["stop", "start"] {
-        let result = try await server.call(
-          "vm_lifecycle", ["vm": "crashy", "action": .string(action)])
-        try #require(result.isError == false, "\(result.text)")
-      }
-    }
+    // On vz-linux too this is the first boot: the guest boots its own kernel with console=hvc0
+    // (where the serial channel listens) from the start, not only once GRUB has learnt it.
     let before = try await server.call("vm_inspect", ["vm": "crashy"])
     #expect(before.value["panic"] == .null)
 

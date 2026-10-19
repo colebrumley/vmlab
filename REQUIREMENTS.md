@@ -586,8 +586,12 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   process, start it again, `vm_list` shows the guest `running` and `pause` works.
 
 - [x] **R-601 VZ Linux guest configuration**
-  `VZVirtualMachineConfiguration` from a `VMRecord`: CPUs, memory, `VZEFIBootLoader` with a per-VM
-  variable store for `.disk` boot or `VZLinuxBootLoader` for `.kernel` (R-604), virtio-blk raw
+  `VZVirtualMachineConfiguration` from a `VMRecord`: CPUs, memory, for `.disk` boot
+  `VZLinuxBootLoader` with the guest's own default kernel, initrd and command line (`grub.cfg`'s
+  default entry, read from its disk before every start and staged in `<vm>/boot-cache/`, with
+  `console=hvc0` last), or `VZEFIBootLoader` with a per-VM variable store when the disk's boot
+  cannot be read (a warning and an event say so), `VZLinuxBootLoader` for `.kernel` (R-604),
+  virtio-blk raw
   disk, cloud-init seed as a second virtio-blk device, `VZNATNetworkDeviceAttachment` with a stable
   MAC, virtio-rng, virtio-balloon, `VZVirtioConsoleDeviceSerialPortConfiguration` with pipes to the
   runner (R-602), `VZVirtioEntropyDevice`, and `VZVirtioGraphicsDevice` only when `gui` was granted.
@@ -600,8 +604,14 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
 
 - [x] **R-602 Serial on VZ Linux**
   The runner bridges the console pipes to `<vm>/serial.sock` with the same wire behaviour as
-  R-303 so `SerialChannel` is shared; cloud-init sets `console=hvc0` and a getty on it.
-  **Verify:** integration: `vm_serial wait "login:"`, `write "root\n"`, and the prompt appears.
+  R-303 so `SerialChannel` is shared; cloud-init sets `console=hvc0` (a GRUB drop-in, for the
+  EFI fallback) and a getty on it. A disk boot passes `console=hvc0` itself (R-601), so the
+  kernel's messages and panics are on serial from the first boot. VZ has no early console: a panic
+  before the virtio console driver loads is not captured, and `vm_plan` notes it when `serial` is
+  asked of `vz-linux`.
+  **Verify:** integration: `vm_serial wait "login:"`, `write "root\n"`, and the prompt appears;
+  a fresh guest's first boot shows `Linux version` and `console=hvc0` on serial, and a sysrq panic
+  on its first boot is in `vm_inspect`.
 
 - [x] **R-603 virtiofs shares and Rosetta**
   `shared_dir` → `VZVirtioFileSystemDeviceConfiguration` with tag `share0`, mounted by cloud-init.
@@ -613,7 +623,9 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
 
 - [x] **R-604 Direct kernel boot on VZ Linux**
   `.kernel(kernel, initrd?, cmdline)` → `VZLinuxBootLoader` (uncompressed arm64 `Image`; a gzip
-  kernel is decompressed on registration). `custom_firmware` and `custom_devices` stay `.no` with
+  kernel is decompressed on registration; the disk boot of R-601 decompresses the guest's own
+  gzip kernel into its boot cache, and an EFI zboot kernel boots through EFI). `custom_firmware`
+  and `custom_devices` stay `.no` with
   the reason "Virtualization.framework boots only Apple EFI or a Linux kernel".
   **Verify:** integration: the extracted Debian kernel boots to `login:` on serial.
 
@@ -1018,6 +1030,11 @@ Slow probes on the development host (Apple M1 Max, macOS 26.6.2, QEMU 11.1.2), a
 - `gdb`: `qemu_hvf_gdb`: yes, 2026-10-18
 - `checkpoint_live`: `vz_macos_live_snapshot`: yes, 2026-10-18; `vz_linux_live_snapshot`: yes, 2026-10-18; `qemu_hvf_live_snapshot`: yes, 2026-10-18
 - `net_fast`: `qemu_vmnet`: no, 2026-10-18
+
+`vz-linux` `serial` is the virtio console: a disk boot boots the guest's own kernel with
+`console=hvc0` (R-601, R-602), so it has the kernel's output from the first boot, but no early
+console: a panic before the virtio console driver loads is caught only by `qemu-hvf` (PL011,
+`earlycon`).
 
 ## Appendix C — MCP tools
 

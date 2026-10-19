@@ -51,6 +51,43 @@ import VMLabVZ
     #expect(decisions.graphics == nil)
   }
 
+  /// A disk boot of the guest's own kernel, staged in the boot cache: `VZLinuxBootLoader` with
+  /// the image's command line and `console=hvc0` last, the same disks and devices as EFI.
+  @Test func linuxFromDiskGuest() throws {
+    let entry = DiskBoot.Entry(
+      kernel: "/boot/vmlinuz-6.12.113+deb13-cloud-arm64",
+      initrds: ["/boot/initrd.img-6.12.113+deb13-cloud-arm64"],
+      arguments: ["root=PARTUUID=e1569499-d64f-416a-9daa-296c4d865301", "ro"],
+      source: "/boot/grub/grub.cfg")
+    let staged = DiskBoot.Staged(
+      kernel: "/vmlab/vms/vm-test01/boot-cache/vmlinuz",
+      initrd: "/vmlab/vms/vm-test01/boot-cache/initrd.img",
+      commandLine: DiskBoot.commandLine(entry.arguments), entry: entry, refreshed: true)
+    let config = try VZRunnerConfig.linux(
+      record: Self.record(), vmDirectory: Self.dir, diskKernel: staged)
+    let decisions = try config.decisions(limits: Self.limits)
+    try Self.assertSnapshot(decisions, "decisions-linux-from-disk.json")
+    #expect(
+      decisions.bootLoader
+        == .linuxFromDisk(
+          kernel: staged.kernel, initrd: staged.initrd,
+          commandLine: "root=PARTUUID=e1569499-d64f-416a-9daa-296c4d865301 ro console=hvc0"))
+    let efi = try VZRunnerConfig.linux(record: Self.record(), vmDirectory: Self.dir)
+      .decisions(limits: Self.limits)
+    #expect(decisions.storage == efi.storage && decisions.console == efi.console)
+    // A kernel boot ignores a staged disk kernel; so does a guest without a root disk.
+    let kernel = try VZRunnerConfig.linux(
+      record: Self.record(), vmDirectory: Self.dir,
+      boot: BootSpec(mode: .kernel, kernel: "/k/Image"), diskKernel: staged)
+    #expect(
+      kernel.boot
+        == .linuxKernel(
+          kernel: "/k/Image", initrd: nil, commandLine: VZRunnerConfig.defaultCommandLine))
+    let diskless = try VZRunnerConfig.linux(
+      record: Self.record(), vmDirectory: Self.dir, rootDisk: false, diskKernel: staged)
+    #expect(diskless.boot == .efi(variableStore: "/vmlab/vms/vm-test01/efi-vars.bin"))
+  }
+
   /// `VZVirtioGraphicsDevice` only when `gui` was granted.
   @Test func graphicsOnlyWithGUI() throws {
     let config = try VZRunnerConfig.linux(

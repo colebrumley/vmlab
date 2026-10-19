@@ -1,0 +1,38 @@
+{
+  "bootLoader" : {
+    "linuxFromDisk" : {
+      "commandLine" : "root=PARTUUID=e1569499-d64f-416a-9daa-296c4d865301 ro console=hvc0",
+      "initrd" : "/vmlab/vms/vm-test01/boot-cache/initrd.img",
+      "kernel" : "/vmlab/vms/vm-test01/boot-cache/vmlinuz"
+    }
+  },
+  "console" : {
+    "log" : "/vmlab/vms/vm-test01/console.log",
+    "socket" : "/vmlab/vms/vm-test01/serial.sock"
+  },
+  "cpus" : 2,
+  "entropy" : true,
+  "fileSystems" : [
+
+  ],
+  "machineIdentifier" : "/vmlab/vms/vm-test01/machine-id.bin",
+  "memoryBalloon" : true,
+  "memoryBytes" : 4294967296,
+  "nestedVirtualization" : false,
+  "network" : [
+    {
+      "mac" : "ce:15:5d:70:83:a6"
+    }
+  ],
+  "platform" : "generic",
+  "storage" : [
+    {
+      "path" : "/vmlab/vms/vm-test01/disk.raw",
+      "readOnly" : false
+    },
+    {
+      "path" : "/vmlab/vms/vm-test01/seed.iso",
+      "readOnly" : true
+    }
+  ]
+}

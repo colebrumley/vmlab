@@ -152,9 +152,17 @@ public struct VZBackend: Backend {
     return label.isEmpty ? record.id : label
   }
 
-  /// Launches the runner, then waits up to `leaseTimeout` for the NIC's DHCP lease and records
-  /// it as `runtime.ip` (nil when none appeared; the guest still runs).
   public func start(_ record: VMRecord) async throws(VMLabError) -> VMRuntime {
+    var warnings: [String] = []
+    return try await start(record, warnings: &warnings)
+  }
+
+  /// Launches the runner, then waits up to `leaseTimeout` for the NIC's DHCP lease and records
+  /// it as `runtime.ip` (nil when none appeared; the guest still runs). A disk boot boots the
+  /// guest's own default kernel, read from its disk at every start (`stageDiskKernel`).
+  public func start(_ record: VMRecord, warnings: inout [String]) async throws(VMLabError)
+    -> VMRuntime
+  {
     // A suspended guest comes back from its checkpoint: a held runner the restore loads into.
     if let held = try await startSuspended(record) { return held }
     let dir = store.directory(of: record.id)
@@ -165,13 +173,18 @@ public struct VZBackend: Backend {
     let boot =
       record.boot == nil
       ? nil : try await ImageStore(home: store.home).resolvingBoot(record.boot, image: record.image)
+    let rootDisk = FileManager.default.fileExists(atPath: dir.appending(path: "disk.raw").path)
+    let diskKernel =
+      rootDisk && (boot?.mode ?? .disk) == .disk
+      ? await stageDiskKernel(vmDirectory: dir, warnings: &warnings) : nil
     let config = try VZRunnerConfig.linux(
       record: record, vmDirectory: dir, boot: boot,
       seed: FileManager.default.fileExists(atPath: dir.appending(path: "seed.iso").path),
-      rootDisk: FileManager.default.fileExists(atPath: dir.appending(path: "disk.raw").path),
+      rootDisk: rootDisk,
       segmentAttachSocket: record.segment.map {
         SegmentStore(home: store.home).attachSocket(of: $0.segment).path
-      })
+      },
+      diskKernel: diskKernel)
     await serialChannels.drop(record.id)
     ConsoleRun.markStart(vmDirectory: dir)
     let handle = try await launcher.launch(vmDirectory: dir, config: config)
@@ -188,6 +201,48 @@ public struct VZBackend: Backend {
       runtime.ip = await DHCPLeases.waitForIP(mac: mac, path: leasePath, timeout: leaseTimeout)
     }
     return runtime
+  }
+
+  /// The guest's own default kernel, initrd and command line, read from `<vm>/disk.raw` and
+  /// staged in `<vm>/boot-cache/` (`DiskBoot`), so the kernel speaks on `hvc0` from the first
+  /// boot. Each start logs what it boots; a disk whose boot cannot be read boots through EFI
+  /// (nil) with a warning that the console has the kernel's output only from the second boot.
+  func stageDiskKernel(vmDirectory dir: URL, warnings: inout [String]) async -> DiskBoot.Staged? {
+    let disk = dir.appending(path: "disk.raw")
+    let cache = dir.appending(path: DiskBoot.cacheDirectory)
+    let events = EventLog(vmDirectory: dir)
+    do {
+      let staged = try await OffPool.run("vmlab.vz.diskboot") { () throws(VMLabError) in
+        try DiskBoot.stage(disk: disk, cache: cache)
+      }
+      try? await events.append(Self.bootEvent(staged))
+      return staged
+    } catch {
+      let reason = error.data["raw"]?.stringValue ?? error.message
+      let warning =
+        "boot: the guest's kernel could not be read from its disk (\(reason)), so it boots "
+        + "through EFI and GRUB: kernel messages and panics reach the serial console only once "
+        + "GRUB passes console=hvc0, which cloud-init sets up on the first boot for the next"
+      warnings.append(warning)
+      try? await events.append(VMEvent(level: .warning, kind: .lifecycle, message: warning))
+      return nil
+    }
+  }
+
+  static func bootEvent(_ staged: DiskBoot.Staged) -> VMEvent {
+    let what =
+      ([staged.entry.kernel] + staged.entry.initrds).joined(separator: " and ")
+    return VMEvent(
+      kind: .lifecycle,
+      message: "boot: \(what) from \(staged.entry.source), "
+        + (staged.refreshed ? "staged anew" : "unchanged since the last start")
+        + ", command line: \(staged.commandLine)",
+      data: [
+        "kernel": .string(staged.entry.kernel),
+        "initrds": .array(staged.entry.initrds.map { .string($0) }),
+        "source": .string(staged.entry.source), "commandLine": .string(staged.commandLine),
+        "refreshed": .bool(staged.refreshed),
+      ])
   }
 
   /// The recorded runtime's endpoint, else the guest's DHCP lease, waited for up to `timeout`

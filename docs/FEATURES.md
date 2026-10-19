@@ -75,3 +75,4 @@ column is what the development host recorded (`docs/dev-host-facts.json`, refres
 ## Engine notes
 
 - `vz-macos` boots `tart clone`s of `macos-base` (`ghcr.io/cirruslabs/macos-tahoe-base:latest`, which boots on the development host, R-605) in vmlab's own `vmlab-vz` runner, built from the clone's `config.json`, `nvram.bin` and `disk.img` (Tart 2.x layout); the `tart run --no-graphics` fallback is not used, so pause and checkpoints are the runner's, as on `vz-linux`.
+- `vz-linux` `serial` is the virtio console (`hvc0`); a disk boot boots the guest's own default kernel, initrd and command line, read from its disk at every start, with `VZLinuxBootLoader` and `console=hvc0` last, so the kernel's output is on serial from the first boot (EFI and GRUB, with `console=hvc0` from the second boot, when the disk's boot cannot be read). There is no early console: a panic before the virtio console driver loads is not captured; `qemu-hvf` has a PL011 with `earlycon`.

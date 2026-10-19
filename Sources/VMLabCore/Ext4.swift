@@ -26,6 +26,9 @@ public final class Ext4Volume {
     public var number: UInt32
     public var kind: Kind
     public var size: UInt64
+    /// `i_mtime` and `i_ctime`, in seconds: with the number and size, what tells a file changed.
+    public var modified: UInt32
+    public var changed: UInt32
     var flags: UInt32
     var block: Data
   }
@@ -37,6 +40,8 @@ public final class Ext4Volume {
   let inodeSize: UInt64
   let descriptorSize: UInt64
   let descriptorTable: UInt64
+  /// The file system's UUID (`s_uuid`), as `root=UUID=` spells it.
+  public let uuid: String
 
   static let rootInode: UInt32 = 2
   /// The most a file copied out may hold (CX-8): a kernel or initrd is far smaller, and a size
@@ -93,6 +98,11 @@ public final class Ext4Volume {
     inodeSize = inodeBytes
     descriptorSize = descriptorBytes
     descriptorTable = (UInt64(superblock.u32(20)) + 1) * blockSize
+    let id = superblock.subdata(in: (superblock.startIndex + 0x68)..<(superblock.startIndex + 0x78))
+      .map { String(format: "%02x", $0) }.joined()
+    uuid = [0..<8, 8..<12, 12..<16, 16..<20, 20..<32].map { range in
+      String(id.dropFirst(range.lowerBound).prefix(range.count))
+    }.joined(separator: "-")
   }
 
   deinit { try? handle.close() }
@@ -263,7 +273,8 @@ public final class Ext4Volume {
       }
     let size = UInt64(raw.u32(4)) | UInt64(raw.u32(0x6C)) << 32
     return Inode(
-      number: number, kind: kind, size: size, flags: raw.u32(0x20),
+      number: number, kind: kind, size: size, modified: raw.u32(0x10), changed: raw.u32(0x0C),
+      flags: raw.u32(0x20),
       block: raw.subdata(in: 0x28..<0x28 + 60))
   }
 

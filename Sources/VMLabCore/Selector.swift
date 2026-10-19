@@ -403,6 +403,12 @@ public enum ProfileSelector {
         "VZ guests get a host-reachable address: reach guest ports at the guest's IP rather than "
           + "a forwarded host port")
     }
+    if profile == .vzLinux, asked.contains(.serial) {
+      notes.append(
+        "vz-linux has no early console: a panic before the virtio console driver loads (the "
+          + "first fraction of a second of boot) is not captured on serial; prefer qemu-hvf "
+          + "(PL011 earlycon) when early-boot panics matter")
+    }
     if !unverified.isEmpty {
       let names = unverified.map(\.rawValue).joined(separator: ", ")
       notes.append(

@@ -108,6 +108,47 @@ import VMLabCore
     #expect(config.disks.isEmpty)
   }
 
+  /// A disk boot boots the guest's own kernel, staged from its disk at every start and logged;
+  /// a disk vmlab cannot read boots through EFI with a warning in the result and the events.
+  @Test func diskBootStagesTheGuestKernelOrFallsBackToEFI() async throws {
+    let home = FileManager.default.temporaryDirectory.appending(path: "vmlab-vzdb-\(UUID())")
+    defer { try? FileManager.default.removeItem(at: home) }
+    let store = Store(home: home)
+    let record = try store.create(
+      VMRecord(
+        id: "", profile: .vzLinux, guest: GuestSpec(os: .linux, arch: .arm64),
+        features: [.serial]))
+    let dir = store.directory(of: record.id)
+    let backend = VZBackend(store: store)
+    try DiskBootFixture.build().write(to: dir.appending(path: "disk.raw"))
+
+    var warnings: [String] = []
+    let staged = try #require(await backend.stageDiskKernel(vmDirectory: dir, warnings: &warnings))
+    #expect(warnings.isEmpty)
+    #expect(staged.kernel == dir.appending(path: "boot-cache/vmlinuz").path)
+    let config = try VZRunnerConfig.linux(record: record, vmDirectory: dir, diskKernel: staged)
+    #expect(
+      config.boot
+        == .linuxFromDisk(
+          kernel: staged.kernel, initrd: staged.initrd,
+          commandLine: "root=PARTUUID=0a0b ro console=tty0 console=hvc0"))
+    _ = await backend.stageDiskKernel(vmDirectory: dir, warnings: &warnings)
+    var events = try await EventLog(vmDirectory: dir).read().events
+    #expect(events.map { $0.data?["refreshed"] } == [.bool(true), .bool(false)])
+    #expect(events.first?.message.contains("/boot/vmlinuz-6.10.0") == true)
+
+    try Data(count: 1 << 16).write(to: dir.appending(path: "disk.raw"))
+    #expect(await backend.stageDiskKernel(vmDirectory: dir, warnings: &warnings) == nil)
+    #expect(warnings.count == 1)
+    #expect(warnings.first?.contains("EFI and GRUB") == true)
+    events = try await EventLog(vmDirectory: dir).read().events
+    #expect(events.last?.level == .warning && events.last?.message == warnings.first)
+    // Without a staged kernel a disk boot is EFI, as before.
+    #expect(
+      try VZRunnerConfig.linux(record: record, vmDirectory: dir).boot
+        == .efi(variableStore: dir.appending(path: "efi-vars.bin").path))
+  }
+
   static let tools =
     FileManager.default.isExecutableFile(atPath: "/usr/bin/ssh-keygen")
     && FileManager.default.isExecutableFile(atPath: "/usr/bin/hdiutil")

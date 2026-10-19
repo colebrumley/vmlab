@@ -19,6 +19,9 @@ public protocol Backend: Sendable {
   func create(_ record: VMRecord, plan: Plan) async throws(VMLabError)
   /// Boots the guest (or restores a `suspended` one) and returns the engine's endpoints.
   func start(_ record: VMRecord) async throws(VMLabError) -> VMRuntime
+  /// `start`, adding to `warnings` what the start's result should tell the model (the backend
+  /// has already written each to the VM's event log). The default calls `start` and adds none.
+  func start(_ record: VMRecord, warnings: inout [String]) async throws(VMLabError) -> VMRuntime
   /// Asks the guest to shut down and waits for the engine process to exit.
   func stop(_ record: VMRecord) async throws(VMLabError)
   /// `stop`, waiting at most `grace` (nil: the engine's default, Appendix G) for the guest to
@@ -58,6 +61,12 @@ public protocol Backend: Sendable {
 
 extension Backend {
   public var supportsClone: Bool { false }
+
+  public func start(_ record: VMRecord, warnings: inout [String]) async throws(VMLabError)
+    -> VMRuntime
+  {
+    try await start(record)
+  }
 
   public func stop(_ record: VMRecord, grace: Duration?) async throws(VMLabError) {
     try await stop(record)

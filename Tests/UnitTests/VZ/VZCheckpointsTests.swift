@@ -36,6 +36,48 @@ import VMLabCore
     func cleanUp() { try? FileManager.default.removeItem(at: home) }
   }
 
+  /// A live checkpoint of a guest booted from its disk's own kernel keeps that kernel and
+  /// initrd: the boot cache is rewritten by a later start, and a saved state restores only into
+  /// the machine it was saved from. Other boots keep their configuration as it is.
+  @Test func liveConfigKeepsTheBootCacheFiles() throws {
+    let f = try Fixture()
+    defer { f.cleanUp() }
+    let cache = f.dir.appending(path: DiskBoot.cacheDirectory)
+    try FileManager.default.createDirectory(at: cache, withIntermediateDirectories: true)
+    try Data("kernel v1".utf8).write(to: cache.appending(path: "vmlinuz"))
+    try Data("initrd v1".utf8).write(to: cache.appending(path: "initrd.img"))
+    let live = f.dir.appending(path: "vz-config.json")
+    var config = VZRunnerConfig(
+      cpus: 2, memoryBytes: 1 << 30,
+      boot: .linuxFromDisk(
+        kernel: cache.appending(path: "vmlinuz").path,
+        initrd: cache.appending(path: "initrd.img").path, commandLine: "ro console=hvc0"),
+      disks: [.init(path: f.dir.appending(path: "disk.raw").path)])
+    try config.write(to: live)
+    let folder = f.dir.appending(path: "checkpoints/c1")
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    try VZCheckpoints.saveConfig(live, into: folder)
+    // The next start refreshes the cache; the checkpoint's copies stay as saved.
+    try Data("kernel v2".utf8).write(to: cache.appending(path: "vmlinuz"))
+    let saved = try VZRunnerConfig.read(from: folder.appending(path: VZCheckpoints.configFile))
+    #expect(
+      saved.boot
+        == .linuxFromDisk(
+          kernel: folder.appending(path: "boot-vmlinuz").path,
+          initrd: folder.appending(path: "boot-initrd.img").path, commandLine: "ro console=hvc0"))
+    #expect(try f.file("boot-vmlinuz", in: folder) == "kernel v1")
+    #expect(try f.file("boot-initrd.img", in: folder) == "initrd v1")
+    #expect(saved.disks == config.disks)
+
+    config.boot = .efi(variableStore: f.dir.appending(path: "efi-vars.bin").path)
+    try config.write(to: live)
+    let efi = f.dir.appending(path: "checkpoints/c2")
+    try FileManager.default.createDirectory(at: efi, withIntermediateDirectories: true)
+    try VZCheckpoints.saveConfig(live, into: efi)
+    #expect(try VZRunnerConfig.read(from: efi.appending(path: VZCheckpoints.configFile)) == config)
+    #expect(!FileManager.default.fileExists(atPath: efi.appending(path: "boot-vmlinuz").path))
+  }
+
   @Test func diskCheckpointClonesAndRestoresTheFiles() async throws {
     let f = try Fixture()
     defer { f.cleanUp() }

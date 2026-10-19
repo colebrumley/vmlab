@@ -236,7 +236,7 @@ public actor VMManager {
         warnings.append(warning)
         await log(record.id, warning, level: .warning)
       }
-      runtime = try await backend.start(record)
+      runtime = try await backend.start(record, warnings: &warnings)
       if record.state == .suspended, let started = runtime {
         try await resumeSuspended(record, runtime: started, with: backend)
       }

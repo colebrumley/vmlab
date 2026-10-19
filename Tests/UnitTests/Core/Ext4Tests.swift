@@ -99,19 +99,24 @@ struct Ext4Fixture {
     inode(n, mode: 0x41ED, size: Self.block, flags: 0x80000, block: Self.extents([(0, 1, start)]))
   }
 
+  /// The superblock and the one group descriptor: 32 inodes of 256 bytes from block 4.
+  mutating func superblock() {
+    let sb = 1024
+    put32(32, sb + 0)  // inodes
+    put32(Self.blocks, sb + 4)
+    put32(1, sb + 20)  // first data block
+    put32(0, sb + 24)  // 1 KB blocks
+    put32(32, sb + 40)  // inodes per group
+    put16(0xEF53, sb + 56)
+    put32(1, sb + 76)  // dynamic revision
+    put16(256, sb + 88)
+    put32(0x40, sb + 96)  // extents
+    put32(4, 2 * Self.block + 8)  // inode table at block 4
+  }
+
   static func build() -> Data {
     var f = Ext4Fixture()
-    let sb = 1024
-    f.put32(32, sb + 0)  // inodes
-    f.put32(blocks, sb + 4)
-    f.put32(1, sb + 20)  // first data block
-    f.put32(0, sb + 24)  // 1 KB blocks
-    f.put32(32, sb + 40)  // inodes per group
-    f.put16(0xEF53, sb + 56)
-    f.put32(1, sb + 76)  // dynamic revision
-    f.put16(256, sb + 88)
-    f.put32(0x40, sb + 96)  // extents
-    f.put32(4, 2 * block + 8)  // inode table at block 4
+    f.superblock()
 
     f.directory(
       2, parent: 2, [("boot", 12, 2), ("vmlinuz", 13, 7), ("longlink", 19, 7)])
@@ -149,7 +154,12 @@ struct Ext4Fixture {
       19, mode: 0xA1FF, size: longTarget.utf8.count, flags: 0x80000,
       block: extents([(0, 1, slow)]))
 
-    // GPT: protective space, header at LBA 1, entries at LBA 2, the partition at LBA 64.
+    return disk(f.fs)
+  }
+
+  /// `fs` as the one partition of a GPT disk: protective space, header at LBA 1, entries at
+  /// LBA 2, the partition at LBA 64.
+  static func disk(_ fs: Data) -> Data {
     var disk = Data(count: partitionLBA * 512)
     disk.replaceSubrange(512..<520, with: Data("EFI PART".utf8))
     func p32(_ v: Int, _ at: Int) { for k in 0..<4 { disk[at + k] = UInt8(v >> (8 * k) & 0xff) } }
@@ -159,7 +169,7 @@ struct Ext4Fixture {
     disk[1024] = 0xAF  // a non-zero type GUID
     p32(partitionLBA, 1024 + 32)
     p32(partitionLBA + blocks * 2 - 1, 1024 + 40)
-    return disk + f.fs
+    return disk + fs
   }
 }
 

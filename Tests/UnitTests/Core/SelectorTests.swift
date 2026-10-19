@@ -252,6 +252,15 @@ import Testing
     #expect(plan.notes.contains { $0.contains("host-reachable address") })
   }
 
+  /// vz-linux's console is the virtio console, registered only once its driver loads.
+  @Test func serialOnVZLinuxNotesTheMissingEarlyConsole() throws {
+    let plan = try Self.plan(Self.arm, require: [.serial]).get()
+    #expect(plan.profile == .vzLinux)
+    #expect(plan.notes.contains { $0.contains("no early console") && $0.contains("qemu-hvf") })
+    let quiet = try Self.plan(Self.arm, require: [.execSSH]).get()
+    #expect(!quiet.notes.contains { $0.contains("early console") })
+  }
+
   @Test func unknownProbeAloneIsUnverifiedCapability() throws {
     // gdb with qemu_hvf_gdb unknown still lands on TCG and says why.
     let host = Self.devHost([.qemuHVFGDB: .unknown])

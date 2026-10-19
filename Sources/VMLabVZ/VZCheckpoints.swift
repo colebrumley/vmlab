@@ -6,7 +6,8 @@ import VMLabCore
 /// APFS clones (`clonefile(2)`) of the disk and the auxiliary storage beside it (`disk.raw`,
 /// `efi-vars.bin`, `machine-id.bin`; for `vz-macos` the Tart clone's `disk.img` and `nvram.bin`),
 /// the VM's first-boot record (`provisioningFiles`, CX-26), plus for a live checkpoint the
-/// runner's `saveMachineStateTo` file and the `vz-config.json` the saved machine was built from.
+/// runner's `saveMachineStateTo` file and the `vz-config.json` the saved machine was built from
+/// (with the kernel and initrd it booted, when it booted its disk's own: `saveConfig`).
 ///
 /// `disk` mode works on a guest that is not running: create clones the files out, restore clones
 /// them back. `live` mode needs a running or paused guest: create pauses it, saves its state,
@@ -113,9 +114,7 @@ public struct VZCheckpoints: CheckpointProvider {
     do {
       try await client.save(to: folder.appending(path: Self.stateFile).path)
       try Self.save(files, provisioning: provisioning, into: folder)
-      try Self.clone(
-        VZRunnerPaths(vmDirectory: vmDirectory).config,
-        to: folder.appending(path: Self.configFile))
+      try Self.saveConfig(VZRunnerPaths(vmDirectory: vmDirectory).config, into: folder)
     } catch {
       if state == .running { _ = try? await client.resume() }
       throw error
@@ -159,6 +158,31 @@ public struct VZCheckpoints: CheckpointProvider {
       // The manager keeps the record's runtime; the runner changed under it.
       _ = try? backend.store.update(id: record.id) { $0.runtime = runtime }
     }
+  }
+
+  /// The kernel and initrd a live checkpoint keeps of a guest booted from its own disk's kernel.
+  public static let bootFiles = (kernel: "boot-vmlinuz", initrd: "boot-initrd.img")
+
+  /// Saves the running machine's `vz-config.json` into checkpoint `folder`. A guest booted from
+  /// its disk's own kernel reads it from `<vm>/boot-cache/`, which a later start rewrites when
+  /// the guest's kernel changed; Virtualization.framework restores a saved state only into the
+  /// machine it was saved from, so the kernel and initrd are cloned into the checkpoint
+  /// (`bootFiles`) and the saved configuration names those.
+  static func saveConfig(_ live: URL, into folder: URL) throws(VMLabError) {
+    let target = folder.appending(path: configFile)
+    var config = try VZRunnerConfig.read(from: live)
+    guard case .linuxFromDisk(let kernel, let initrd, let line) = config.boot else {
+      try clone(live, to: target)
+      return
+    }
+    let savedKernel = folder.appending(path: bootFiles.kernel)
+    let savedInitrd = initrd.map { _ in folder.appending(path: bootFiles.initrd) }
+    var pairs: [(from: URL?, to: URL)] = [(URL(filePath: kernel), savedKernel)]
+    if let initrd, let savedInitrd { pairs.append((URL(filePath: initrd), savedInitrd)) }
+    try replace(pairs, using: .system)
+    config.boot = .linuxFromDisk(
+      kernel: savedKernel.path, initrd: savedInitrd?.path, commandLine: line)
+    try config.write(to: target)
   }
 
   // MARK: Helpers

@@ -73,6 +73,9 @@ public struct VZRunnerConfig: Codable, Sendable, Hashable {
     case efi(variableStore: String)
     /// `VZLinuxBootLoader` (R-604): an uncompressed arm64 `Image`, optional initrd, command line.
     case linuxKernel(kernel: String, initrd: String?, commandLine: String)
+    /// `VZLinuxBootLoader` with the kernel and initrd the guest's own disk boots by default,
+    /// staged in `<vm>/boot-cache/` (`DiskBoot`), and its command line with `console=hvc0` last.
+    case linuxFromDisk(kernel: String, initrd: String?, commandLine: String)
     /// `VZMacOSBootLoader` on a `VZMacPlatformConfiguration` (R-605): the base64
     /// `dataRepresentation`s of the hardware model and machine identifier, and the auxiliary
     /// storage (`nvram.bin`) path, all from the guest's Tart clone.
@@ -168,21 +171,27 @@ public struct VZRunnerConfig: Codable, Sendable, Hashable {
   public static let defaultCommandLine = "console=hvc0 root=/dev/vda1 rw"
 
   /// The complete Linux machine for `record` in `vmDirectory`: its resources (Appendix G defaults
-  /// for the rest), `.disk` boot (default) through EFI with `<vm>/efi-vars.bin` or `.kernel` boot
-  /// through `VZLinuxBootLoader`, `<vm>/disk.raw` unless `rootDisk` is false (a kernel-only
+  /// for the rest), `.disk` boot (default) through `VZLinuxBootLoader` with the disk's own kernel
+  /// when `diskKernel` was staged from it, else through EFI with `<vm>/efi-vars.bin`, or `.kernel`
+  /// boot through `VZLinuxBootLoader`, `<vm>/disk.raw` unless `rootDisk` is false (a kernel-only
   /// image), `<vm>/seed.iso` read-only when `seed`, one NAT
   /// NIC with `stableMAC(for:)` unless the network is `none`, the console appended to
   /// `<vm>/console.log` and served on `<vm>/serial.sock`, the record's share (`SharedDirSpec.of`) over virtiofs
   /// as `share0`, Rosetta when the plan asked for `rosetta`, the balloon, and graphics only when `gui` was granted.
   public static func linux(
     record: VMRecord, vmDirectory: URL, boot: BootSpec? = nil, seed: Bool = true,
-    rootDisk: Bool = true, segmentAttachSocket: String? = nil
+    rootDisk: Bool = true, segmentAttachSocket: String? = nil, diskKernel: DiskBoot.Staged? = nil
   ) throws(VMLabError) -> VZRunnerConfig {
     let resources = ResourceLimits.resolve(record.resources, for: .linux)
     let loader: Boot
     switch boot?.mode ?? .disk {
     case .disk:
-      loader = .efi(variableStore: vmDirectory.appending(path: "efi-vars.bin").path)
+      if let diskKernel, rootDisk {
+        loader = .linuxFromDisk(
+          kernel: diskKernel.kernel, initrd: diskKernel.initrd, commandLine: diskKernel.commandLine)
+      } else {
+        loader = .efi(variableStore: vmDirectory.appending(path: "efi-vars.bin").path)
+      }
     case .kernel:
       guard let kernel = boot?.kernel else {
         throw VMLabError.invalidRequest(

@@ -26,6 +26,8 @@ public struct VZMachineDecisions: Codable, Sendable, Hashable {
     case efi(variableStore: String)
     /// `VZLinuxBootLoader`.
     case linux(kernel: String, initrd: String?, commandLine: String)
+    /// `VZLinuxBootLoader` with the kernel and initrd of the guest's own disk, from the boot cache.
+    case linuxFromDisk(kernel: String, initrd: String?, commandLine: String)
     /// `VZMacOSBootLoader`; the platform is then a `VZMacPlatformConfiguration` built from these
     /// (base64 `dataRepresentation`s and the auxiliary storage path).
     case macOS(hardwareModel: String, machineIdentifier: String, auxiliaryStorage: String)
@@ -141,6 +143,8 @@ extension VZRunnerConfig {
       case .efi(let store): .efi(variableStore: store)
       case .linuxKernel(let kernel, let initrd, let line):
         .linux(kernel: kernel, initrd: initrd, commandLine: line)
+      case .linuxFromDisk(let kernel, let initrd, let line):
+        .linuxFromDisk(kernel: kernel, initrd: initrd, commandLine: line)
       case .macOS(let model, let identifier, let auxiliary):
         .macOS(hardwareModel: model, machineIdentifier: identifier, auxiliaryStorage: auxiliary)
       }

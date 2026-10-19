@@ -119,7 +119,8 @@ enum ConfigurationBuilder {
       let loader = VZEFIBootLoader()
       loader.variableStore = store
       machine.bootLoader = loader
-    case .linux(let kernel, let initrd, let commandLine):
+    case .linux(let kernel, let initrd, let commandLine),
+      .linuxFromDisk(let kernel, let initrd, let commandLine):
       let loader = VZLinuxBootLoader(kernelURL: URL(filePath: kernel))
       loader.initialRamdiskURL = initrd.map { URL(filePath: $0) }
       loader.commandLine = commandLine
