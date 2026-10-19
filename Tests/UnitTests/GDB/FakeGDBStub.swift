@@ -19,11 +19,15 @@ final class FakeGDBStub: GDBTransport, @unchecked Sendable {
   private var _nacksFromClient = 0
   private var nacksToSend: Int
   private var _closed = false
+  private var greeting: [String]
 
-  init(nackFirst: Int = 0, handler: @escaping Handler) {
+  /// `greeting` is sent before the ack of the client's first packet, as QEMU sends the stop reply
+  /// of the guest it stopped when a debugger connected.
+  init(nackFirst: Int = 0, greeting: [String] = [], handler: @escaping Handler) {
     (incoming, continuation) = AsyncThrowingStream<[UInt8], any Error>.makeStream()
     self.handler = handler
     self.nacksToSend = nackFirst
+    self.greeting = greeting
   }
 
   var received: [String] { lock.withLock { _received } }
@@ -81,6 +85,8 @@ final class FakeGDBStub: GDBTransport, @unchecked Sendable {
           }
           let payload = String(decoding: GDBPacket.unescape(body), as: UTF8.self)
           _received.append(payload)
+          replies += greeting.map(Self.frame)
+          greeting = []
           replies.append(GDBPacket.ack)
           replies += handler(payload).map(Self.frame)
         default:

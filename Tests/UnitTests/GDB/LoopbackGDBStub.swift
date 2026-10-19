@@ -19,7 +19,12 @@ final class LoopbackGDBStub: @unchecked Sendable {
   /// How many clients the stub has served (or is serving).
   var accepted: Int { lock.withLock { _accepted } }
 
-  init(others: Others = .ignore, handler: @escaping FakeGDBStub.Handler) throws {
+  /// `greeting` gives the packets a client is sent the moment it is accepted, before it says
+  /// anything: QEMU sends a stop reply when it stops a running guest for a new debugger.
+  init(
+    others: Others = .ignore, greeting: @escaping @Sendable () -> [String] = { [] },
+    handler: @escaping FakeGDBStub.Handler
+  ) throws {
     let server = socket(AF_INET, SOCK_STREAM, 0)
     var address = sockaddr_in()
     address.sin_family = sa_family_t(AF_INET)
@@ -61,6 +66,9 @@ final class LoopbackGDBStub: @unchecked Sendable {
           }.start()
         }
         first = false
+        var hello: [UInt8] = []
+        for packet in greeting() { hello += GDBPacket.frame(packet) }
+        if !hello.isEmpty { _ = hello.withUnsafeBytes { write(fd, $0.baseAddress, $0.count) } }
         serve(fd, handler)
       }
     }.start()
@@ -90,6 +98,15 @@ final class LoopbackGDBStub: @unchecked Sendable {
     // Forgotten before it closes: `hangUpClient` must never shut down a reused number.
     lock.withLock { client = -1 }
     close(fd)
+  }
+
+  /// Sends a packet to the served client unasked, as a stub reports a stop.
+  func push(_ payload: String) {
+    lock.withLock {
+      guard client >= 0 else { return }
+      let frame = GDBPacket.frame(payload)
+      _ = frame.withUnsafeBytes { write(client, $0.baseAddress, $0.count) }
+    }
   }
 
   /// Closes the served client's connection from the stub's side.

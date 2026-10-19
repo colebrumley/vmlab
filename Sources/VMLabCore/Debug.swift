@@ -135,6 +135,10 @@ public actor DebugSession {
   struct Saved: Codable, Sendable, Equatable {
     var points: [DebugPoint] = []
     var symbolFile: String?
+    /// Points an insert was sent for and not known to have failed cleanly: the stub may hold
+    /// them although `points` does not list them (a lost reply, a server that exited mid-way).
+    /// They are removed from the stub before anything else on the next connection.
+    var pending: [DebugPoint]?
   }
 
   public nonisolated let vm: String
@@ -260,13 +264,48 @@ public actor DebugSession {
   @discardableResult
   public func add(_ point: DebugPoint) async throws(VMLabError) -> [DebugPoint] {
     if saved.points.contains(where: { $0.matches(point) }) { return saved.points }
+    // Written ahead: a stub that installed the point although its reply never arrived, or a
+    // server that exits before it hears, leaves a point the next connection removes.
+    try setPending(point, true)
     try await withStoppedTarget { target throws(VMLabError) in
-      try await target.insert(point)
+      do throws(VMLabError) {
+        try await target.insert(point)
+      } catch {
+        // The stub may have installed it anyway; take it out so none is left untracked.
+        if await Self.removeIfThere(point, on: target) { try? self.setPending(point, false) }
+        throw error
+      }
     }
     // An overlapping add of the same point may have recorded it while this one waited.
     if !saved.points.contains(where: { $0.matches(point) }) { saved.points.append(point) }
+    saved.pending?.removeAll { $0.matches(point) }
+    if saved.pending?.isEmpty == true { saved.pending = nil }
     try persist()
     return saved.points
+  }
+
+  /// Records `point` as possibly in the stub (`true`) or certainly not (`false`).
+  private func setPending(_ point: DebugPoint, _ isPending: Bool) throws(VMLabError) {
+    var pending = saved.pending ?? []
+    pending.removeAll { $0.matches(point) }
+    if isPending { pending.append(point) }
+    let next = pending.isEmpty ? nil : pending
+    guard next != saved.pending else { return }
+    saved.pending = next
+    try persist()
+  }
+
+  /// Removes `point` from the stub; true when it is certainly gone (removed, or refused by the
+  /// stub because it holds no such point), false when the stub could not be asked.
+  private static func removeIfThere(_ point: DebugPoint, on target: any DebugTarget) async -> Bool {
+    do {
+      try await target.remove(point)
+      return true
+    } catch {
+      // A refusal from a stub still in step; a closed or out-of-step connection says nothing.
+      guard error.code == .engineError else { return false }
+      return await target.isConnected
+    }
   }
 
   /// Removes the recorded point at `address` of `kind`; `invalid_request` when there is none.
@@ -389,6 +428,16 @@ public actor DebugSession {
     busySince = nil
     self.target = target
     lastResume = .none
+    // Points an earlier insert may have left in the stub without the session listing them.
+    for point in saved.pending ?? [] where !saved.points.contains(where: { $0.matches(point) }) {
+      if await Self.removeIfThere(point, on: target) { try? setPending(point, false) }
+    }
+    if let pending = saved.pending,
+      pending.allSatisfy({ point in saved.points.contains { $0.matches(point) } })
+    {
+      saved.pending = nil
+      try? persist()
+    }
     return target
   }
 

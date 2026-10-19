@@ -244,4 +244,78 @@ import VMLabQEMU
     await debug.close()
     await guest.shutdown()
   }
+
+  /// The reply desync, reproduced on `qemu-hvf`: each `Debugger` is a fresh server process's
+  /// session registry. Process A halts, reads registers, steps and continues, then exits with
+  /// the guest running; QEMU stops the guest for B's connection and sends a stop reply unasked.
+  /// B adds a hardware breakpoint on `do_sys_openat2`, continues, and every reply stays its own
+  /// command's: the wait reports the stop at that pc, the remove succeeds, and the guest runs
+  /// on, reachable over SSH. Process C finds no point left behind.
+  @Test(.enabled(if: integrationEnabled), .timeLimit(.minutes(6)))
+  func secondServerBreaksOnAKernelFunctionUnderHVF() async throws {
+    let guest = try await QEMUGuest.boot(
+      features: [.serial, .gdb, .execSSH, .netNAT], memoryGB: 1)
+    func shell(_ command: String) async throws -> ExecResult {
+      let vm = try await guest.manager.attach(guest.record.id)
+      return try await vm.channel(.exec).run(
+        ExecRequest(command: command, timeout: .seconds(30)))
+    }
+    func number(_ value: JSONValue?) -> UInt64? {
+      value?.stringValue.flatMap { UInt64($0.dropFirst(2), radix: 16) }
+    }
+    var debuggers: [Debugger] = []
+    do {
+      let symbol = try await shell(
+        "sudo awk '$3 == \"do_sys_openat2\" { print $1 }' /proc/kallsyms")
+      let address = try #require(
+        UInt64(symbol.stdout.trimmingCharacters(in: .whitespacesAndNewlines), radix: 16))
+      try #require(address != 0, "kallsyms hides addresses: \(symbol)")
+      let hex = "0x" + String(address, radix: 16)
+
+      // Process A.
+      let a = Debugger(guest)
+      debuggers.append(a)
+      #expect(try await a("halt")["stopped"] == .bool(true))
+      #expect(try await a("registers")["registers"]?["pc"] != nil)
+      #expect(try await a("step")["reason"] == .string("step"))
+      #expect(try await a("continue")["stopped"] == .bool(false))
+      await a.close()
+
+      // Process B.
+      let b = Debugger(guest)
+      debuggers.append(b)
+      let added = try await b(
+        "breakpoint_add", ["address": .string(hex), "kind": .string("hardware")])
+      #expect(added["breakpoints"]?.arrayValue?.count == 1)
+      #expect(try await b("breakpoints")["breakpoints"]?.arrayValue?.count == 1)
+      #expect(try await b("continue")["stopped"] == .bool(false))
+      // Any open in the guest reaches it; an exec makes sure one happens.
+      let trigger = Task { try? await shell("cat /etc/hostname") }
+      let stop = try await b("wait", ["timeoutSeconds": .number(60)])
+      #expect(stop["reason"] == .string("breakpoint"), "\(stop)")
+      #expect(number(stop["pc"]) == address)
+      let removed = try await b(
+        "breakpoint_remove", ["address": .string(hex), "kind": .string("hardware")])
+      #expect(removed["breakpoints"] == .array([]))
+      #expect(try await b("continue")["stopped"] == .bool(false))
+      _ = await trigger.value
+      #expect(try await shell("echo reachable").stdout.contains("reachable"))
+      await b.close()
+
+      // Process C.
+      let c = Debugger(guest)
+      debuggers.append(c)
+      let halted = try await c("halt")
+      #expect(halted["stopped"] == .bool(true))
+      #expect(try await c("breakpoints")["breakpoints"] == .array([]))
+      #expect(try await c("continue")["stopped"] == .bool(false))
+      await c.close()
+      #expect(try await shell("echo still").stdout.contains("still"))
+    } catch {
+      for debugger in debuggers { await debugger.close() }
+      await guest.shutdown()
+      throw error
+    }
+    await guest.shutdown()
+  }
 }
