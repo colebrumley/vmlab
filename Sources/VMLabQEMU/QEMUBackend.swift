@@ -186,11 +186,10 @@ public final class QEMUBackend: Backend {
   }
 
   /// Live checkpoints: always under TCG; under HVF when the plan granted `checkpoint_live` or the
-  /// host fact `qemu_hvf_live_snapshot` (in this home's `host-facts.json`) is `yes`.
+  /// host fact `qemu_hvf_live_snapshot` (host-wide, or this home's override) is `yes`.
   public func liveSnapshotsAllowed(_ record: VMRecord) -> Bool {
     if profile == .qemuTCG || record.features.contains(.checkpointLive) { return true }
-    let facts = try? SlowProbes.load(from: SlowProbes.url(home: store.home))
-    return facts?.result(.qemuHVFLiveSnapshot) == .yes
+    return SlowProbes.effective(home: store.home).result(.qemuHVFLiveSnapshot) == .yes
   }
 
   /// The host's QEMU, located on first use.

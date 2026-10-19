@@ -60,6 +60,8 @@ public struct HostProbe: Sendable {
   public var isRoot: @Sendable () -> Bool
   /// Running guests, (macOS, all); pass `Store.runningGuests`. Zero by default.
   public var runningGuests: @Sendable () -> (macOS: Int, total: Int)
+  /// The host-wide slow-probe file (`SlowProbes.hostFile`); `home`'s own file overrides it.
+  public var hostFacts: URL?
 
   public init(
     home: URL,
@@ -70,8 +72,10 @@ public struct HostProbe: Sendable {
       FileManager.default.fileExists(atPath: $0)
     },
     isRoot: @escaping @Sendable () -> Bool = { geteuid() == 0 },
-    runningGuests: @escaping @Sendable () -> (macOS: Int, total: Int) = { (0, 0) }
+    runningGuests: @escaping @Sendable () -> (macOS: Int, total: Int) = { (0, 0) },
+    hostFacts: URL? = SlowProbes.hostFile
   ) {
+    self.hostFacts = hostFacts
     self.home = home
     self.runner = runner
     self.runnerPath = runnerPath
@@ -100,6 +104,13 @@ public struct HostProbe: Sendable {
 
   // MARK: Gathering
 
+  /// The persisted slow probes this home sees (`SlowProbes.effective`), with any probed under
+  /// another macOS or QEMU version reset to `unknown`.
+  public func storedProbes(osVersion: String, qemuVersion: String?) -> SlowProbes {
+    SlowProbes.effective(home: home, hostFile: hostFacts)
+      .invalidated(osVersion: osVersion, qemuVersion: qemuVersion)
+  }
+
   /// Every fast fact, plus the slow probes still valid for this OS and QEMU version.
   public func gather() -> HostFacts {
     let osVersion = Self.parseSwVers(run("/usr/bin/sw_vers") ?? "") ?? "0"
@@ -110,7 +121,6 @@ public struct HostProbe: Sendable {
     let freeMemoryBytes = Double(Self.parseVMStatAvailableBytes(run("/usr/bin/vm_stat") ?? "") ?? 0)
     let qemu = probeQEMU()
     let guests = runningGuests()
-    let stored = (try? SlowProbes.load(from: SlowProbes.url(home: home))) ?? SlowProbes()
     return HostFacts(
       osVersion: osVersion,
       chip: chip,
@@ -127,7 +137,7 @@ public struct HostProbe: Sendable {
       runningMacOSGuests: guests.macOS,
       runningGuests: guests.total,
       imagesBytes: imagesBytes(),
-      probes: stored.invalidated(osVersion: osVersion, qemuVersion: qemu.version)
+      probes: storedProbes(osVersion: osVersion, qemuVersion: qemu.version)
     )
   }
 

@@ -2,8 +2,8 @@
 # Regenerate docs/FEATURES.md (from the matrix) and docs/TOOLS.md (from the tool schemas).
 #   scripts/gen-docs.sh                        write them
 #   scripts/gen-docs.sh --check                fail if the committed files are stale (check.sh runs this)
-#   scripts/gen-docs.sh --refresh-host-facts   copy this host's slow probes (VMLAB_HOME, default
-#                                              ~/.vmlab/host-facts.json) into docs/dev-host-facts.json,
+#   scripts/gen-docs.sh --refresh-host-facts   copy this host's slow probes (host-wide:
+#                                              ~/.vmlab/host-facts.json, or VMLAB_HOST_FACTS) into docs/dev-host-facts.json,
 #                                              then write the docs; commit both
 # FEATURES.md's "verified on dev host" column reads the committed docs/dev-host-facts.json, never
 # ~/.vmlab, so running a slow probe does not make the docs stale in every other worktree.

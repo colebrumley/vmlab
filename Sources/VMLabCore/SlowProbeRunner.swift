@@ -18,10 +18,14 @@ extension SlowProbe {
 public struct SlowProbeContext: Sendable {
   public var home: URL
   public var facts: HostFacts
+  /// Where answers are recorded for the whole host (`SlowProbes.hostFile`); nil records them in
+  /// the home's own file.
+  public var hostFile: URL?
 
-  public init(home: URL, facts: HostFacts) {
+  public init(home: URL, facts: HostFacts, hostFile: URL? = SlowProbes.hostFile) {
     self.home = home
     self.facts = facts
+    self.hostFile = hostFile
   }
 }
 
@@ -84,8 +88,9 @@ public final class SlowProbeRegistry: Sendable {
   public var probes: [SlowProbe] { runners.withLock { $0.keys.sorted() } }
 
   /// Runs every probe in name order, one at a time (each boots a guest), and persists each `yes`
-  /// or `no` to `host-facts.json` under `context.home` with the OS and QEMU versions of
-  /// `context.facts`. A probe without a runner is reported `not_implemented` and left as it was.
+  /// or `no` with the OS and QEMU versions of `context.facts` to the host-wide file
+  /// (`context.hostFile`, else `host-facts.json` under `context.home`), and to the home's own
+  /// file too when it exists, so an override there does not hide the fresh answer. A probe without a runner is reported `not_implemented` and left as it was.
   ///
   /// `docs/FEATURES.md` reads the committed snapshot `docs/dev-host-facts.json`, not this file:
   /// after recording results on the development host, run `scripts/gen-docs.sh
@@ -121,23 +126,31 @@ public final class SlowProbeRegistry: Sendable {
     }
     let answered = outcomes.filter { $0.status == .ran }
     if !answered.isEmpty {
-      let url = SlowProbes.url(home: context.home)
-      var stored = (try? SlowProbes.load(from: url)) ?? SlowProbes()
-      let date = now()
-      for outcome in answered {
-        stored.record(
-          outcome.probe, outcome.result, at: date, osVersion: context.facts.osVersion,
-          qemuVersion: context.facts.qemu.version)
+      let own = SlowProbes.url(home: context.home)
+      var targets = [context.hostFile ?? own]
+      if targets[0].standardizedFileURL != own.standardizedFileURL,
+        FileManager.default.fileExists(atPath: own.path)
+      {
+        targets.append(own)
       }
-      do {
-        try stored.save(to: url)
-      } catch {
-        outcomes = outcomes.map { outcome in
-          guard outcome.status == .ran else { return outcome }
-          var failed = outcome
-          failed.status = .failed
-          failed.note = "could not write \(url.path): \(error)"
-          return failed
+      let date = now()
+      for url in targets {
+        var stored = (try? SlowProbes.load(from: url)) ?? SlowProbes()
+        for outcome in answered {
+          stored.record(
+            outcome.probe, outcome.result, at: date, osVersion: context.facts.osVersion,
+            qemuVersion: context.facts.qemu.version)
+        }
+        do {
+          try stored.save(to: url)
+        } catch {
+          outcomes = outcomes.map { outcome in
+            guard outcome.status == .ran else { return outcome }
+            var failed = outcome
+            failed.status = .failed
+            failed.note = "could not write \(url.path): \(error)"
+            return failed
+          }
         }
       }
     }

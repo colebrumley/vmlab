@@ -26,6 +26,8 @@ struct VMLab: AsyncParsableCommand {
 
   static func main() async {
     VMLabLogging.bootstrap()
+    // Slow probes are host facts: one file for every VMLAB_HOME (VMLAB_HOST_FACTS overrides).
+    SlowProbes.hostFile = SlowProbes.defaultHostFile()
     // Every command, `serve` and the tool subcommands alike, reaches engines through `Backends`.
     Engines.registerAll(store: Store(home: Store.defaultHome()))
     Engines.registerProbes()
@@ -86,11 +88,12 @@ struct GenDocs: ParsableCommand {
       let probes = try probes.map { try SlowProbes.load(from: URL(filePath: $0)) } ?? SlowProbes()
       print(FeatureDocs.markdown(probes: probes), terminator: "")
     case .hostFacts:
-      // This host's slow probes (VMLAB_HOME, default ~/.vmlab), in the snapshot's format;
+      // This host's slow probes (the host-wide file, ~/.vmlab or VMLAB_HOST_FACTS), in the
+      // snapshot's format;
       // `scripts/gen-docs.sh --refresh-host-facts` writes them to docs/dev-host-facts.json.
       // A missing file is refused rather than read as all-unknown, so a refresh from the wrong
       // VMLAB_HOME cannot wipe the committed snapshot.
-      let url = SlowProbes.url(home: Store.defaultHome())
+      let url = SlowProbes.hostFile ?? SlowProbes.url(home: Store.defaultHome())
       guard FileManager.default.fileExists(atPath: url.path) else {
         throw ValidationError("no slow probes recorded at \(url.path)")
       }

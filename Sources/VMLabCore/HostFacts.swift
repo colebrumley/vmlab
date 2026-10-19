@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 
 /// The answer of a slow probe (Appendix E). `unknown` counts as `no` for selection and is reported
 /// as `unverified` in `vm_plan` output.
@@ -50,8 +51,13 @@ public struct ProbeRecord: Codable, Sendable, Equatable {
   }
 }
 
-/// The contents of `VMLAB_HOME/host-facts.json`: slow probe results that survive server restarts.
+/// The contents of a `host-facts.json`: slow probe results that survive server restarts.
 /// A probe missing from the file is `unknown`; keys this version does not know are ignored.
+///
+/// Slow probes are facts about the host, so they live in one host-wide file (`hostFile`:
+/// `~/.vmlab/host-facts.json` whatever `VMLAB_HOME` says, or `VMLAB_HOST_FACTS`), and a fresh or
+/// alternate home sees them at once. A home's own `host-facts.json` is read only as an override
+/// (`effective`). Results still reset to `unknown` when macOS or QEMU changes (`invalidated`).
 public struct SlowProbes: Sendable, Equatable {
   public static let fileName = "host-facts.json"
   public static let currentSchemaVersion = 1
@@ -96,6 +102,41 @@ public struct SlowProbes: Sendable, Equatable {
   }
 
   public static func url(home: URL) -> URL { home.appending(path: fileName) }
+
+  private static let hostFileStorage = Mutex<URL?>(nil)
+
+  /// The host-wide file, or nil for none (then each home's own file is all there is). None by
+  /// default, so library users and tests never read the real host's file; `vmlab` sets it to
+  /// `defaultHostFile()` at startup.
+  public static var hostFile: URL? {
+    get { hostFileStorage.withLock { $0 } }
+    set { hostFileStorage.withLock { $0 = newValue } }
+  }
+
+  /// `VMLAB_HOST_FACTS` when set (empty means none), else `~/.vmlab/host-facts.json`, the default
+  /// home's file, whatever `VMLAB_HOME` says.
+  public static func defaultHostFile(
+    environment: [String: String] = ProcessInfo.processInfo.environment
+  ) -> URL? {
+    if let path = environment["VMLAB_HOST_FACTS"] {
+      return path.isEmpty ? nil : URL(filePath: path)
+    }
+    return FileManager.default.homeDirectoryForCurrentUser.appending(path: ".vmlab/\(fileName)")
+  }
+
+  /// The probes a home sees: the host-wide file's, with every answered (not `unknown`) record of
+  /// the home's own file on top. Unreadable files count as empty.
+  public static func effective(home: URL, hostFile: URL? = SlowProbes.hostFile) -> SlowProbes {
+    let own = url(home: home)
+    var merged =
+      hostFile.flatMap { $0.standardizedFileURL == own.standardizedFileURL ? nil : $0 }
+      .flatMap { try? load(from: $0) } ?? SlowProbes()
+    let local = (try? load(from: own)) ?? SlowProbes()
+    for (probe, record) in local.records where record.result != .unknown {
+      merged.records[probe] = record
+    }
+    return merged
+  }
 
   /// Reads `host-facts.json`; a missing file means every probe is `unknown`.
   public static func load(from url: URL) throws -> SlowProbes {
