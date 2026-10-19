@@ -49,7 +49,8 @@ public struct GDBRegister: Sendable, Equatable {
     self.group = group
   }
 
-  public var byteSize: Int { (bitSize + 7) / 8 }
+  /// Whole bytes holding `bitSize` bits; 0 for a non-positive size. Never overflows.
+  public var byteSize: Int { bitSize <= 0 ? 0 : bitSize / 8 + (bitSize % 8 == 0 ? 0 : 1) }
 }
 
 /// A register's contents, in target byte order (little-endian on both supported architectures).
@@ -120,10 +121,11 @@ public struct RegisterMap: Sendable, Equatable {
     var readings: [RegisterReading] = []
     var offset = 0
     for register in registers {
-      let width = register.byteSize * 2
-      guard offset + width <= chars.count else { break }
-      let field = chars[offset..<offset + width]
-      offset += width
+      let (width, wide) = register.byteSize.multipliedReportingOverflow(by: 2)
+      let (end, past) = offset.addingReportingOverflow(width)
+      guard !wide, !past, register.byteSize > 0, end <= chars.count else { break }
+      let field = chars[offset..<end]
+      offset = end
       if field.allSatisfy({ $0 == 0x78 || $0 == 0x58 }) {
         readings.append(RegisterReading(register: register, value: nil))
       } else if let bytes = Hex.decode(String(decoding: field, as: UTF8.self)) {
@@ -142,9 +144,11 @@ public struct RegisterMap: Sendable, Equatable {
     }
   }
 
-  /// The `bitsize` a description may give a register: the widest real registers (SVE/SME) are
-  /// 2048 bits, so 4096 leaves room while keeping byte arithmetic far from overflow.
-  public static let bitSizeLimit = 1...4096
+  /// The `bitsize` a description may give a register. The widest real one is SME's `za`, an
+  /// SVL x SVL byte matrix: 524288 bits at the largest vector length (QEMU `-cpu max`). 2^22 bits
+  /// leaves room for that while a whole map's byte arithmetic (at most 65536 registers of 512 KiB)
+  /// stays far from `Int` overflow.
+  public static let bitSizeLimit = 1...(1 << 22)
   /// The register numbers a description may use (`p`/`P` take any hex number; real targets use
   /// a few hundred).
   public static let registerNumberLimit = 0...65535

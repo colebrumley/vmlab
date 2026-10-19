@@ -126,7 +126,7 @@ import VMLabGDB
   @Test(arguments: [
     "<reg name=\"x0\" bitsize=\"-64\"/>",
     "<reg name=\"x0\" bitsize=\"0\"/>",
-    "<reg name=\"x0\" bitsize=\"4097\"/>",
+    "<reg name=\"x0\" bitsize=\"4194305\"/>",
     "<reg name=\"x0\" bitsize=\"9223372036854775807\"/>",
     "<reg name=\"x0\" bitsize=\"64\" regnum=\"-1\"/>",
     "<reg name=\"x0\" bitsize=\"64\" regnum=\"65536\"/>",
@@ -147,5 +147,56 @@ import VMLabGDB
       + "<reg name=\"b\" bitsize=\"1\" regnum=\"0\"/></feature></target>"
     let map = try RegisterMap.build(targetXML: xml)
     #expect(map.registers.map(\.byteSize) == [1, 512])
+  }
+}
+
+/// QEMU's `-cpu max` (TCG) describes SME: `za` is an SVL x SVL byte matrix, 524288 bits at the
+/// largest vector length, in its own feature that `g` does not carry (it is read with `p`).
+@Suite struct TargetDescriptionSMETests {
+  static let core = GDBArchitecture.arm64.builtinDescription.xml
+    .replacingOccurrences(
+      of: "</feature>\n</target>", with: "</feature>\n<xi:include href=\"sme.xml\"/>\n</target>")
+  static let sme = """
+    <?xml version="1.0"?>
+    <!DOCTYPE target SYSTEM "gdb-target.dtd">
+    <feature name="org.gnu.gdb.aarch64.sme">
+    <vector id="sme_bv" type="uint8" count="256"/>
+    <vector id="sme_bvv" type="sme_bv" count="256"/>
+    <reg name="svg" bitsize="64" type="int" regnum="91"/>
+    <reg name="svcr" bitsize="64" type="int"/>
+    <reg name="za" bitsize="524288" type="sme_bvv"/>
+    </feature>
+    """
+
+  @Test func aSMEDescriptionWithAFullWidthZABuilds() throws {
+    let map = try RegisterMap.build(targetXML: Self.core, annexes: ["sme.xml": Self.sme])
+    let za = try #require(map.register(named: "za"))
+    #expect(za.number == 93)
+    #expect(za.bitSize == 524288)
+    #expect(za.byteSize == 65536)
+    #expect(map.register(named: "pc")?.number == 32)
+  }
+
+  @Test func aCoreOnlyGReplyStillDecodesWithZAInTheMap() throws {
+    let map = try RegisterMap.build(targetXML: Self.core, annexes: ["sme.xml": Self.sme])
+    let reply = String(repeating: "01", count: 8 * 33) + "00000080"
+    let readings = try map.decode(registersReply: reply)
+    #expect(readings.count == 34)
+    #expect(readings.last?.register.name == "cpsr")
+    #expect(!readings.contains { $0.register.name == "za" })
+  }
+
+  @Test func theLargestAllowedRegisterBuildsAndOneBitMoreDoesNot() throws {
+    let limit = RegisterMap.bitSizeLimit.upperBound
+    let ok = "<target><feature name=\"f\"><reg name=\"z\" bitsize=\"\(limit)\"/></feature></target>"
+    #expect(try RegisterMap.build(targetXML: ok).registers.first?.byteSize == limit / 8)
+    let over = ok.replacingOccurrences(of: "\(limit)", with: "\(limit + 1)")
+    #expect(throws: GDBError.self) { try RegisterMap.build(targetXML: over) }
+  }
+
+  @Test func byteSizeNeverTrapsForAHandBuiltRegister() {
+    #expect(GDBRegister(name: "x", number: 0, bitSize: .max).byteSize == Int.max / 8 + 1)
+    #expect(GDBRegister(name: "x", number: 0, bitSize: -8).byteSize == 0)
+    #expect(GDBRegister(name: "x", number: 0, bitSize: 9).byteSize == 2)
   }
 }
