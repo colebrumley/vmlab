@@ -14,7 +14,8 @@ import VMLabGDB
     #expect(GDBPacket.escape(payload) == escaped)
     #expect(GDBPacket.unescape(escaped) == payload)
     let sum = Hex.byte(GDBPacket.checksum(escaped))
-    #expect(GDBPacket.frame(payload) == [0x24] + escaped + [0x23] + Array(sum.utf8))
+    let framed: [UInt8] = [0x24] + escaped + [0x23] + Array(sum.utf8)
+    #expect(GDBPacket.frame(payload) == framed)
   }
 
   @Test func expandsRunLengthEncoding() {

@@ -11,19 +11,11 @@ import Testing
     let vm = root.appending(path: "vms/vm-a")
     try FileManager.default.createDirectory(at: vm, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: root) }
-    let fake = root.appending(path: "qemu-system-aarch64")
-    try FileManager.default.copyItem(atPath: "/bin/bash", toPath: fake.path)
-    // bash, not /bin/sh: macOS's sh is a shim that re-execs bash, after which the process's
-    // path is /bin/bash. A copied platform binary keeps Apple's signature, which the kernel
-    // rejects at its new path (SIGKILL at exec); an ad-hoc signature makes the copy run.
-    let sign = try await TestProcess.run(
-      "/usr/bin/codesign", ["--force", "--sign", "-", fake.path])
-    try #require(sign.status == 0, "codesign of the fake engine failed")
     let engine = Process()
-    engine.executableURL = fake
-    // A bash named like QEMU that stays the process (`; :` keeps it from exec'ing sleep); its
-    // `$1` stands for QEMU's -pidfile argument inside the VM directory.
-    engine.arguments = ["-c", "sleep 30; :", "qemu", vm.appending(path: "qemu.pid").path]
+    engine.executableURL = try await FakeEngine.build(in: root)
+    // A sleeper named like QEMU; its second argument stands for QEMU's -pidfile argument
+    // inside the VM directory.
+    engine.arguments = ["qemu", vm.appending(path: "qemu.pid").path]
     try await TestProcess.start(engine)
     defer { if engine.isRunning { engine.terminate() } }
     let pid = engine.processIdentifier

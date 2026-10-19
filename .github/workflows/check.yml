@@ -3,10 +3,14 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 jobs:
   check:
     # Unit tests only: hosted runners cannot run VMs.
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
+      # The image defaults to Xcode 16.4 (Swift 6.1); the package needs Swift 6.2 (exit tests).
+      - run: sudo xcode-select -s /Applications/Xcode_26.3.app
+      - run: swift --version
       - run: scripts/check.sh

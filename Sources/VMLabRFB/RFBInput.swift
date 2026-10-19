@@ -17,7 +17,12 @@ public struct PointerButtons: OptionSet, Sendable, Hashable {
 public enum RFBInput {
   /// `KeyEvent`: type 4, down flag, two bytes padding, keysym.
   public static func keyEvent(_ keysym: UInt32, down: Bool) -> [UInt8] {
-    [4, down ? 1 : 0, 0, 0] + (0..<4).map { UInt8((keysym >> (24 - 8 * $0)) & 0xff) }
+    let flag: UInt8 = down ? 1 : 0
+    return [
+      4, flag, 0, 0,
+      UInt8(truncatingIfNeeded: keysym >> 24), UInt8(truncatingIfNeeded: keysym >> 16),
+      UInt8(truncatingIfNeeded: keysym >> 8), UInt8(truncatingIfNeeded: keysym),
+    ]
   }
 
   /// `PointerEvent`: type 5, button mask, x, y. Coordinates are clamped to the 16-bit range.
