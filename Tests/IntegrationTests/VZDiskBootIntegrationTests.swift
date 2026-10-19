@@ -36,10 +36,10 @@ import VMLabVZ
       profile: .vzLinux, guest: GuestSpec(os: .linux, arch: .arm64),
       resources: ResourceSpec(cpus: 2, memoryGB: 2), features: [.execSSH, .serial],
       estimatedStartupSeconds: 30)
-    let created = try await context.manager.create(
-      VMRecord(
-        id: "", profile: .vzLinux, guest: plan.guest, features: [], image: "debian-13-arm64"),
-      plan: plan)
+    var draft = VMRecord(
+      id: "", profile: .vzLinux, guest: plan.guest, features: [], image: "debian-13-arm64")
+    draft.provision = ProvisionSpec(packages: ["jq"])
+    let created = try await context.manager.create(draft, plan: plan)
     let dir = store.directory(of: created.id)
     defer {
       if let pid = try? store.load(id: created.id).runtime?.pid { kill(pid, SIGKILL) }
@@ -95,6 +95,20 @@ import VMLabVZ
     #expect(cmdline == line, "the guest booted with \(cmdline)")
     var events = try await bootEvents()
     #expect(events.map { $0.data?["refreshed"] } == [.bool(true)])
+
+    // Without EFI runtime services (no /sys/firmware/efi) apt still works: the provisioned
+    // package is in, and the boot loader packages reinstall (their postinst runs grub-install,
+    // which only warns that it cannot set EFI variables) with dpkg left consistent.
+    let apt = await VZGuestSSH.poll(
+      key: key, host: ip,
+      command: "cloud-init status --wait >/dev/null; jq --version && "
+        + "test ! -e /sys/firmware/efi && sudo apt-get update -q >/dev/null && "
+        + "sudo DEBIAN_FRONTEND=noninteractive apt-get install --reinstall -y "
+        + "$(dpkg-query -W -f '${db:Status-Abbrev}${Package}\\n' 'grub*' 'shim*' "
+        + "| sed -n 's/^ii *//p') >/dev/null && "
+        + "test -z \"$(sudo dpkg --audit)\" && echo apt-ok",
+      within: .seconds(600))
+    #expect(apt?.output.contains("apt-ok") == true, "\(apt?.output ?? "ssh failed")")
 
     // The guest changes its boot the usual way (a GRUB drop-in and update-grub) and touches
     // its kernel; it shuts down cleanly so the file system is consistent on disk.
