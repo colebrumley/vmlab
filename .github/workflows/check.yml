@@ -9,4 +9,11 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
+      - name: Toolchain
+        run: |
+          ls -d /Applications/Xcode*.app || true
+          xcode-select -p
+          swift --version
+          sw_vers
+          for t in qemu-img qemu-system-aarch64 tart ruby perl hdiutil codesign; do printf '%s: ' "$t"; command -v "$t" || echo missing; done
       - run: scripts/check.sh
