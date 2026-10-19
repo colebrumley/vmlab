@@ -107,6 +107,7 @@ public struct VZBackend: Backend {
       rosetta: VZRunnerConfig.wantsRosetta(record)
     ).provisioned(record.provision)
     seed.applyTemplate(pulled.template)
+    seed.rootConsole = plan.grants(.serial)
     if let segment = record.segment, record.network.mode != .disabled {
       seed.segment = SegmentNIC(
         primaryMAC: VZRunnerConfig.stableMAC(for: record.id), mac: segment.mac,

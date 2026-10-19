@@ -1,6 +1,9 @@
 import Foundation
 import Testing
 import VMLabCore
+import VMLabQEMU
+
+@testable import VMLabMCP
 
 @Suite struct SerialIntegrationTests {
   /// CPU seconds used by this process's reaped children (the `vmlab-match` helpers here).
@@ -50,9 +53,13 @@ import VMLabCore
       ["VMLAB_HOME": home.path]) { $1 }
     let out = Pipe()
     process.standardOutput = out
+    // A termination handler, not waitUntilExit: that spins a run loop a detached task lacks.
+    let exited = AsyncStream<Void> { continuation in
+      process.terminationHandler = { _ in continuation.finish() }
+    }
     try process.run()
     let data = await Task.detached { out.fileHandleForReading.readDataToEndOfFile() }.value
-    await Task.detached { process.waitUntilExit() }.value
+    for await _ in exited {}
     #expect(process.terminationStatus == 0, "vmlab serial \(arguments)")
     return try JSONDecoder().decode(JSONValue.self, from: data)
   }
@@ -64,25 +71,81 @@ import VMLabCore
   func cliCallsShareOffsetsThroughTheConsoleLog() async throws {
     let guest = try await QEMUGuest.boot(features: [.serial, .netNAT])
     do {
-      _ = try await guest.machine.serial.wait(for: "login:", since: 0, timeout: .seconds(120))
+      _ = try await guest.machine.serial.wait(
+        for: "(automatic login)", since: 0, timeout: .seconds(120))
       // Let go of the socket, as a CLI call does when it exits.
       await guest.machine.disconnect()
       let name = guest.record.name
       let boot = try await Self.cli(guest.home, [name, "wait", "login:", "--since", "0"])
       #expect(boot["matched"] == "login:")
-      let written = try await Self.cli(guest.home, [name, "write", "\\n"])
+      let written = try await Self.cli(guest.home, [name, "write", "echo vmlab-$((6*7))\\n"])
       let mark = try #require(written["offset"]?.numberValue)
       try await Task.sleep(for: .seconds(2))  // the guest answers while nobody listens
       let reply = try await Self.cli(
-        guest.home, [name, "wait", "login:", "--since", String(Int(mark)), "--timeout", "30"])
-      #expect(reply["matched"] == "login:")
+        guest.home, [name, "wait", "vmlab-42", "--since", String(Int(mark)), "--timeout", "30"])
+      #expect(reply["matched"] == "vmlab-42")
       #expect((reply["offset"]?.numberValue ?? 0) > mark)
-      let tail = try await Self.cli(guest.home, [name, "tail", "--lines", "2"])
-      #expect(tail["text"]?.stringValue?.contains("login:") == true)
+      let tail = try await Self.cli(guest.home, [name, "tail", "--lines", "3"])
+      #expect(tail["text"]?.stringValue?.contains("vmlab-42") == true)
     } catch {
       await guest.shutdown()
       throw error
     }
     await guest.shutdown()
+  }
+
+  /// The serial console is a root shell on a Linux guest granted `serial` (cloud-init's getty
+  /// autologin), so it is usable when SSH is not: through `vm_serial`, `id` says uid 0.
+  @Test(.enabled(if: integrationEnabled), .timeLimit(.minutes(4)))
+  func serialConsoleIsARootShell() async throws {
+    let home = URL(filePath: "/tmp/vmlab-test-\(getpid())-rc")
+    try? FileManager.default.removeItem(at: home)
+    try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+    try FileManager.default.createSymbolicLink(
+      at: home.appending(path: "images"),
+      withDestinationURL: FileManager.default.homeDirectoryForCurrentUser.appending(
+        path: ".vmlab/images"))
+    let store = Store(home: home)
+    let registry = BackendRegistry()
+    let backend = QEMUBackend(profile: .qemuHVF, store: store)
+    registry.register(backend)
+    let context = ToolContext(home: home, backends: registry, startGate: IntegrationAdmission.gate)
+    let plan = Plan(
+      profile: .qemuHVF, guest: GuestSpec(os: .linux, arch: .arm64),
+      resources: ResourceSpec(cpus: 2, memoryGB: 2, diskGB: 8), features: [.serial, .netNAT],
+      estimatedStartupSeconds: 15)
+    let created = try await context.manager.create(
+      VMRecord(
+        id: "", name: "rootcon", profile: .qemuHVF, guest: plan.guest, features: plan.features,
+        image: "debian-13-arm64"), plan: plan)
+    defer {
+      if let record = try? store.load(id: created.id), let pid = record.runtime?.pid {
+        kill(pid, SIGKILL)
+      }
+      try? FileManager.default.removeItem(at: home)
+    }
+    _ = try await context.manager.performAdmitted(.start, on: created.id)
+    func serial(_ arguments: [String: JSONValue]) async throws -> ToolResult {
+      var arguments = arguments
+      arguments["vm"] = .string(created.id)
+      return try await ToolHandlers.call(
+        "vm_serial", arguments: .object(arguments), context: context)
+    }
+    _ = try await serial([
+      "action": "wait", "pattern": "(automatic login)", "timeoutSeconds": 120,
+    ])
+    let enter = try await serial(["action": "write", "text": "\n"])
+    let prompt = try await serial([
+      "action": "wait", "pattern": "root@", "since": enter.value["offset"] ?? 0,
+      "timeoutSeconds": 30,
+    ])
+    #expect(prompt.value["matched"] == "root@")
+    let id = try await serial(["action": "write", "text": "id\n"])
+    let answer = try await serial([
+      "action": "wait", "pattern": "uid=[0-9]+", "since": id.value["offset"] ?? 0,
+      "timeoutSeconds": 30,
+    ])
+    #expect(answer.value["matched"] == "uid=0")
+    _ = try? await backend.kill(store.load(id: created.id))
   }
 }

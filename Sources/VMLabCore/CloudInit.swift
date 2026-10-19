@@ -1,9 +1,10 @@
 import Foundation
 
-/// The guest's serial console device: `ttyAMA0` on QEMU's `virt` PL011, `hvc0` on a virtio console
-/// (Virtualization.framework).
+/// The guest's serial console device: `ttyAMA0` on QEMU's arm64 `virt` PL011, `ttyS0` on QEMU's
+/// 16550 UART (x86_64, riscv64), `hvc0` on a virtio console (Virtualization.framework).
 public enum ConsoleDevice: String, Codable, Sendable, CaseIterable {
   case ttyAMA0
+  case ttyS0
   case hvc0
 }
 
@@ -156,6 +157,10 @@ public struct CloudInitConfig: Codable, Sendable, Hashable {
   /// The request's `provision.runCommands` (R-1001), run as root in order after vmlab's own
   /// `runcmd` entries.
   public var runCommands: [String]
+  /// The plan granted `serial`: getty logs root in on `console`, so the serial console is a root
+  /// shell when SSH is gone (the cloud images have no password to log in with). It is the host
+  /// user's own disposable VM.
+  public var rootConsole: Bool = false
 
   public init(
     instanceID: String, hostname: String, user: String, sshPublicKey: String,
@@ -224,6 +229,22 @@ public enum CloudInit {
   public static let hvc0BootCommand =
     "test -e \(hvc0GrubDropIn) || { mkdir -p /etc/default/grub.d && "
     + "printf '%s\\n' '\(hvc0GrubLine)' > \(hvc0GrubDropIn) && update-grub; }"
+
+  /// The `bootcmd` that makes getty log root in on `device` (static text, no input): a systemd
+  /// drop-in replacing Debian's `serial-getty@.service` `ExecStart` with one that adds
+  /// `--autologin root`, then a `daemon-reload`. bootcmd runs in cloud-init's first stage, before
+  /// `systemd-user-sessions` lets getty start, so even the first boot's console is a shell.
+  public static func autologinBootCommand(_ device: ConsoleDevice) -> String {
+    let directory = "/etc/systemd/system/serial-getty@\(device.rawValue).service.d"
+    let lines = [
+      "[Service]", "ExecStart=",
+      "ExecStart=-/sbin/agetty --autologin root --noclear --keep-baud 115200,57600,38400,9600 "
+        + "%I $TERM",
+    ]
+    return "test -e \(directory)/autologin.conf || { mkdir -p \(directory) && printf '%s\\n' "
+      + lines.map { "'\($0)'" }.joined(separator: " ")
+      + " > \(directory)/autologin.conf && systemctl daemon-reload; }"
+  }
 
   /// Our `#cloud-config` document, before any user part.
   public static func cloudConfig(_ config: CloudInitConfig) -> String {
@@ -300,6 +321,7 @@ public enum CloudInit {
     // early in the first boot, before the package install, so a slow first boot cannot delay it.
     var bootcmd: [YAML] =
       config.console == .hvc0 ? [.string(hvc0BootCommand)] : []
+    if config.rootConsole { bootcmd.append(.string(autologinBootCommand(config.console))) }
     // R-804: a template's parent key goes before sshd starts.
     if let revoke = revokeCommand(user: config.user, keys: config.revokedKeys) {
       bootcmd.insert(revoke, at: 0)

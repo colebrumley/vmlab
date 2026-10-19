@@ -114,13 +114,17 @@ session, a dialog no command can answer). A screenshot costs far more than `vm_e
 less: to check whether a window manager runs, `pgrep` it; to read an error, read the log.
 
 When the display is dead, use serial. A desktop that crashed, a guest stuck before its network
-came up, a kernel panic: `vm_serial tail` shows what happened, and `vm_serial write` lets you log
-in on the console. On VZ Linux guests the screen is an in-guest VNC server, so it dies with the
+came up, a kernel panic: `vm_serial tail` shows what happened, and `vm_serial write` runs commands
+on the console. On a Linux guest with `serial`, the console is a root shell (getty logs root in on
+it; this is the user's own disposable VM, and the cloud images have no password to log in with):
+`write "\n"`, wait for `# `, then type commands and `wait` for their output. On VZ Linux guests the screen is an in-guest VNC server, so it dies with the
 guest's X session; on QEMU (`gui_preboot`) the screen is the virtual hardware and shows the text
 console even when X is gone.
 
 Every `vm_serial` and `vm_computer` result tells you how to continue: `vm_serial` returns an
-`offset` to pass as `since` next time, so you read only new text; `vm_computer screenshot` returns
+`offset` to pass as `since` next time, so you read only new text (offsets are positions in the VM's
+console log, so they hold across calls, the CLI and server restarts; without `since`, `read` and
+`wait` start at the VM's last start); `vm_computer screenshot` returns
 an `id` to pass as `diffFrom`, so the next one returns only the region that changed.
 
 **Host paths.** vmlab reads host files you name (`vm_file push`, `images register`, `boot`, disk

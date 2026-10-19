@@ -324,7 +324,7 @@ cursor_position: { x, y }; screen_info: { width, height }
 
 ## `vm_serial`
 
-The guest's serial console, captured from the first byte of boot. Offsets are byte offsets into the VM's console log, which keeps every run and is written whether or not anyone is reading, so they hold across calls, CLI invocations and server restarts. read returns text from byte offset since (default: where the VM's last start began; 0 reaches earlier runs); tail returns the last lines lines; write sends text (include \n to press Enter); wait blocks until the regular expression pattern appears after since or timeoutSeconds passes. Every result returns the offset to pass as since next time. Use it to watch boot, kernel messages and panics, or to log in when SSH is down. Needs the serial feature.
+The guest's serial console, captured from the first byte of boot. Offsets are byte offsets into the VM's console log, which keeps every run and is written whether or not anyone is reading, so they hold across calls, CLI invocations and server restarts. read returns text from byte offset since (default: where the VM's last start began; 0 reaches earlier runs); tail returns the last lines lines; write sends text (include \n to press Enter); wait blocks until the regular expression pattern appears after since or timeoutSeconds passes. Every result returns the offset to pass as since next time. Use it to watch boot, kernel messages and panics, or to run commands when SSH is down: on a Linux guest the console is a root shell (write \n, wait for "# "). Needs the serial feature.
 
 **Errors:** `vm_not_found`, `wrong_state`, `capability_missing`, `invalid_request`, `timeout`
 

@@ -103,6 +103,35 @@ enum RubyYAML {
   }
 
   /// R-603: Rosetta is mounted over virtiofs and registered with binfmt_misc after the mount.
+  /// With `serial` granted, the console is a root shell: getty logs root in on the console
+  /// device, set up in bootcmd (before getty first starts) so even the first prompt is a shell.
+  @Test(.enabled(if: RubyYAML.available)) func serialConsoleLogsRootIn() async throws {
+    for device in ConsoleDevice.allCases {
+      var config = Self.base()
+      config.console = device
+      config.rootConsole = true
+      let doc = try #require(
+        try await RubyYAML.parse(CloudInit.userData(config)) as? [String: Any])
+      let bootcmd = try #require(doc["bootcmd"] as? [String])
+      #expect(bootcmd.contains(CloudInit.autologinBootCommand(device)))
+      let command = CloudInit.autologinBootCommand(device)
+      let dropIn = "/etc/systemd/system/serial-getty@\(device.rawValue).service.d/autologin.conf"
+      #expect(command.contains(dropIn))
+      #expect(
+        command.contains(
+          "'ExecStart=-/sbin/agetty --autologin root --noclear --keep-baud "
+            + "115200,57600,38400,9600 %I $TERM'"))
+      #expect(command.contains("systemctl daemon-reload"))
+      let runcmd = try #require(doc["runcmd"] as? [[String]])
+      #expect(
+        runcmd.contains(["systemctl", "enable", "--now", "serial-getty@\(device.rawValue).service"])
+      )
+    }
+    // Without serial, no autologin.
+    let plain = try CloudInit.userData(Self.base())
+    #expect(!plain.contains("autologin"))
+  }
+
   @Test(.enabled(if: RubyYAML.available)) func rosettaIsMountedAndRegistered() async throws {
     var config = Self.base()
     config.rosetta = true

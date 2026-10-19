@@ -398,9 +398,11 @@ public final class QEMUBackend: Backend {
         gui: plan.provisionsDesktop ? GUIStack(vncPassword: nil) : nil,
         mounts: share.map {
           [GuestMount(tag: SharedDirSpec.tag, guestPath: $0.guestPath, kind: .ninep)]
-        } ?? []
+        } ?? [],
+        console: plan.guest.arch == .arm64 ? .ttyAMA0 : .ttyS0
       ).provisioned(record.provision)
       config?.applyTemplate(images.pulled(image)?.template)
+      config?.rootConsole = plan.grants(.serial)
       if let segment = record.segment, record.network.mode != .disabled {
         config?.segment = SegmentNIC(
           primaryMAC: QEMUCommandLine.mac(for: record.id), mac: segment.mac,

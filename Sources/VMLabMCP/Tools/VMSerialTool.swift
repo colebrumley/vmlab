@@ -11,8 +11,9 @@ extension ToolSpec {
       + "earlier runs); tail returns the last lines lines; write sends text (include \\n to press "
       + "Enter); wait blocks until the regular expression pattern appears after since or "
       + "timeoutSeconds passes. Every result returns the offset to pass as since next time. Use "
-      + "it to watch boot, kernel messages and panics, or to log in when SSH is down. Needs the "
-      + "serial feature.",
+      + "it to watch boot, kernel messages and panics, or to run commands when SSH is down: on a "
+      + "Linux guest the console is a root shell (write \\n, wait for \"# \"). Needs the serial "
+      + "feature.",
     inputSchema: Schema.input(
       [
         "vm": Schema.vm,
