@@ -1,8 +1,9 @@
 name: check
 on:
   push:
-    branches: [main]
+    branches: [main, fix-ci]  # TEMP fix-ci: remove before landing
   pull_request:
+  workflow_dispatch:
 jobs:
   check:
     # Unit tests only: hosted runners cannot run VMs.
