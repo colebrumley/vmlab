@@ -52,8 +52,8 @@ import VMLabSwitch
     for fd in copies { close(fd) }
     let received = try #require(try UnixSocket.receiveDescriptor(from: pair[1]))
     close(received)
-    _ = fcntl(pipeEnds[0], F_SETFL, fcntl(pipeEnds[0], F_GETFL) | O_NONBLOCK)
-    var byte: UInt8 = 0
-    #expect(read(pipeEnds[0], &byte, 1) == 0, "a received copy of the write end is still open")
+    // Not at once: a child another test is spawning holds a copy for a few ms (`SpawnWindow`).
+    #expect(
+      SpawnWindow.reachesEndOfFile(pipeEnds[0]), "a received copy of the write end is still open")
   }
 }

@@ -189,9 +189,16 @@ import VMLabSwitch
     // wake pipe, whose number another test may already hold.
     h.server.attach(fd: pair[0])
     h.server.stop()
+    // Fails once the last copy of pair[0] is gone, which a child another test is spawning may
+    // hold for a few ms (`SpawnWindow`).
     let frame = SwitchCoreTests.frame(to: SwitchCoreTests.broadcast, from: a)
-    let sent = frame.withUnsafeBytes { Darwin.send(pair[1], $0.baseAddress, $0.count, 0) }
-    #expect(sent == -1)
+    #expect(
+      SpawnWindow.eventually {
+        let sent = frame.withUnsafeBytes {
+          Darwin.send(pair[1], $0.baseAddress, $0.count, MSG_DONTWAIT)
+        }
+        return sent == -1 && errno != EAGAIN
+      })
   }
 
   @Test func aSecondSwitchOnALiveSegmentIsRefusedAndStopCleansUp() throws {
