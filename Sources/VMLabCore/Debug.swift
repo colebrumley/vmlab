@@ -297,8 +297,7 @@ public actor DebugSession {
 
   /// Removes `point` from the stub; true when it is certainly gone (removed, or refused by the
   /// stub because it holds no such point), false when the stub could not be asked.
-  private static func removeIfThere(_ point: DebugPoint, on target: any DebugTarget) async -> Bool
-  {
+  private static func removeIfThere(_ point: DebugPoint, on target: any DebugTarget) async -> Bool {
     do {
       try await target.remove(point)
       return true
