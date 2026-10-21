@@ -216,4 +216,33 @@ import Testing
     }
     #expect(error?.data["field"] == .string("local"))
   }
+
+  /// The cross-volume fallback (`EXDEV`): a file goes in through a temporary name, replacing a
+  /// file or symlink at the final name without following it, and a failed copy leaves the old
+  /// file and no temporary behind.
+  @Test func theCrossVolumeCopyReplacesOnlyWhenComplete() throws {
+    let dir = FileManager.default.temporaryDirectory.appending(path: "vmlab-copy-\(UUID())")
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let parent = open(dir.path, O_RDONLY | O_DIRECTORY | O_CLOEXEC)
+    defer { close(parent) }
+    let source = dir.appending(path: "source")
+    try Data("new".utf8).write(to: source)
+    let victim = dir.appending(path: "victim")
+    try Data("keep".utf8).write(to: victim)
+
+    try Data("old".utf8).write(to: dir.appending(path: "file"))
+    #expect(SSHFileTransfer.copyTree(dir.path + "/missing", into: parent, name: "file") != 0)
+    #expect(try Data(contentsOf: dir.appending(path: "file")) == Data("old".utf8))
+    #expect(SSHFileTransfer.copyTree(source.path, into: parent, name: "file") == 0)
+    #expect(try Data(contentsOf: dir.appending(path: "file")) == Data("new".utf8))
+
+    try FileManager.default.createSymbolicLink(
+      atPath: dir.appending(path: "link").path, withDestinationPath: victim.path)
+    #expect(SSHFileTransfer.copyTree(source.path, into: parent, name: "link") == 0)
+    #expect(try Data(contentsOf: victim) == Data("keep".utf8))
+    #expect(try Data(contentsOf: dir.appending(path: "link")) == Data("new".utf8))
+    let left = try FileManager.default.contentsOfDirectory(atPath: dir.path)
+    #expect(Set(left) == ["source", "victim", "file", "link"])
+  }
 }

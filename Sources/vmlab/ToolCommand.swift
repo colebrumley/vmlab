@@ -398,17 +398,22 @@ struct IntrospectCommand: ToolCommand {
 struct MemoryDumpCommand: ToolCommand {
   static let configuration = CommandConfiguration(
     commandName: "memory-dump",
-    abstract: "Write guest physical memory to the VM's dumps/ directory (the vm_memory_dump tool).")
+    abstract:
+      "Write guest physical memory to the VM's dumps/ directory or --local (the vm_memory_dump "
+      + "tool).")
   static let toolName = "vm_memory_dump"
 
   @Argument(help: "The VM's id or name.") var vm: String
   @Option(help: "Guest physical start address in 0x hex (with --size).") var address: String?
   @Option(help: "Bytes to dump from --address.") var size: Int?
+  @Option(help: "Absolute host path (or directory) for the dump, under the pull write rules.")
+  var local: String?
   @Flag(help: "Allow a range over 256 MB.") var confirm = false
   @Flag(help: "Print the result object as JSON.") var json = false
 
   func arguments() throws -> JSONValue {
     var object: [String: JSONValue] = ["vm": .string(vm)]
+    if let local { object["local"] = .string(local) }
     if let address { object["address"] = .string(address) }
     if let size { object["size"] = .number(Double(size)) }
     if confirm { object["confirm"] = .bool(true) }

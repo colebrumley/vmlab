@@ -266,6 +266,7 @@ enum AgentGuide {
 
   /// A short throwaway `VMLAB_HOME` that sees the shared image cache and this host's slow probes.
   static func makeHome(_ tag: String) throws -> URL {
+    _ = TestHomeSweep.done
     let home = URL(filePath: "/tmp/vmlab-test-\(getpid())-\(tag)")
     try? FileManager.default.removeItem(at: home)
     try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
@@ -286,6 +287,8 @@ enum AgentGuide {
   static func run(_ number: Int) async throws {
     let session = try #require(try load().first { $0.number == number }, "no session \(number)")
     VZRunnerIntegrationTests.signRunner()
+    // The guide's server admits its own starts: wait for stale guests to go first.
+    await TestHomeSweep.done.value
     let home = try makeHome("g\(number)")
     let log = ProcessInfo.processInfo.environment["VMLAB_DEBUG_DIR"].map {
       URL(filePath: $0).appending(path: "agent-guide-\(number).log")

@@ -54,7 +54,7 @@ public struct VMLabConfig: Codable, Sendable, Hashable {
 ///
 /// - **read** (`vm_file push`, `images register`, `boot`, the inputs of `extra.qemuArgs`): under
 ///   `roots`, the user's home, `/tmp` and `$TMPDIR`.
-/// - **write** (`vm_file pull`'s `local`, a share's `host` directory, which the guest writes, and
+/// - **write** (`vm_file pull`'s and `vm_memory_dump`'s `local`, a share's `host` directory, which the guest writes, and
 ///   the outputs of `extra.qemuArgs`): under `writeRoots`, `/tmp`, `$TMPDIR` and vmlab's own
 ///   `~/vmlab-files` (created on demand), or instead of that folder the `writeRoots` the owner
 ///   lists in `VMLAB_HOME/config.json`. Never, even under a write root or with `allowAnyPath`: a
@@ -63,8 +63,8 @@ public struct VMLabConfig: Codable, Sendable, Hashable {
 ///   writes into its VM directories do not come through here.
 ///
 /// `allowAnyPath` in `config.json` lifts the roots for both, not the write refusals. Paths are
-/// compared case-insensitively (APFS is). `vm_memory_dump` takes no host path; it writes under
-/// the VM's own `dumps/`.
+/// compared case-insensitively (APFS is). Without `local`, `vm_memory_dump` writes under the
+/// VM's own `dumps/`, which does not come through here.
 public struct PathPolicy: Sendable, Hashable {
   public enum Access: String, Sendable, Hashable { case read, write }
 

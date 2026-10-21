@@ -29,6 +29,9 @@ final class FakeBackend: Backend {
 
   func reportSSHPort(_ port: Int?) { ssh.withLock { $0 = port } }
 
+  /// The memory dumper of every VM this backend runs.
+  let dumper = FakeMemoryDumper()
+
   /// The engine snapshots of every VM this backend runs, bound to the VM's state per call.
   let snapshots = FakeCheckpoints()
 
@@ -146,7 +149,7 @@ final class FakeBackend: Backend {
         address: .unixSocket(path: dir.appending(path: "vnc.sock").path), hostSide: true),
       gdb: GDBEndpoint(host: "127.0.0.1", port: 1234),
       introspection: FakeIntrospection(), exec: FakeExec(),
-      checkpoints: snapshots.bound(to: record.state))
+      checkpoints: snapshots.bound(to: record.state), memoryDump: dumper)
   }
 
   func checkpoints(_ record: VMRecord) async throws(VMLabError) -> any CheckpointProvider {
@@ -195,9 +198,24 @@ struct FakeIntrospection: Introspection {
   }
 }
 
-/// Writes `size` zero bytes for a range, 1 KB for a full dump.
-struct FakeMemoryDumper: MemoryDumper {
+/// Writes `size` zero bytes for a range, 1 KB for a full dump. It records every request, and
+/// runs `during` (set with `onDump`) before it writes.
+final class FakeMemoryDumper: MemoryDumper {
+  private let state = Mutex<
+    (requests: [MemoryDumpRequest], during: (@Sendable (MemoryDumpRequest) -> Void)?)
+  >(([], nil))
+
+  var requests: [MemoryDumpRequest] { state.withLock { $0.requests } }
+  func onDump(_ during: @escaping @Sendable (MemoryDumpRequest) -> Void) {
+    state.withLock { $0.during = during }
+  }
+
   func dump(_ request: MemoryDumpRequest) async throws(VMLabError) -> MemoryDumpResult {
+    let during = state.withLock { state in
+      state.requests.append(request)
+      return state.during
+    }
+    during?(request)
     let bytes = request.size ?? 1024
     FileManager.default.createFile(
       atPath: request.path.path, contents: Data(count: Int(bytes)))
