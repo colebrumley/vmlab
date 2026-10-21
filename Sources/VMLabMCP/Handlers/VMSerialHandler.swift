@@ -184,7 +184,10 @@ struct VMSerialHandler: ToolHandler {
     let serial = SerialChannel(
       socketPath: "", logURL: log.deletingLastPathComponent().appending(path: "serial.log"),
       consoleLog: log)
-    guard await serial.openLog() else {
+    let opened = try await LongOperation.typed("vm_serial \(request.action)", vm: id) {
+      try await serial.openLog()
+    }
+    guard opened else {
       var result: [String: JSONValue] = [
         "text": .string(""), "offset": .number(0), "truncated": .bool(false),
       ]

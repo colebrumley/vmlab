@@ -298,11 +298,11 @@ public actor SerialChannel {
   /// R-1201): reads and tails answer from the file as it is now, and a wait that finds no match
   /// in it ends (`SerialWaitOutcome.ended`) rather than waiting. False, with nothing created, when
   /// there is no `consoleLog` or no file there (the guest never printed, or its directory was
-  /// removed); `stop` closes it.
+  /// removed); an `internal` error when the file is there but will not open. `stop` closes it.
   @discardableResult
-  public func openLog() -> Bool {
+  public func openLog() throws -> Bool {
     guard socket == nil, console == nil, !closed, let consoleLog,
-      let file = ConsoleFile(existing: consoleLog)
+      let file = try ConsoleFile(existing: consoleLog)
     else { return console != nil }
     console = file
     let size = file.size
@@ -954,11 +954,19 @@ final class ConsoleFile: Sendable {
     }
   }
 
-  /// The log at `url` read-only, creating nothing; nil when it does not exist or will not open.
-  init?(existing url: URL) {
+  /// The log at `url` read-only, creating nothing; nil when it (or its directory) does not exist,
+  /// an `internal` error when it will not open for another reason.
+  init?(existing url: URL) throws {
     self.url = url
     fd = Darwin.open(url.path, O_RDONLY | O_CLOEXEC)
-    guard fd >= 0 else { return nil }
+    guard fd >= 0 else {
+      let code = errno
+      if code == ENOENT || code == ENOTDIR { return nil }
+      throw VMLabError(
+        code: .internal, message: "Could not open the console log.",
+        hint: "Check permissions on \(url.path).",
+        data: ["path": .string(url.path), "errno": .number(Double(code))])
+    }
   }
 
   deinit { Darwin.close(fd) }

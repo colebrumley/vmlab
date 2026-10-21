@@ -179,16 +179,23 @@ import VMLabQEMU
         "vm_serial",
         ["vm": "bare-off", "action": "wait", "pattern": "never printed", "timeoutSeconds": 60])
     }
-    try await Task.sleep(for: .milliseconds(500))
+    // The CPU is halted, so the wait can only be pending while it registers; give it ample time.
+    try await Task.sleep(for: .seconds(2))
+    let pid = try #require(TwoServersIntegrationTests.qemuPIDs(in: lab.home).first)
     let go = try await lab.server.call("vm_debug", ["vm": "bare-off", "action": "continue"])
     try #require(go.isError == false, "\(go.text)")
     let continued = ContinuousClock.now
+    // Time the wait from the engine's exit, as the acceptance does.
+    while kill(pid, 0) == 0, ContinuousClock.now - continued < .seconds(10) {
+      try await Task.sleep(for: .milliseconds(10))
+    }
+    let exited = ContinuousClock.now
     let wait = try await waiting.value
-    let elapsed = ContinuousClock.now - continued
+    let elapsed = ContinuousClock.now - exited
     #expect(wait.value["stopped"] == true, "\(wait.text)")
     #expect(wait.value["matched"] == nil)
     #expect(wait.value["text"]?.stringValue?.contains(message) == true, "\(wait.text)")
-    #expect(elapsed < .seconds(2), "the wait ended \(elapsed) after continue")
+    #expect(elapsed < .seconds(2), "the wait ended \(elapsed) after QEMU exited")
     while lab.state("bare-off") != "stopped", ContinuousClock.now - continued < .seconds(15) {
       try await Task.sleep(for: .milliseconds(100))
     }

@@ -259,7 +259,7 @@ func eventually(_ condition: () async -> Bool) async -> Bool {
     try Data("one\ntwo\nthree\n".utf8).write(to: log)
     let channel = SerialChannel(
       socketPath: "", logURL: directory.appending(path: "serial.log"), consoleLog: log)
-    #expect(await channel.openLog())
+    #expect(try await channel.openLog())
     #expect(await !channel.isConnected)
     #expect(await channel.read(since: 4).text == "two\nthree\n")
     #expect(
@@ -283,7 +283,15 @@ func eventually(_ condition: () async -> Bool) async -> Bool {
     let gone = directory.appending(path: "gone/console.log")
     let none = SerialChannel(
       socketPath: "", logURL: directory.appending(path: "serial.log"), consoleLog: gone)
-    #expect(await !none.openLog())
+    #expect(try await !none.openLog())
+    // A log that is there but will not open is an error, not an empty console.
+    try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: log.path)
+    defer {
+      try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: log.path)
+    }
+    let locked = SerialChannel(
+      socketPath: "", logURL: directory.appending(path: "serial.log"), consoleLog: log)
+    await #expect { try await locked.openLog() } throws: { ($0 as? VMLabError)?.code == .internal }
     #expect(!FileManager.default.fileExists(atPath: gone.deletingLastPathComponent().path))
   }
 
