@@ -9,8 +9,10 @@ import VMLabCore
 /// `local` is a host write the model names, checked exactly as `vm_file pull`'s
 /// (`LocalDestination`, the write side of `PathPolicy`) before the engine is asked: an existing
 /// directory receives the default name, an existing file is replaced. The engine writes
-/// `<final>.part` beside it, which the handler renames into the checked directory, so a partial
-/// dump never has the final name and a symlink planted there is replaced, not followed.
+/// `<final>.part` in a staging folder under `<vm>/dumps/`, which the handler renames into the
+/// checked directory (as a pull stages in `<vm>/pulled/`), so a partial dump never has the final
+/// name, the engine never writes through a path a symlink could redirect, and a symlink planted
+/// at the final name is replaced, not followed.
 struct VMMemoryDumpHandler: ToolHandler {
   static let confirmAbove: UInt64 = 256 << 20
 
@@ -50,38 +52,35 @@ struct VMMemoryDumpHandler: ToolHandler {
     defer { target?.close() }
     let vm = try await context.manager.attach(try arguments.string("vm") ?? "")
     let dumper = try vm.channel(.memoryDump)
-    if let target {
-      return try await Self.dump(
-        MemoryDumpRequest(address: address, size: size, path: target.url), to: target,
-        with: dumper)
-    }
     let directory = context.store.directory(of: vm.id).appending(path: "dumps")
     do {
       try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     } catch {
       throw ToolRendering.internalError(error, doing: "creating \(directory.path)")
     }
-    let path = directory.appending(path: name)
-    let result = try await dumper.dump(MemoryDumpRequest(address: address, size: size, path: path))
-    return Self.render(result)
+    let request = MemoryDumpRequest(
+      address: address, size: size, path: directory.appending(path: name))
+    guard let target else { return Self.render(try await dumper.dump(request)) }
+    return try await Self.dump(request, to: target, staging: directory, with: dumper)
   }
 
-  /// Dumps `request` to `<final>.part` in `target`'s directory and renames it into place.
+  /// Dumps `request` to `<final>.part` in a fresh folder under `staging` (the VM's `dumps/`,
+  /// which no guest reaches) and renames it into `target`'s checked directory.
   static func dump(
-    _ request: MemoryDumpRequest, to target: LocalDestination, with dumper: any MemoryDumper
+    _ request: MemoryDumpRequest, to target: LocalDestination, staging: URL,
+    with dumper: any MemoryDumper
   ) async throws(VMLabError) -> ToolResult {
-    let part = target.name + ".part"
-    unlinkat(target.parent, part, 0)
-    var staged = request
-    staged.path = target.directory.appending(path: part)
-    var result: MemoryDumpResult
+    let folder = staging.appending(path: ".staging-\(UUID().uuidString)")
     do {
-      result = try await dumper.dump(staged)
-      try target.move(staged.path)
+      try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)
     } catch {
-      unlinkat(target.parent, part, 0)
-      throw error
+      throw ToolRendering.internalError(error, doing: "creating \(folder.path)")
     }
+    defer { try? FileManager.default.removeItem(at: folder) }
+    var staged = request
+    staged.path = folder.appending(path: target.name + ".part")
+    var result = try await dumper.dump(staged)
+    try target.move(staged.path)
     result.path = target.url
     return render(result)
   }

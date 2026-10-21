@@ -4,7 +4,7 @@ import VMLabCore
 
 @testable import VMLabMCP
 
-/// `vm_memory_dump`'s `local` (R-1205): the write policy of `vm_file pull`, a `.part` name for the
+/// `vm_memory_dump`'s `local` (R-1205): the write policy of `vm_file pull`, a staged `.part` for the
 /// engine and a rename into the checked directory.
 @Suite struct VMMemoryDumpHandlerTests {
   typealias Fixture = VMCreateHandlerTests.Fixture
@@ -44,18 +44,27 @@ import VMLabCore
     #expect(f.backend.dumper.requests.map(\.path.path) == [path])
   }
 
-  @Test func localUnderTMPDIRGetsAPartNameRenamedIntoPlace() async throws {
+  @Test func localUnderTMPDIRIsStagedAndRenamedIntoPlace() async throws {
     let f = try await Self.fixture()
     defer { f.cleanUp() }
     let folder = try Self.folder()
     defer { try? FileManager.default.removeItem(at: folder) }
     let final = folder.appending(path: "kernel.raw")
+    // A file that only shares the staged name is not the dump's to touch.
+    let sibling = folder.appending(path: "kernel.raw.part")
+    try Data("mine".utf8).write(to: sibling)
     let result = try await Self.dump(final.path, in: f)
     #expect(result.value["path"] == .string(final.path))
     #expect(result.value["bytes"] == .number(16))
     #expect(Self.size(final.path) == 16)
-    #expect(f.backend.dumper.requests.map(\.path.path) == [final.path + ".part"])
-    #expect(!FileManager.default.fileExists(atPath: final.path + ".part"))
+    #expect(try Data(contentsOf: sibling) == Data("mine".utf8))
+    // The engine wrote `<final>.part` in a staging folder under the VM's dumps/, now gone.
+    let staged = try #require(f.backend.dumper.requests.first?.path)
+    let dumps = f.context.store.directory(of: try f.context.store.find("web").id)
+      .appending(path: "dumps")
+    #expect(staged.lastPathComponent == "kernel.raw.part")
+    #expect(staged.deletingLastPathComponent().deletingLastPathComponent().path == dumps.path)
+    #expect(!FileManager.default.fileExists(atPath: staged.deletingLastPathComponent().path))
   }
 
   @Test func refusedPathsFailBeforeTheEngine() async throws {

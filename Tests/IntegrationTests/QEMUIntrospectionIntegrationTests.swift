@@ -78,7 +78,6 @@ import VMLabQEMU
       let data = try Data(contentsOf: URL(filePath: path))
       #expect(data.count == 1_048_576)
       #expect(data.prefix(64).map { String(format: "%02x", $0) }.joined() == expected)
-      #expect(!FileManager.default.fileExists(atPath: path + ".part"))
     } catch {
       await debug.close()
       await guest.shutdown()
