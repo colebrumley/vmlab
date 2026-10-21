@@ -266,6 +266,7 @@ enum AgentGuide {
 
   /// A short throwaway `VMLAB_HOME` that sees the shared image cache and this host's slow probes.
   static func makeHome(_ tag: String) throws -> URL {
+    _ = TestHomeSweep.done
     let home = URL(filePath: "/tmp/vmlab-test-\(getpid())-\(tag)")
     try? FileManager.default.removeItem(at: home)
     try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)

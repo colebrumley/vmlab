@@ -134,7 +134,9 @@ Guests are the main cost of many sessions on one Mac: memory, and the two-macOS-
   (`VMLAB_IGNORE_MEMORY_PRESSURE=1` turns that off, for the owner only).
 - Integration tests create guests under `VMLAB_HOME=$TMPDIR/vmlab-test-<pid>` and destroy them in
   teardown, never under `~/.vmlab`. A killed test run may leave a QEMU or `vmlab-vz` process: run
-  `vmlab gc` (R-805) or `pkill -f vmlab-test` before blaming the next failure.
+  `vmlab gc` (R-805) or `pkill -f vmlab-test` before blaming the next failure. The next
+  integration run removes `vmlab-test-*` homes a day old, ending their confirmed guests and
+  switches first.
 - Pull images once into `~/.vmlab/images` (`vmlab images pull debian-13-arm64`); the test home
   symlinks that directory rather than pulling again. The macOS image is 20 GB and more: pull it
   only when your item's Verify line needs a macOS guest.

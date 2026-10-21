@@ -48,6 +48,33 @@ public enum EngineProcess {
     return name.hasPrefix("qemu-system-") || name == "vmlab-vz"
   }
 
+  /// The executable a segment's `switch.pid` names: the segment switch (R-901).
+  public static func isSwitch(_ path: String) -> Bool {
+    URL(filePath: path).lastPathComponent == "vmlab-switch"
+  }
+
+  /// `pid` is a live `vmlab-switch` serving `home`: its `VMLAB_HOME` environment (or a
+  /// `VMLAB_HOME=` argument) names that directory. False when neither can be read.
+  public static func isSwitchRunning(_ pid: Int32, home: URL) -> Bool {
+    guard LivenessProbe.processExists(pid), let path = HostProcesses.executablePath(pid),
+      isSwitch(path)
+    else { return false }
+    let fromArguments = HostProcesses.arguments(pid)?.last { $0.hasPrefix("VMLAB_HOME=") }
+      .map { String($0.dropFirst("VMLAB_HOME=".count)) }
+    guard let value = HostProcesses.environment(pid)?["VMLAB_HOME"] ?? fromArguments else {
+      return false
+    }
+    return sameDirectory(value, home)
+  }
+
+  /// Whether the absolute `path` is `directory` (as given or both canonical).
+  static func sameDirectory(_ path: String, _ directory: URL) -> Bool {
+    guard path.hasPrefix("/") else { return false }
+    let given = directory.standardizedFileURL.path
+    return URL(filePath: path).standardizedFileURL.path == given
+      || PathPolicy.canonical(path) == PathPolicy.canonical(given)
+  }
+
   /// `pid` is a live engine process, and runs the VM in `vmDirectory` when that is given.
   public static func isRunning(_ pid: Int32, vmDirectory: URL? = nil) -> Bool {
     guard LivenessProbe.processExists(pid), let path = HostProcesses.executablePath(pid),
