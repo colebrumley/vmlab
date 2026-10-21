@@ -201,12 +201,14 @@ extension Store {
     return urls
   }
 
-  /// Whether any of `diskCandidates(of:)` exists.
+  /// Whether any of `diskCandidates(of:)` exists; always for a bare machine (R-1202), which has
+  /// no disk to lose.
   public func diskExists(
     of record: VMRecord,
     environment: [String: String] = ProcessInfo.processInfo.environment
   ) -> Bool {
-    diskCandidates(of: record, environment: environment).contains {
+    if record.isBare { return true }
+    return diskCandidates(of: record, environment: environment).contains {
       FileManager.default.fileExists(atPath: $0.path)
     }
   }

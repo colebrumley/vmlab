@@ -257,6 +257,7 @@ extension VMManager {
     defer { release(id) }
     let record = try store.load(id: id)
     try Self.checkCheckpointState(record, doing: "restore a checkpoint")
+    guard !record.isBare else { throw Self.bareMachine(record, cannot: "restore a checkpoint") }
     let node = try store.checkpoints(of: id).resolve(name)
     let provider = try await backends.backend(for: record.profile).checkpoints(record)
     try await provider.restore(id: node.id, mode: node.mode)
@@ -391,10 +392,26 @@ extension VMManager {
       node: try store.checkpoints(of: id).node(id: checkpointID) ?? node, warnings: warnings)
   }
 
+  /// `capability_missing` for what a bare machine (R-1202) cannot do: it has no disk.
+  static func bareMachine(_ record: VMRecord, cannot what: String) -> VMLabError {
+    VMLabError(
+      code: .capabilityMissing,
+      message: "VM \(record.id) is a bare machine (image \"none\"): it has no disk, so vmlab "
+        + "cannot \(what)",
+      hint: "Create the VM with an image (and the features it needs, such as checkpoint_disk) "
+        + "instead of image \"none\".",
+      data: [
+        "feature": .string(Feature.checkpointDisk.rawValue),
+        "profile": .string(record.profile.rawValue), "vm": .string(record.id),
+        "image": .string(ImageStore.noImage),
+      ])
+  }
+
   /// The mode `request` resolves to for `record`, or the refusal.
   static func resolveMode(
     _ request: CheckpointModeRequest, for record: VMRecord
   ) throws(VMLabError) -> CheckpointMode {
+    guard !record.isBare else { throw bareMachine(record, cannot: "take a checkpoint") }
     let live = record.features.contains(.checkpointLive)
     guard live || record.features.contains(.checkpointDisk) else {
       throw RunningVMErrors.capabilityMissing(.checkpoints, vm: record.id, profile: record.profile)

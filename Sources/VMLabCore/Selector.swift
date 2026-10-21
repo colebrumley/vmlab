@@ -192,14 +192,25 @@ public enum ProfileSelector {
     for feature in r.prefer where !required.contains(feature) && !preferred.contains(feature) {
       preferred.append(feature)
     }
+    // R-1202: a bare machine never gets a feature that needs a guest OS or a disk (requiring one
+    // is a contradiction `Requirements` refuses); preferring one is denied.
+    let bareDenied = r.isBare ? preferred.filter(Requirements.needsImage.contains) : []
+    preferred.removeAll(where: bareDenied.contains)
     let resources = ResourceLimits.resolve(r.resources, for: r.guest.os)
 
     // 2-3. Host facts and the guest filter.
     let candidates = Profile.allCases.filter { Capabilities.supports(r.guest, on: $0) }
-    let matrix = Dictionary(
+    var matrix = Dictionary(
       uniqueKeysWithValues: candidates.map {
         ($0, Capabilities.capabilities(of: $0, host: host, allowUnverified: allowUnverified))
       })
+    // R-1202: a VZ Linux screen is a VNC server the seed installs in the guest; a bare machine
+    // has neither, so only QEMU's virtual display can give it `gui`.
+    if r.isBare, matrix[.vzLinux]?[.gui] == .yes {
+      matrix[.vzLinux]?[.gui] = .no(
+        "a bare machine (image \"none\") has no guest OS to run the VNC server vz-linux's "
+          + "screen needs")
+    }
     func has(_ profile: Profile, _ feature: Feature) -> Bool {
       matrix[profile]?[feature] == .yes
     }
@@ -279,9 +290,14 @@ public enum ProfileSelector {
     }
 
     // 8. Plan.
-    let features = Feature.allCases.filter { required.contains($0) || has(profile, $0) }
+    let features = Feature.allCases.filter {
+      required.contains($0)
+        || (has(profile, $0) && !(r.isBare && Requirements.needsImage.contains($0)))
+    }
     let requested = features.filter { required.contains($0) || preferred.contains($0) }
-    let preferredDenied = preferred.filter { !has(profile, $0) }
+    let preferredDenied = (preferred.filter { !has(profile, $0) } + bareDenied).sorted {
+      r.prefer.firstIndex(of: $0)! < r.prefer.firstIndex(of: $1)!
+    }
     var unverified: [Feature] = []
     for feature in Feature.allCases where required.contains(feature) || preferred.contains(feature)
     {
@@ -295,6 +311,8 @@ public enum ProfileSelector {
     if profile == .qemuTCG, let cpus = planned.cpus, cpus > maxTCGCPUs {
       planned.cpus = maxTCGCPUs
     }
+    // A bare machine has no disk to size.
+    if r.isBare { planned.diskGB = nil }
     var plan = Plan(
       profile: profile, guest: r.guest, resources: planned, features: features,
       requested: requested, preferredDenied: preferredDenied, unverified: unverified,
@@ -380,6 +398,10 @@ public enum ProfileSelector {
       cpus > maxTCGCPUs
     {
       notes.append("qemu-tcg runs at most \(maxTCGCPUs) virtual CPUs; \(cpus) were asked for")
+    }
+    if r.isBare, let diskGB = r.resources.diskGB {
+      notes.append(
+        "image \"none\" has no disk: resources.diskGB (\(diskGB)) is ignored")
     }
     if case .other(let arch) = r.guest.arch {
       notes.append(

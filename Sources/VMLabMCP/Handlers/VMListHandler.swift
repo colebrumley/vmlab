@@ -40,6 +40,7 @@ struct VMListHandler: ToolHandler {
         "os": .string(record.guest.os.rawValue), "arch": .string(record.guest.arch.rawValue),
       ]),
     ]
+    if let image = record.imageName { row["image"] = .string(image) }
     if let ip = record.runtime?.ip { row["ip"] = .string(ip) }
     if let port = record.runtime?.sshPort { row["sshPort"] = .number(Double(port)) }
     if let fleet = record.fleet { row["fleet"] = .string(fleet) }

@@ -109,8 +109,11 @@ public actor VMManager {
         let attachment = try segments.join(name, vm: stored)
         stored = try store.update(id: stored.id) { $0.segment = attachment }
       }
-      try await SSHKeys.generateDetached(
-        in: store.directory(of: stored.id), comment: "vmlab-\(stored.id)", runner: keygen)
+      // R-1202: a bare machine runs no OS to log in to.
+      if !stored.isBare {
+        try await SSHKeys.generateDetached(
+          in: store.directory(of: stored.id), comment: "vmlab-\(stored.id)", runner: keygen)
+      }
       try await backend.create(stored, plan: plan)
       if Task.isCancelled { throw Self.cancelled("create", vm: stored.id) }
     } catch {
@@ -304,7 +307,7 @@ public actor VMManager {
     _ record: VMRecord, backend: any Backend, timeout limit: Duration? = nil
   ) async -> (target: SSHTarget?, warning: String?) {
     guard record.features.contains(.execSSH), record.network.mode != .disabled,
-      record.boot?.haltAtStart != true
+      record.boot?.haltAtStart != true, !record.isBare
     else {
       return (nil, nil)
     }

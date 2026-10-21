@@ -331,12 +331,23 @@ public actor ImageStore {
     !name.isEmpty && name != "." && name != ".." && !name.contains("/") && !name.contains("\0")
   }
 
-  /// `invalid_request` on `field` unless `isImageName(name)`.
+  /// The reserved image name of a bare machine (R-1202): a kernel, binary or firmware boot with
+  /// no disk, no seed and no guest OS. No image may be pulled, registered or made under it.
+  public static let noImage = "none"
+
+  /// `invalid_request` on `field` unless `isImageName(name)` and `name` is not the reserved
+  /// `none`. `Requirements` accepts `none` before calling this.
   public static func checkName(_ name: String, field: String) throws(VMLabError) {
     guard isImageName(name) else {
       throw VMLabError.invalidRequest(
         field: field, reason: "\(name) is not an image name",
         hint: "Use a name from images list.")
+    }
+    guard name != noImage else {
+      throw VMLabError.invalidRequest(
+        field: field, reason: "\"none\" is reserved: it names a bare machine, not an image",
+        hint: "Choose another name; vm_create takes image \"none\" for a kernel, binary or "
+          + "firmware boot with no disk.")
     }
   }
 
@@ -482,19 +493,28 @@ public actor ImageStore {
     return PullResult(image: record, changed: true)
   }
 
-  /// The VMs whose disk reads `images/<name>/`: those created from it (`image`) and those whose
-  /// backing chain names a file in its directory (clones). Nil when a VM record cannot be read,
-  /// since the image that VM uses is then unknown.
+  /// The VMs that read `images/<name>/`: those created from it (`image`), those whose backing
+  /// chain names a file in its directory (clones), and those whose `boot` files lie in it (a bare
+  /// machine, R-1202, booting an extracted kernel). Nil when a VM record cannot be read, since the
+  /// image that VM uses is then unknown.
   public nonisolated func users(of name: String) -> [VMRecord]? {
     guard let listed = try? Store(home: directory.deletingLastPathComponent()).list(),
       listed.unreadable.isEmpty
     else { return nil }
     let prefix = imageDirectory(name).standardizedFileURL.path + "/"
+    // Boot paths are compared as `PathPolicy` checks them: canonical, case and Unicode folded
+    // (APFS), so `images/DEBIAN-13-arm64/...` counts for `debian-13-arm64`.
+    let folder = PathPolicy.canonical(imageDirectory(name).path)
     return listed.records.filter { record in
-      record.image == name
+      let boot =
+        record.boot.map {
+          [$0.kernel, $0.initrd, $0.dtb, $0.firmware, $0.binary].compactMap { $0 }
+        } ?? []
+      return record.image == name
         || (record.backingChain ?? []).contains {
           URL(filePath: $0).standardizedFileURL.path.hasPrefix(prefix)
         }
+        || boot.contains { PathPolicy.contains(folder, PathPolicy.canonical($0)) }
     }
   }
 

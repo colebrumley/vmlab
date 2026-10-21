@@ -6,7 +6,8 @@ import VMLabCore
 /// first-boot report (R-1004, collected first when a Linux guest's cloud-init finished after start
 /// returned): a failed step is a `provision_failed` warning, and a requested
 /// provisioning that was never collected (SSH never answered) says so instead of leaving only
-/// `ssh_unreachable`. `segments` lists the VM's segment addresses (R-902).
+/// `ssh_unreachable`. `segments` lists the VM's segment addresses (R-902). `image` is the image's
+/// name, `"none"` for a bare machine (R-1202), which has no SSH endpoint and no provisioning.
 struct VMInspectHandler: ToolHandler {
   static let eventCount = 20
 
@@ -51,6 +52,7 @@ struct VMInspectHandler: ToolHandler {
     return ToolResult(
       [
         "vm": .object(["id": .string(record.id), "name": .string(record.name)]),
+        "image": record.imageName.map { .string($0) } ?? .null,
         "record": try JSONValue(encoding: record),
         "plan": try record.plan.map { plan throws(VMLabError) in try JSONValue(encoding: plan) }
           ?? .null,

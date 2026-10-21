@@ -92,7 +92,11 @@ struct FleetHandler: ToolHandler {
         hint: "Add requirements, at least { guest: { os, arch } }.")
     }
     var requirements = try Requirements.decode(json: raw.data)
-    if let image = try arguments.string("image") { requirements.image = image }
+    if let image = try arguments.string("image") {
+      requirements.image = image
+      // Checked again with the image in place: `none` has rules of its own (R-1202).
+      try requirements.validate()
+    }
     let segmentArgument = try arguments.string("segment") ?? "auto"
     let autoSegment = segmentArgument == "auto"
     let segmentName = autoSegment ? name : segmentArgument
@@ -127,8 +131,8 @@ struct FleetHandler: ToolHandler {
     let image = try VMCreateHandler.image(
       for: requirements, catalogue: images.catalogue, guestOf: { images.guest(of: $0) })
     var warnings: [String] = []
-    if try await LongOperation.pullIfMissing(
-      image, confirm: confirm, context: context) != nil
+    if let image,
+      try await LongOperation.pullIfMissing(image, confirm: confirm, context: context) != nil
     {
       warnings.append("pulled image \(image) first")
     }
@@ -147,7 +151,8 @@ struct FleetHandler: ToolHandler {
       _ = try segments.ensure(segmentName)
     }
     var fleet = FleetRecord(
-      name: name, createdAt: Date(), plan: plan, image: image, segment: segmentName,
+      name: name, createdAt: Date(), plan: plan, image: image ?? ImageStore.noImage,
+      segment: segmentName,
       autoSegment: autoSegment, members: names.map { FleetMember(name: $0) })
     try fleets.save(fleet)
 

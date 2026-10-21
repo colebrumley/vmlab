@@ -295,4 +295,34 @@ extension FleetHandlerTests {
     } throws: { ($0 as? VMLabError)?.data["field"] == .string("members") }
     _ = try await f.call(["action": .string("destroy"), "name": .string("node")])
   }
+
+  /// R-1202: `image: "none"` makes bare members under the same rules as vm_create: a file boot is
+  /// accepted (no pull, no image in the members' records), a disk boot is refused.
+  @Test func aBareFleet() async throws {
+    let f = try Fixture()
+    defer { f.cleanUp() }
+    var requirements = try VMCreateHandlerTests.bare("kernel").objectValue ?? [:]
+    requirements["image"] = nil
+    let created = try await f.call([
+      "action": .string("create"), "name": .string("bare"), "count": .number(2),
+      "requirements": .object(requirements), "image": .string("none"),
+      "allowUnverified": .bool(true),
+    ])
+    #expect(created["members"]?.arrayValue?.count == 2)
+    let features = VMCreateHandlerTests.features(created["plan"])
+    #expect(Set(features).isDisjoint(with: Requirements.needsImage.map(\.rawValue)))
+    let records = try f.context.store.list().records
+    #expect(records.count == 2 && records.allSatisfy { $0.image == nil && $0.isBare })
+    #expect(f.context.images.pulled("tiny-arm64") == nil)
+
+    let refused = await #expect(throws: VMLabError.self) {
+      try await f.call([
+        "action": .string("create"), "name": .string("disk"), "count": .number(2),
+        "requirements": VMCreateHandlerTests.Fixture.requirements, "image": .string("none"),
+        "allowUnverified": .bool(true),
+      ])
+    }
+    #expect(refused?.code == .invalidRequest)
+    #expect(refused?.data["field"] == .string("image"))
+  }
 }

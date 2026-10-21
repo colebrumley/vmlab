@@ -51,7 +51,8 @@ public final class QEMUBackend: Backend {
     if Self.usesVmnet(record) {
       request.vmnet = true
     } else if record.network.mode != .disabled {
-      request.sshHostPort = try QEMUMachine.freeLoopbackPort()
+      // R-1202: a bare machine runs no SSH server, so it gets no SSH port.
+      request.sshHostPort = record.isBare ? nil : try QEMUMachine.freeLoopbackPort()
       request.forwards = try Self.resolveForwards(record.network.forwards)
     }
     if let segment = record.segment, record.network.mode != .disabled {
@@ -354,7 +355,9 @@ public final class QEMUBackend: Backend {
         features: record.features, estimatedStartupSeconds: 0)
   }
 
-  private func request(
+  /// What `create` prepares and `start` launches. A guest with no image (a bare machine, R-1202)
+  /// or a kernel-only image's kernel boot has no base image, so no disk and no seed.
+  func request(
     _ record: VMRecord, plan: Plan, seed: Bool
   ) async throws(VMLabError) -> QEMULaunchRequest {
     let boot = try await resolveBoot(record)

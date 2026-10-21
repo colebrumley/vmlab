@@ -45,6 +45,15 @@ need `-icount`, instruction tracing or a CPU model the host does not have.
 Call `vm_plan` with the same `requirements` when you are unsure a combination is possible. It
 creates nothing.
 
+**A bare machine for your own kernel.** `image: "none"` with `boot.mode` `kernel`, `binary` or
+`firmware` (and the file in `boot.kernel`, `boot.binary` or `boot.firmware`) gives a machine with no
+disk, no cloud-init seed and no SSH: nothing is pulled, and `start` returns as soon as the engine
+is up. Features that need a guest OS or a disk (`exec_ssh`, `exec_agent`, `cloud_init`,
+`gui_desktop`, `shared_dir`, `net_port_forward`, `rosetta`, `checkpoint_disk`, `checkpoint_live`)
+cannot be required with it; use `vm_serial`, `vm_debug`, `vm_introspect` and `vm_memory_dump`.
+Leaving `image` out keeps the guest's default image, so a custom kernel over the Debian root disk
+still works.
+
 ## Reading a plan
 
 A satisfiable plan looks like this (fields trimmed):

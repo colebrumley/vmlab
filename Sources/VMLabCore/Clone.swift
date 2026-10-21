@@ -15,6 +15,7 @@ extension VMManager {
     defer { release(sourceID) }
     let source = try store.load(id: sourceID)
     let backend = try backends.backend(for: source.profile)
+    guard !source.isBare else { throw Self.bareMachine(source, cannot: "clone it") }
     let node = try checkpoint.map { (name) throws(VMLabError) in
       try store.checkpoints(of: sourceID).resolve(name)
     }
