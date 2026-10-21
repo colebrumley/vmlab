@@ -943,7 +943,7 @@ that builds it ticks the line in its own pull request and nobody else edits it.
   escape hatch: `VMLAB_IGNORE_MEMORY_PRESSURE=1` or `ignoreMemoryPressure` in `config.json`.
   Integration tests run serially (`--no-parallel`).
 - [x] **R-1200 A bare arm64 test kernel** — docs/specs/kernel-loop.md, item W1, size S.
-- [ ] **R-1201 `vm_serial` reads a stopped guest and `wait` notices the power-off** — docs/specs/kernel-loop.md, item W2, size M.
+- [x] **R-1201 `vm_serial` reads a stopped guest and `wait` notices the power-off** — docs/specs/kernel-loop.md, item W2, size M.
 - [ ] **R-1202 `image: "none"` for kernel, binary and firmware boots** — docs/specs/kernel-loop.md, item W3, size M.
 - [ ] **R-1203 `reset` relaunches a QEMU file boot whose files changed** — docs/specs/kernel-loop.md, item W4, size M.
 - [ ] **R-1204 The `cpu_emulation` feature** — docs/specs/kernel-loop.md, item W5, size M.

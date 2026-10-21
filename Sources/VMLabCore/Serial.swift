@@ -38,6 +38,15 @@ public struct SerialMatch: Sendable, Hashable {
   }
 }
 
+/// How a `waitOrEnd` ended: its pattern matched, or the channel's output ended first (the reader
+/// stopped, or the channel reads a log no engine writes, `openLog`) with no match at or after
+/// `since`.
+public enum SerialWaitOutcome: Sendable, Hashable {
+  case matched(SerialMatch)
+  /// No match; `offset` is the end of the output.
+  case ended(offset: UInt64)
+}
+
 /// One completed line of serial output, handed to the line observer (R-304's panic detection).
 public struct SerialLine: Sendable, Hashable {
   /// The line without its `\n` or a trailing `\r`.
@@ -285,6 +294,22 @@ public actor SerialChannel {
     }
   }
 
+  /// Opens the console log with no socket and no engine behind it (a guest that is not running,
+  /// R-1201): reads and tails answer from the file as it is now, and a wait that finds no match
+  /// in it ends (`SerialWaitOutcome.ended`) rather than waiting. Needs a `consoleLog`; `stop`
+  /// closes it.
+  public func openLog() throws {
+    guard socket == nil, console == nil, !closed, let consoleLog else { return }
+    let file = try ConsoleFile(url: consoleLog)
+    console = file
+    let size = file.size
+    ring = ByteRing(
+      capacity: ringCapacity, base: size > UInt64(ringCapacity) ? size - UInt64(ringCapacity) : 0)
+    linesFrom = size
+    partialLineStart = ring.end
+    follow()
+  }
+
   /// Reads what the console log gained since the last look into the ring.
   private func follow() {
     guard let console else { return }
@@ -401,10 +426,23 @@ public actor SerialChannel {
   /// killed when the wait ends, so a pattern that backtracks for ever times out, stalls neither
   /// reads nor the reader, and leaves no CPU busy; time spent starting that process does not count
   /// against `timeout` (up to `maxLaunchGrace`). Fails with `engine_error` when the helper is
-  /// missing.
+  /// missing, and with `guest_unreachable` when the output ends with no match.
   public func wait(
     for pattern: String, since: UInt64? = nil, timeout: Duration
   ) async throws -> SerialMatch {
+    switch try await waitOrEnd(for: pattern, since: since, timeout: timeout) {
+    case .matched(let match): return match
+    case .ended: throw Self.unreachable(socketPath)
+    }
+  }
+
+  /// `wait`, except that output ending with no match (the reader stopped once every byte it
+  /// received was scanned, or there was never a reader) is `.ended` with the end offset, not an
+  /// error: the guest stopped printing, which a caller tells from a `timeout` (R-1201). `stop`
+  /// still fails a pending wait with `guest_unreachable`.
+  public func waitOrEnd(
+    for pattern: String, since: UInt64? = nil, timeout: Duration
+  ) async throws -> SerialWaitOutcome {
     if let reason = Self.rejection(for: pattern) {
       throw VMLabError.invalidRequest(
         field: "pattern", reason: reason,
@@ -427,22 +465,39 @@ public actor SerialChannel {
     let from = since ?? ring.end
     let connected = !closed && socket != nil
     guard connected || max(from, retainedStart) < ring.end else {
-      throw Self.unreachable(socketPath)
+      if closed { throw Self.unreachable(socketPath) }
+      return .ended(offset: ring.end)
     }
     let id = nextWaiterID
     nextWaiterID += 1
-    return try await withTaskCancellationHandler {
-      try await withCheckedThrowingContinuation { continuation in
-        waiters[id] = Waiter(
-          pattern: pattern, literal: literal, since: from, scanFrom: max(from, retainedStart),
-          scannedTo: from,
-          continuation: continuation, timer: nil)
-        arm(id, after: timeout, pattern: pattern, timeout: timeout)
-        pump(id)
-      }
-    } onCancel: {
-      Task { await self.cancelWaiter(id) }
+    do {
+      return .matched(
+        try await withTaskCancellationHandler {
+          try await withCheckedThrowingContinuation { continuation in
+            waiters[id] = Waiter(
+              pattern: pattern, literal: literal, since: from, scanFrom: max(from, retainedStart),
+              scannedTo: from,
+              continuation: continuation, timer: nil)
+            arm(id, after: timeout, pattern: pattern, timeout: timeout)
+            pump(id)
+          }
+        } onCancel: {
+          Task { await self.cancelWaiter(id) }
+        })
+    } catch let ended as OutputEnded {
+      return .ended(offset: ended.offset)
     }
+  }
+
+  /// A waiter caught up with output that will not grow: no match.
+  private struct OutputEnded: Error {
+    var offset: UInt64
+  }
+
+  /// How a waiter that caught up with output that will not grow ends: `.ended`, or
+  /// `guest_unreachable` once `stop` closed the channel.
+  private var outputEnded: any Error {
+    closed ? Self.unreachable(socketPath) : OutputEnded(offset: ring.end)
   }
 
   /// Why `pattern` is refused before compiling, or nil: longer than `maxPatternBytes`, or a group
@@ -575,13 +630,13 @@ public actor SerialChannel {
   private func pump(_ id: UInt64) {
     guard let waiter = waiters[id], !scanning.contains(id), !waiter.deferred else { return }
     guard ring.end > waiter.scannedTo else {
-      if socket == nil { finish(id, throwing: Self.unreachable(socketPath)) }
+      if socket == nil { finish(id, throwing: outputEnded) }
       return
     }
     let from = max(waiter.scanFrom, retainedStart)
     guard from < ring.end else {
       waiters[id]?.scannedTo = ring.end
-      if socket == nil { finish(id, throwing: Self.unreachable(socketPath)) }
+      if socket == nil { finish(id, throwing: outputEnded) }
       return
     }
     let to = min(ring.end, from + Self.scanWindow)
@@ -693,7 +748,7 @@ public actor SerialChannel {
   }
 
   /// The reader stopped. A waiter still matching output that arrived before the end keeps going
-  /// (and fails once caught up); the rest fail now. `stop` fails them all.
+  /// (and ends once caught up); the rest end now. `stop` fails them all.
   private func readerFinished(failingAll: Bool = false) {
     // The engine logged the last bytes before the socket closed.
     if !failingAll { follow() }
@@ -710,7 +765,7 @@ public actor SerialChannel {
   }
 
   /// How much of the output a timed-out wait returns.
-  static let timeoutTextBytes: UInt64 = 4096
+  public static let timeoutTextBytes: UInt64 = 4096
 
   /// (Re)arms waiter `id`'s deadline `delay` from now.
   private func arm(_ id: UInt64, after delay: Duration, pattern: String, timeout: Duration) {

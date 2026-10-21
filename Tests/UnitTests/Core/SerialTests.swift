@@ -225,6 +225,62 @@ func eventually(_ condition: () async -> Bool) async -> Bool {
     await #expect(throws: VMLabError.self) { try await channel.write("x") }
   }
 
+  /// `waitOrEnd` tells "the reader ended with no match" from a timeout (R-1201).
+  @Test func waitOrEndReportsTheEndDistinctlyFromATimeout() async throws {
+    let (server, channel) = try await connected()
+    defer { server.cleanUp() }
+    await server.send("halting\n")
+    #expect(await eventually { await channel.endOffset == 8 })
+    await #expect {
+      try await channel.waitOrEnd(for: "never", since: 0, timeout: .milliseconds(200))
+    } throws: { ($0 as? VMLabError)?.code == .timeout }
+    async let outcome = channel.waitOrEnd(for: "never", since: 0, timeout: .seconds(10))
+    try await Task.sleep(for: .milliseconds(50))
+    server.closePeer()
+    #expect(try await outcome == .ended(offset: 8))
+    // After the end: a match in what arrived is still a match, and no match ends at once.
+    #expect(
+      try await channel.waitOrEnd(for: "halt", since: 0, timeout: .seconds(10))
+        == .matched(SerialMatch(match: "halt", start: 0, offset: 4)))
+    #expect(
+      try await channel.waitOrEnd(for: "n[e]ver", since: 0, timeout: .seconds(10))
+        == .ended(offset: 8))
+    await channel.stop()
+  }
+
+  /// `openLog` reads a console log no engine writes: reads and tails answer from the file, and a
+  /// wait ends once it has scanned it.
+  @Test func openLogAnswersFromTheFileAndEnds() async throws {
+    let directory = FileManager.default.temporaryDirectory.appending(
+      path: "vmlab-openlog-\(UUID().uuidString.prefix(8))")
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let log = directory.appending(path: "console.log")
+    try Data("one\ntwo\nthree\n".utf8).write(to: log)
+    let channel = SerialChannel(
+      socketPath: "", logURL: directory.appending(path: "serial.log"), consoleLog: log)
+    try await channel.openLog()
+    #expect(await !channel.isConnected)
+    #expect(await channel.read(since: 4).text == "two\nthree\n")
+    #expect(
+      await channel.read(tail: 1)
+        == SerialRead(text: "three\n", start: 8, offset: 14, truncated: false))
+    #expect(
+      try await channel.waitOrEnd(for: "t[wh]", since: 0, timeout: .seconds(10))
+        == .matched(SerialMatch(match: "tw", start: 4, offset: 6)))
+    #expect(
+      try await channel.waitOrEnd(for: "four", since: 0, timeout: .seconds(10))
+        == .ended(offset: 14))
+    #expect(
+      try await channel.waitOrEnd(for: "one", since: 14, timeout: .seconds(10))
+        == .ended(offset: 14))
+    await #expect(throws: VMLabError.self) {
+      try await channel.wait(for: "four", since: 0, timeout: .seconds(10))
+    }
+    await channel.stop()
+    #expect(!FileManager.default.fileExists(atPath: directory.appending(path: "serial.log").path))
+  }
+
   @Test func writeReachesTheGuest() async throws {
     let (server, channel) = try await connected()
     defer { server.cleanUp() }
