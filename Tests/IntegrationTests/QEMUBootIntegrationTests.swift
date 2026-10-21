@@ -86,11 +86,11 @@ import VMLabQEMU
       let kernel = home.appending(path: "\(name).img")
       try BareKernel.write(to: kernel, message: message, then: then)
       // W3 has not landed: the kernel boot ignores the image. Serial and net_none alone land on
-      // vz-linux; preferring gdb, which only QEMU grants, keeps it on qemu-hvf, whose PL011 the
-      // kernel writes to.
+      // vz-linux; preferring introspection, which qemu-hvf grants without a probe and VZ never does,
+      // keeps it on qemu-hvf, whose PL011 the kernel writes to.
       let requirements: JSONValue = [
         "guest": ["os": "linux", "arch": "arm64"], "require": ["serial", "net_none"],
-        "prefer": ["gdb"],
+        "prefer": ["introspection"],
         "resources": ["cpus": 1, "memoryGB": 1], "image": "debian-13-arm64",
         "boot": ["mode": "kernel", "kernel": .string(kernel.path)],
       ]
@@ -133,7 +133,9 @@ import VMLabQEMU
       while lab.state(name) != "stopped", ContinuousClock.now - started < .seconds(10) {
         try await Task.sleep(for: .milliseconds(100))
       }
-      #expect(lab.state(name) == "stopped", "\(name) after \(ContinuousClock.now - started)")
+      let elapsed = ContinuousClock.now - started
+      #expect(lab.state(name) == "stopped", "\(name) after \(elapsed)")
+      #expect(elapsed < .seconds(10), "\(name) stopped after \(elapsed)")
       // vm_serial refuses a stopped guest until W2; the console log is the record.
       let console = lab.console(name)
       #expect(console.contains(message + "\n"), "\(console)")
