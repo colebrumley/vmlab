@@ -477,4 +477,16 @@ import Testing
     let imaged = try select(plain, host: Self.devHost(), running: .empty).get()
     #expect(imaged.grants(.execSSH) && imaged.resources.diskGB == 32)
   }
+
+  /// R-1202: vz-linux's screen is an in-guest VNC server the seed installs, so a bare machine that
+  /// requires `gui` lands on QEMU, whose display is the virtual hardware.
+  @Test func aBareMachineGetsItsScreenFromQEMU() throws {
+    let bare = try Requirements(
+      guest: Self.arm, require: [.gui], image: "none", boot: BootSpec(mode: .kernel, kernel: "/k"))
+    let plan = try select(bare, host: Self.devHost(), running: .empty).get()
+    #expect(plan.profile == .qemuHVF && plan.grants(.gui))
+    var plain = bare
+    plain.require = []
+    #expect(!(try select(plain, host: Self.devHost(), running: .empty).get().grants(.gui)))
+  }
 }

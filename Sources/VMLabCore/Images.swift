@@ -493,19 +493,30 @@ public actor ImageStore {
     return PullResult(image: record, changed: true)
   }
 
-  /// The VMs whose disk reads `images/<name>/`: those created from it (`image`) and those whose
-  /// backing chain names a file in its directory (clones). Nil when a VM record cannot be read,
-  /// since the image that VM uses is then unknown.
+  /// The VMs that read `images/<name>/`: those created from it (`image`), those whose backing
+  /// chain names a file in its directory (clones), and those whose `boot` files lie in it (a bare
+  /// machine, R-1202, booting an extracted kernel). Nil when a VM record cannot be read, since the
+  /// image that VM uses is then unknown.
   public nonisolated func users(of name: String) -> [VMRecord]? {
     guard let listed = try? Store(home: directory.deletingLastPathComponent()).list(),
       listed.unreadable.isEmpty
     else { return nil }
-    let prefix = imageDirectory(name).standardizedFileURL.path + "/"
+    let folder = imageDirectory(name)
+    // Boot paths are recorded canonical (symlinks resolved); backing chains as written.
+    let prefixes = [
+      folder.standardizedFileURL.path + "/", PathPolicy.canonical(folder.path) + "/",
+    ]
+    func inside(_ path: String) -> Bool {
+      let path = URL(filePath: path).standardizedFileURL.path
+      return prefixes.contains { path.hasPrefix($0) }
+    }
     return listed.records.filter { record in
-      record.image == name
-        || (record.backingChain ?? []).contains {
-          URL(filePath: $0).standardizedFileURL.path.hasPrefix(prefix)
-        }
+      let boot =
+        record.boot.map {
+          [$0.kernel, $0.initrd, $0.dtb, $0.firmware, $0.binary].compactMap { $0 }
+        } ?? []
+      return record.image == name || (record.backingChain ?? []).contains(where: inside)
+        || boot.contains(where: inside)
     }
   }
 

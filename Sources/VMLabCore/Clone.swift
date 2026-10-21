@@ -15,6 +15,7 @@ extension VMManager {
     defer { release(sourceID) }
     let source = try store.load(id: sourceID)
     let backend = try backends.backend(for: source.profile)
+    guard !source.isBare else { throw Self.bareMachine(source, cannot: "clone it") }
     let node = try checkpoint.map { (name) throws(VMLabError) in
       try store.checkpoints(of: sourceID).resolve(name)
     }
@@ -32,7 +33,6 @@ extension VMManager {
 
     // Refused before anything is stored: a failed clone's cleanup must never run (CR-1).
     guard backend.supportsClone else { throw VMLabError.cloneUnsupported(source.profile) }
-    guard !source.isBare else { throw Self.bareMachine(source, cannot: "clone it") }
 
     var draft = source
     draft.name = name ?? ""

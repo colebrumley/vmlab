@@ -128,6 +128,25 @@ import VMLabCore
     #expect(events.first?.message.contains("disk image is missing") == true)
   }
 
+  /// R-1202: a bare machine has no disk, so a gone engine leaves it stopped, not broken.
+  @Test func aBareMachineWithoutADiskIsStopped() async throws {
+    let home = try StoreTests.tempHome()
+    defer { try? FileManager.default.removeItem(at: home) }
+    let store = Store(home: home)
+    let pid = try await Self.finishedPID()
+    var vm = try Self.record(
+      in: store, state: .running, runtime: Self.runtime(pid: pid, home: home), disk: false)
+    vm.image = nil
+    vm.boot = BootSpec(mode: .kernel, kernel: "/k")
+    try store.save(vm)
+    #expect(vm.isBare && store.diskExists(of: vm))
+
+    let changes = try await store.reconcile()
+
+    #expect(changes.first?.to == .stopped)
+    #expect(try store.load(id: vm.id).state == .stopped)
+  }
+
   @Test func aliveAndAnsweringIsRunning() async throws {
     let home = try StoreTests.tempHome()
     defer { try? FileManager.default.removeItem(at: home) }

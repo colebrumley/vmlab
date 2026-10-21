@@ -182,6 +182,11 @@ import VMLabCore
     let started = try await Self.act("start", in: f)
     #expect(started.value["state"] == .string("running"))
     #expect(!started.warnings.contains { $0.contains("ssh_unreachable") })
+    // Running: not wrong_state with advice to stop, since stopping would not help.
+    let live = await #expect(throws: VMLabError.self) {
+      try await Self.lifecycle(["vm": .string("web"), "action": .string("clone")], in: f)
+    }
+    #expect(live?.code == .capabilityMissing)
     #expect(try await Self.act("pause", in: f).value["state"] == .string("paused"))
     #expect(try await Self.act("resume", in: f).value["state"] == .string("running"))
     _ = try await Self.act("stop", in: f)

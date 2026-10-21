@@ -94,8 +94,7 @@ import VMLabVZ
     let registry = BackendRegistry()
     registry.register(
       VZBackend(
-        store: store, launcher: VZRunnerLauncher(runnerPath: VZRunnerIntegrationTests.runner),
-        leaseTimeout: .seconds(1)))
+        store: store, launcher: VZRunnerLauncher(runnerPath: VZRunnerIntegrationTests.runner)))
     let context = ToolContext(home: home, backends: registry, startGate: IntegrationAdmission.gate)
     let images = ImageStore(home: home)
     var files = images.kernel(of: "debian-13-arm64")
@@ -122,10 +121,13 @@ import VMLabVZ
     defer {
       if let pid = try? store.load(id: id).runtime?.pid { kill(pid, SIGKILL) }
     }
+    // The default lease timeout: a bare machine does not wait for DHCP.
+    let started = ContinuousClock.now
     let start = try await ToolHandlers.call(
       "vm_lifecycle", arguments: .object(["vm": .string(id), "action": .string("start")]),
       context: context)
     #expect(start.value["state"] == .string("running"))
+    #expect(ContinuousClock.now - started < .seconds(10))
     #expect(!start.warnings.contains { $0.contains("ssh_unreachable") })
     for file in ["disk.raw", "seed.iso", "id_ed25519"] {
       #expect(

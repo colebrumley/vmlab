@@ -217,4 +217,24 @@ import VMLabCore
     }
     #expect(!FileManager.default.fileExists(atPath: f.context.images.imageDirectory("none").path))
   }
+
+  /// R-1202: a bare machine booting a kernel kept in an image's directory uses that image, so
+  /// `remove` refuses it as it does for a VM made from the image.
+  @Test func aBareMachineBootingAnImagesKernelKeepsTheImage() async throws {
+    let f = try Fixture()
+    defer { f.cleanUp() }
+    _ = try await Self.images(["action": .string("pull"), "name": .string("tiny-arm64")], in: f)
+    let kernel = f.context.images.imageDirectory("tiny-arm64").appending(path: "kernel/Image")
+    try FileManager.default.createDirectory(
+      at: kernel.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try Data([0]).write(to: kernel)
+    var requirements = try VMCreateHandlerTests.bare("kernel").objectValue ?? [:]
+    requirements["boot"] = .object(["mode": .string("kernel"), "kernel": .string(kernel.path)])
+    _ = try await f.create(["requirements": .object(requirements), "autostart": .bool(false)])
+    #expect(f.context.images.users(of: "tiny-arm64")?.count == 1)
+    let error = await #expect(throws: VMLabError.self) {
+      try await Self.images(["action": .string("remove"), "name": .string("tiny-arm64")], in: f)
+    }
+    #expect(error?.data["reason"] == .string("VMs use this image"))
+  }
 }

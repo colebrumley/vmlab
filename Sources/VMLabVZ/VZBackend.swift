@@ -197,7 +197,10 @@ public struct VZBackend: Backend {
       }
     }
     if case .nat(let mac?) = config.network.first {
-      runtime.ip = await DHCPLeases.waitForIP(mac: mac, path: leasePath, timeout: leaseTimeout)
+      // R-1202: a bare machine's kernel may never ask for a lease; look once and return (a later
+      // lease is picked up by `VMManager.refreshingAddress`).
+      runtime.ip = await DHCPLeases.waitForIP(
+        mac: mac, path: leasePath, timeout: record.isBare ? .zero : leaseTimeout)
     }
     return runtime
   }

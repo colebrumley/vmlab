@@ -200,10 +200,17 @@ public enum ProfileSelector {
 
     // 2-3. Host facts and the guest filter.
     let candidates = Profile.allCases.filter { Capabilities.supports(r.guest, on: $0) }
-    let matrix = Dictionary(
+    var matrix = Dictionary(
       uniqueKeysWithValues: candidates.map {
         ($0, Capabilities.capabilities(of: $0, host: host, allowUnverified: allowUnverified))
       })
+    // R-1202: a VZ Linux screen is a VNC server the seed installs in the guest; a bare machine
+    // has neither, so only QEMU's virtual display can give it `gui`.
+    if r.isBare, matrix[.vzLinux]?[.gui] == .yes {
+      matrix[.vzLinux]?[.gui] = .no(
+        "a bare machine (image \"none\") has no guest OS to run the VNC server vz-linux's "
+          + "screen needs")
+    }
     func has(_ profile: Profile, _ feature: Feature) -> Bool {
       matrix[profile]?[feature] == .yes
     }
