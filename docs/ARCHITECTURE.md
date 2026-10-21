@@ -481,7 +481,7 @@ live switch for the same segment, and removes its sockets on SIGTERM or SIGINT.
 fixtures come from `Tests/Fixtures/` through `#filePath`.
 
 **`IntegrationTests`** (Swift Testing). Tests that boot real guests through QEMU or Tart and need
-pulled images; each skips itself unless `VMLAB_INTEGRATION=1`, and they run serially (`VMLAB_INTEGRATION=1 swift test --no-parallel --filter Integration`). Their starts go through `IntegrationAdmission` (`IntegrationGate.swift`: a `StartGate` with the live `HostMemoryGuard`, reached through `VMManager.performAdmitted`/`runAdmitted` and the contexts' `startGate`), so an overcommitted run fails with `limit_memory` instead of swapping.
+pulled images; each skips itself unless `VMLAB_INTEGRATION=1`, and they run serially (`VMLAB_INTEGRATION=1 swift test --no-parallel --filter Integration`). Their starts go through `IntegrationAdmission` (`IntegrationGate.swift`: a `StartGate` with the live `HostMemoryGuard`, reached through `VMManager.performAdmitted`/`runAdmitted` and the contexts' `startGate`), so an overcommitted run fails with `limit_memory` instead of swapping. `BareKernel.swift` (R-1200) writes the bare arm64 kernel the kernel-loop tests boot: `BareKernel.image(message:then:)` is a Linux arm64 `Image` header (`text_offset` 0x80000, magic at byte 56, `code0` branching over it) and hand-encoded instructions that print `message` (with a trailing `\n`) to the `virt` machine's PL011 at `0x09000000`, then PSCI `SYSTEM_OFF` through `hvc #0` (`.powerOff`) or `wfi` forever (`.halt`); `write(to:message:then:)` writes it to a file. A `qemu-hvf` guest booting it prints the line and powers off in well under a second, with no toolchain and no image (`QEMUBootIntegrationTests`).
 
 ## Scripts
 
