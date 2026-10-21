@@ -501,22 +501,20 @@ public actor ImageStore {
     guard let listed = try? Store(home: directory.deletingLastPathComponent()).list(),
       listed.unreadable.isEmpty
     else { return nil }
-    let folder = imageDirectory(name)
-    // Boot paths are recorded canonical (symlinks resolved); backing chains as written.
-    let prefixes = [
-      folder.standardizedFileURL.path + "/", PathPolicy.canonical(folder.path) + "/",
-    ]
-    func inside(_ path: String) -> Bool {
-      let path = URL(filePath: path).standardizedFileURL.path
-      return prefixes.contains { path.hasPrefix($0) }
-    }
+    let prefix = imageDirectory(name).standardizedFileURL.path + "/"
+    // Boot paths are compared as `PathPolicy` checks them: canonical, case and Unicode folded
+    // (APFS), so `images/DEBIAN-13-arm64/...` counts for `debian-13-arm64`.
+    let folder = PathPolicy.canonical(imageDirectory(name).path)
     return listed.records.filter { record in
       let boot =
         record.boot.map {
           [$0.kernel, $0.initrd, $0.dtb, $0.firmware, $0.binary].compactMap { $0 }
         } ?? []
-      return record.image == name || (record.backingChain ?? []).contains(where: inside)
-        || boot.contains(where: inside)
+      return record.image == name
+        || (record.backingChain ?? []).contains {
+          URL(filePath: $0).standardizedFileURL.path.hasPrefix(prefix)
+        }
+        || boot.contains { PathPolicy.contains(folder, PathPolicy.canonical($0)) }
     }
   }
 

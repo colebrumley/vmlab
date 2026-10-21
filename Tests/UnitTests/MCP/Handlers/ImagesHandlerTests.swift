@@ -232,6 +232,11 @@ import VMLabCore
     requirements["boot"] = .object(["mode": .string("kernel"), "kernel": .string(kernel.path)])
     _ = try await f.create(["requirements": .object(requirements), "autostart": .bool(false)])
     #expect(f.context.images.users(of: "tiny-arm64")?.count == 1)
+    // The same kernel named in another case (APFS is case-insensitive) is the same use.
+    var other = try #require(try f.context.store.list().records.first)
+    other.boot?.kernel = kernel.path.replacingOccurrences(of: "tiny-arm64", with: "TINY-ARM64")
+    try f.context.store.save(other)
+    #expect(f.context.images.users(of: "tiny-arm64")?.count == 1)
     let error = await #expect(throws: VMLabError.self) {
       try await Self.images(["action": .string("remove"), "name": .string("tiny-arm64")], in: f)
     }
