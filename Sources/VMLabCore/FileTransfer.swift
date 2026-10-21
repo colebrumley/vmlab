@@ -87,32 +87,10 @@ public struct SSHFileTransfer: Sendable {
       }
       return FileTransferResult(bytes: Self.bytes(at: destination), path: destination.path)
     }
-    var isDirectory: ObjCBool = false
-    let into =
-      files.fileExists(atPath: local.path, isDirectory: &isDirectory)
-      && isDirectory.boolValue
-    let requested = into ? local.appending(path: name) : local
-    let destination =
-      try policy?.check(requested.path, field: "local", access: .write)
-      ?? URL(filePath: PathPolicy.canonical(requested.path))
-    let parentPath = destination.deletingLastPathComponent().path
-    let finalName = destination.lastPathComponent
-    let parent = open(parentPath, O_RDONLY | O_DIRECTORY | O_NOFOLLOW_ANY | O_CLOEXEC)
-    guard parent >= 0 else {
-      throw VMLabError.invalidRequest(
-        field: "local",
-        reason: "\(parentPath) is not an existing directory reached without a symlink",
-        hint: "Pull into an existing directory, giving its real path.")
-    }
-    defer { close(parent) }
-    var info = stat()
-    if fstatat(parent, finalName, &info, AT_SYMLINK_NOFOLLOW) == 0,
-      info.st_mode & S_IFMT == S_IFDIR
-    {
-      throw VMLabError.invalidRequest(
-        field: "local", reason: "\(destination.path) already exists as a directory",
-        hint: "Pull to a new path, or into the directory that should receive the copy.")
-    }
+    let target = try LocalDestination.open(local, defaultName: name, policy: policy)
+    defer { target.close() }
+    let destination = target.url
+    let finalName = target.name
     let staging = pulledDirectory.appending(path: ".staging-\(UUID().uuidString)")
     try Self.createDirectory(staging)
     let staged = staging.appending(path: finalName)
@@ -129,7 +107,7 @@ public struct SSHFileTransfer: Sendable {
       keepStaging = error.code == .timeout
       throw error
     }
-    try Self.move(staged, into: parent, name: finalName, shown: destination.path)
+    try target.move(staged)
     return FileTransferResult(bytes: Self.bytes(at: destination), path: destination.path)
   }
 
@@ -144,7 +122,8 @@ public struct SSHFileTransfer: Sendable {
   }
 
   /// Renames `source` to `name` in the directory `parent`, replacing a file or symlink there and
-  /// never following one; across volumes, copies it in with `openat(O_NOFOLLOW)`.
+  /// never following one; across volumes, copies it in with `openat(O_NOFOLLOW)` (a file through
+  /// a temporary name renamed over the old one when complete).
   static func move(_ source: URL, into parent: Int32, name: String, shown: String)
     throws(VMLabError)
   {
@@ -156,7 +135,7 @@ public struct SSHFileTransfer: Sendable {
     }
     throw VMLabError.invalidRequest(
       field: "local", reason: "cannot write \(shown): \(String(cString: strerror(code)))",
-      hint: "Pull to a new path in a directory you can write.")
+      hint: "Write to a new path in a directory you can write.")
   }
 
   /// Copies the file or directory at `source` to `name` in `parent` without following a symlink
@@ -177,18 +156,24 @@ public struct SSHFileTransfer: Sendable {
       }
       return 0
     case S_IFREG:
-      var existing = stat()
-      if fstatat(parent, name, &existing, AT_SYMLINK_NOFOLLOW) == 0 {
-        guard unlinkat(parent, name, 0) == 0 else { return errno }
-      }
+      // Into a fresh name first, renamed over `name` only once complete, so a failed copy (a
+      // full volume) leaves what was there and no partial file under `name`.
+      let temporary = ".\(name).\(UUID().uuidString).part"
       let output = openat(
-        parent, name, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o644)
+        parent, temporary, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o644)
       guard output >= 0 else { return errno }
-      defer { close(output) }
       let input = open(source, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
-      guard input >= 0 else { return errno }
-      defer { close(input) }
-      return fcopyfile(input, output, nil, copyfile_flags_t(COPYFILE_DATA)) == 0 ? 0 : errno
+      var code: Int32 = 0
+      if input < 0 {
+        code = errno
+      } else {
+        if fcopyfile(input, output, nil, copyfile_flags_t(COPYFILE_DATA)) != 0 { code = errno }
+        close(input)
+      }
+      if close(output) != 0, code == 0 { code = errno }
+      if code == 0, renameat(parent, temporary, parent, name) != 0 { code = errno }
+      if code != 0 { unlinkat(parent, temporary, 0) }
+      return code
     default:
       return 0  // scp makes no links or devices; nothing else is copied.
     }
@@ -267,4 +252,58 @@ public struct SSHFileTransfer: Sendable {
     }
     return total
   }
+}
+
+/// A host file the model named for vmlab to write (`vm_file pull`'s and `vm_memory_dump`'s
+/// `local`, R-1102): the canonical final path, which passed the policy's write side, and its
+/// parent directory, opened with `O_NOFOLLOW_ANY` so the file is renamed into the directory that
+/// was checked, replacing a file or symlink at the final name without following it. `close()` it.
+public struct LocalDestination: Sendable {
+  public let url: URL
+  /// The parent directory's descriptor.
+  public let parent: Int32
+
+  public var name: String { url.lastPathComponent }
+  public var directory: URL { url.deletingLastPathComponent() }
+
+  /// Resolves `local`: an existing directory receives `defaultName` inside it, anything else is
+  /// the file's own path. The result passes `policy` as a write path (when given), its parent
+  /// must be an existing directory reached without a symlink, and it must not be a directory.
+  public static func open(
+    _ local: URL, defaultName: String, policy: PathPolicy?, field: String = "local"
+  ) throws(VMLabError) -> LocalDestination {
+    var isDirectory: ObjCBool = false
+    let into =
+      FileManager.default.fileExists(atPath: local.path, isDirectory: &isDirectory)
+      && isDirectory.boolValue
+    let requested = into ? local.appending(path: defaultName) : local
+    let destination =
+      try policy?.check(requested.path, field: field, access: .write)
+      ?? URL(filePath: PathPolicy.canonical(requested.path))
+    let parentPath = destination.deletingLastPathComponent().path
+    let parent = Darwin.open(parentPath, O_RDONLY | O_DIRECTORY | O_NOFOLLOW_ANY | O_CLOEXEC)
+    guard parent >= 0 else {
+      throw VMLabError.invalidRequest(
+        field: field,
+        reason: "\(parentPath) is not an existing directory reached without a symlink",
+        hint: "Write into an existing directory, giving its real path.")
+    }
+    var info = stat()
+    if fstatat(parent, destination.lastPathComponent, &info, AT_SYMLINK_NOFOLLOW) == 0,
+      info.st_mode & S_IFMT == S_IFDIR
+    {
+      Darwin.close(parent)
+      throw VMLabError.invalidRequest(
+        field: field, reason: "\(destination.path) already exists as a directory",
+        hint: "Write to a new path, or into the directory that should receive the file.")
+    }
+    return LocalDestination(url: destination, parent: parent)
+  }
+
+  /// Renames `source` to the final name in the checked directory (see `SSHFileTransfer.move`).
+  public func move(_ source: URL) throws(VMLabError) {
+    try SSHFileTransfer.move(source, into: parent, name: name, shown: url.path)
+  }
+
+  public func close() { Darwin.close(parent) }
 }

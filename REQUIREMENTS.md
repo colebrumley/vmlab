@@ -947,9 +947,9 @@ that builds it ticks the line in its own pull request and nobody else edits it.
 - [ ] **R-1202 `image: "none"` for kernel, binary and firmware boots** — docs/specs/kernel-loop.md, item W3, size M.
 - [ ] **R-1203 `reset` relaunches a QEMU file boot whose files changed** — docs/specs/kernel-loop.md, item W4, size M.
 - [x] **R-1204 The `cpu_emulation` feature** — docs/specs/kernel-loop.md, item W5, size M.
-- [ ] **R-1205 `vm_memory_dump` writes to a path the model names** — docs/specs/kernel-loop.md, item W6, size S.
+- [x] **R-1205 `vm_memory_dump` writes to a path the model names** — docs/specs/kernel-loop.md, item W6, size S.
 - [ ] **R-1206 Agent guide session 6: iterate on a bare-metal kernel** — docs/specs/kernel-loop.md, item W7, size M.
-- [ ] **R-1207 Switches and test homes are collected** — docs/specs/kernel-loop.md, item W8, size S.
+- [x] **R-1207 Switches and test homes are collected** — docs/specs/kernel-loop.md, item W8, size S.
 
 ---
 

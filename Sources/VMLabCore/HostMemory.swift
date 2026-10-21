@@ -252,6 +252,45 @@ public enum HostProcesses {
     }
     return Array(argv.dropFirst())
   }
+
+  /// The environment of `pid` (`KERN_PROCARGS2`, after its arguments); nil when unreadable.
+  static func environment(_ pid: Int32) -> [String: String]? {
+    var mib: [Int32] = [CTL_KERN, KERN_ARGMAX]
+    var argMax: Int32 = 0
+    var size = MemoryLayout<Int32>.size
+    guard sysctl(&mib, 2, &argMax, &size, nil, 0) == 0, argMax > 0 else { return nil }
+    var buffer = [UInt8](repeating: 0, count: Int(argMax))
+    mib = [CTL_KERN, KERN_PROCARGS2, pid]
+    size = buffer.count
+    guard sysctl(&mib, 3, &buffer, &size, nil, 0) == 0 else { return nil }
+    return parseProcEnvironment(Array(buffer.prefix(size)))
+  }
+
+  /// The `KEY=value` strings that follow the `argc` arguments in a `KERN_PROCARGS2` buffer, up to
+  /// the first empty one.
+  public static func parseProcEnvironment(_ bytes: [UInt8]) -> [String: String]? {
+    guard bytes.count >= 4 else { return nil }
+    let argc = bytes.prefix(4).withUnsafeBytes { Int($0.loadUnaligned(as: Int32.self)) }
+    var index = 4
+    while index < bytes.count, bytes[index] != 0 { index += 1 }  // the executable path
+    while index < bytes.count, bytes[index] == 0 { index += 1 }  // its padding
+    var seen = 0
+    while seen < argc, index < bytes.count {
+      while index < bytes.count, bytes[index] != 0 { index += 1 }
+      index += 1
+      seen += 1
+    }
+    var environment: [String: String] = [:]
+    while index < bytes.count, bytes[index] != 0 {
+      let start = index
+      while index < bytes.count, bytes[index] != 0 { index += 1 }
+      let entry = String(decoding: bytes[start..<index], as: UTF8.self)
+      index += 1
+      guard let equals = entry.firstIndex(of: "=") else { continue }
+      environment[String(entry[..<equals])] = String(entry[entry.index(after: equals)...])
+    }
+    return environment
+  }
 }
 
 /// The host-memory part of a start's admission (beyond R-107's budget): the reader, and whether

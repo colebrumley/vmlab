@@ -24,7 +24,7 @@ vmlab's MCP tools (Appendix C). Tool results are a JSON object; every result als
 | [`vm_serial`](#vm_serial) | The guest's serial console, captured from the first byte of boot. |
 | [`vm_debug`](#vm_debug) | Debug the guest CPU through its GDB stub. |
 | [`vm_introspect`](#vm_introspect) | Ask the engine about the machine rather than the guest OS: status (run state), block (disks), pci (devices on the bus), cpus, memory_tree (the physical memory map), registers (every CPU), devices (the device tree), or raw for a read-only QMP query-* command (qmp) or HMP info command (hmp). |
-| [`vm_memory_dump`](#vm_memory_dump) | Write guest physical memory to a file on the host under the VM's dumps/ directory: the range of size bytes at address as raw bytes, or, with neither, all memory as an ELF core for crash or volatility. |
+| [`vm_memory_dump`](#vm_memory_dump) | Write guest physical memory to a file on the host: the range of size bytes at address as raw bytes, or, with neither, all memory as an ELF core for crash or volatility. |
 | [`vm_checkpoint`](#vm_checkpoint) | Named snapshots of a VM, kept as a tree. |
 | [`vm_manifest`](#vm_manifest) | Take a manifest of the running guest over SSH: files under paths (size, mode, mtime, sha256) and, for profile linux, packages, enabled services, users and /etc hashes; for macos also defaults domains, Homebrew packages, launchd jobs, profiles and login items; custom covers only paths. |
 | [`vm_logs`](#vm_logs) | Read a VM's logs on the host: events (lifecycle, panics, warnings), serial (the console log), provision (first-boot steps), or all of them interleaved. |
@@ -397,7 +397,7 @@ Ask the engine about the machine rather than the guest OS: status (run state), b
 
 ## `vm_memory_dump`
 
-Write guest physical memory to a file on the host under the VM's dumps/ directory: the range of size bytes at address as raw bytes, or, with neither, all memory as an ELF core for crash or volatility. Ranges over 256 MB need confirm: true. Returns the path, size and format; read it with host tools. Needs the memory_dump feature.
+Write guest physical memory to a file on the host: the range of size bytes at address as raw bytes, or, with neither, all memory as an ELF core for crash or volatility. It goes under the VM's dumps/ directory, which destroy removes, or to local, a host path that outlives the VM (the write rules of vm_file pull: under /tmp, $TMPDIR, ~/vmlab-files or the owner's writeRoots; a directory gets the default name, a file is replaced). Ranges over 256 MB need confirm: true. Returns the path, size and format; read it with host tools. Needs the memory_dump feature.
 
 **Errors:** `vm_not_found`, `wrong_state`, `capability_missing`, `invalid_request`, `confirm_required`, `engine_error`
 
@@ -408,6 +408,7 @@ Write guest physical memory to a file on the host under the VM's dumps/ director
 | `vm` | string, ≤ 64 characters | yes | The VM's id (vm-xxxxxx) or name, as vm_list or vm_create returned it. |
 | `address` | string |  | Guest physical start address in 0x hex. |
 | `confirm` | boolean, default `false` |  | Allow a dump the server asks to confirm (it states the size). |
+| `local` | string |  | Absolute host path for the dump file, or an existing directory for it; default the VM's dumps/ directory. |
 | `size` | integer, ≥ 1 |  | Bytes to dump from address. |
 
 **Result**
