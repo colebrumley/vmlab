@@ -9,8 +9,8 @@ struct GCCommand: AsyncParsableCommand {
   static let configuration = CommandConfiguration(
     commandName: "gc",
     abstract:
-      "Remove orphaned engine processes, old dumps and exec logs, temporary checkpoints and "
-      + "unused backing files; report the bytes freed.")
+      "Remove orphaned engine and switch processes, old dumps and exec logs, temporary "
+      + "checkpoints, unused backing files and stale locks; report the bytes freed.")
 
   @Flag(help: "Report what would be removed without removing it.") var dryRun = false
   @Flag(help: "Print the report as JSON.") var json = false

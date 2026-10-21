@@ -191,6 +191,8 @@ import VMLabCore
     for word in ["qemu", "-m", "4096M", "HOME=/x"] { bytes += Array(word.utf8) + [0] }
     #expect(HostProcesses.parseProcArgs(bytes) == ["-m", "4096M"])
     #expect(HostProcesses.parseProcArgs([1]) == nil)
+    #expect(HostProcesses.parseProcEnvironment(bytes) == ["HOME": "/x"])
+    #expect(HostProcesses.parseProcEnvironment([1]) == nil)
   }
 
   /// Reading every host process's arguments takes seconds of CPU in a debug build: it runs on a
