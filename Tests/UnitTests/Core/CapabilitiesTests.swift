@@ -206,6 +206,7 @@ import VMLabCore
         shared_dir Y Y Y Y
         cloud_init N Y Y Y
         many_guests N Y Y Y
+        cpu_emulation N N N Y
         """)
   }
 
@@ -240,6 +241,7 @@ import VMLabCore
         shared_dir Y Y Y Y
         cloud_init N Y Y Y
         many_guests N Y Y Y
+        cpu_emulation N N N Y
         """)
   }
 
@@ -326,6 +328,16 @@ import VMLabCore
       }
     }
     #expect(Capabilities.entry(.directKernelBoot, on: .vzLinux).availability == .yes)
+  }
+
+  /// R-1204: `cpu_emulation` is `qemu-tcg` alone; every other engine runs the CPU natively.
+  @Test func cpuEmulationIsTCGOnly() {
+    for profile in Profile.allCases {
+      #expect(
+        Capabilities.entry(.cpuEmulation, on: profile).availability
+          == (profile == .qemuTCG ? .yes : .no("the engine runs the guest CPU natively")))
+    }
+    #expect(Feature.cpuEmulation.kind == .compute)
   }
 
   /// R-609: `nested_virt` on vz-linux is `no` with the reason for an M1 fact set and `yes` for an

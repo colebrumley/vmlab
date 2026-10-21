@@ -228,6 +228,38 @@ import Testing
     #expect(u.suggestions == [.init(drop: [.manyGuests], profile: .vzMacOS)])
   }
 
+  /// R-1204: requiring an emulated CPU is the way onto qemu-tcg for an arm64 guest.
+  @Test func cpuEmulationIsTCG() throws {
+    let plan = try Self.plan(Self.arm, require: [.cpuEmulation]).get()
+    #expect(plan.profile == .qemuTCG)
+    #expect(plan.notes.contains { $0.contains("emulates the guest CPU") && $0.contains("slow") })
+  }
+
+  @Test func cpuEmulationWithDebuggingIsTCG() throws {
+    let plan = try Self.plan(
+      Self.arm, require: [.cpuEmulation, .gdb, .serial, .haltAtStart]
+    ).get()
+    #expect(plan.profile == .qemuTCG)
+    #expect(plan.notes.contains { $0.contains("emulates the guest CPU") && $0.contains("slow") })
+  }
+
+  /// Rule 7: a preference never moves a native guest onto an emulated CPU.
+  @Test func preferredCPUEmulationStaysOnVZLinux() throws {
+    let plan = try Self.plan(Self.arm, prefer: [.cpuEmulation]).get()
+    #expect(plan.profile == .vzLinux)
+    #expect(plan.preferredDenied == [.cpuEmulation])
+    #expect(!plan.grants(.cpuEmulation))
+  }
+
+  @Test func macOSWithCPUEmulationIsUnsatisfiable() throws {
+    let u = try #require(Self.failure(try Self.plan(Self.mac, require: [.cpuEmulation])))
+    #expect(u.eliminated == [.cpuEmulation: [.vzMacOS]])
+    #expect(u.reasons[.cpuEmulation]?[.vzMacOS] == "the engine runs the guest CPU natively")
+    #expect(u.suggestions == [.init(drop: [.cpuEmulation], profile: .vzMacOS)])
+    #expect(u.error.code == .unsatisfiable)
+    #expect(u.error.message.contains("the engine runs the guest CPU natively"))
+  }
+
   // MARK: Plan contents and errors
 
   @Test func planFeaturesAreRequiredPlusEveryYes() throws {
@@ -384,6 +416,8 @@ import Testing
           #expect(plan.grants(feature))
         }
         #expect(plan.features.allSatisfy { caps[$0] == .yes })
+        // R-1204: only an emulated CPU's plan lists cpu_emulation.
+        #expect(plan.grants(.cpuEmulation) == (plan.profile == .qemuTCG))
         if plan.profile == .vzMacOS { #expect(running.macOSGuests < 2) }
         #expect(Double(running.memoryGB + memory) <= host.memoryGB - 4)
       case .failure(let u):

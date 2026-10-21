@@ -283,8 +283,7 @@ public enum QEMUCommandLine {
   static func contradiction(field: String, _ reason: String) -> VMLabError {
     VMLabError.invalidRequest(
       field: field, reason: reason,
-      hint: "Drop it, or ask for a guest the plan runs on qemu-tcg (an architecture other than "
-        + "arm64).")
+      hint: "Drop it, or require cpu_emulation so the plan runs the guest on qemu-tcg.")
   }
 
   /// vmlab's `-machine` value: its board (or the request's, which qemu-hvf holds to `virt`) and

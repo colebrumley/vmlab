@@ -946,7 +946,7 @@ that builds it ticks the line in its own pull request and nobody else edits it.
 - [ ] **R-1201 `vm_serial` reads a stopped guest and `wait` notices the power-off** — docs/specs/kernel-loop.md, item W2, size M.
 - [ ] **R-1202 `image: "none"` for kernel, binary and firmware boots** — docs/specs/kernel-loop.md, item W3, size M.
 - [ ] **R-1203 `reset` relaunches a QEMU file boot whose files changed** — docs/specs/kernel-loop.md, item W4, size M.
-- [ ] **R-1204 The `cpu_emulation` feature** — docs/specs/kernel-loop.md, item W5, size M.
+- [x] **R-1204 The `cpu_emulation` feature** — docs/specs/kernel-loop.md, item W5, size M.
 - [x] **R-1205 `vm_memory_dump` writes to a path the model names** — docs/specs/kernel-loop.md, item W6, size S.
 - [ ] **R-1206 Agent guide session 6: iterate on a bare-metal kernel** — docs/specs/kernel-loop.md, item W7, size M.
 - [x] **R-1207 Switches and test homes are collected** — docs/specs/kernel-loop.md, item W8, size S.
@@ -988,6 +988,7 @@ starts), state (saving and restoring), net, compute.
 | `shared_dir` | compute | A host directory mounted in the guest |
 | `cloud_init` | boot | First-boot provisioning for Linux guests |
 | `many_guests` | compute | More than two instances may run at once |
+| `cpu_emulation` | compute | The guest CPU is emulated in software: deterministic `-icount`, instruction tracing, any CPU model; many times slower than hardware virtualization |
 
 ## Appendix B — Capability matrix
 
@@ -1026,6 +1027,7 @@ answered is listed under the table. `Capabilities.swift` is the authority (C7) a
 | `shared_dir` | Y (virtiofs) | Y (virtiofs) | Y (9p) | Y (9p) |
 | `cloud_init` | N | Y | Y | Y |
 | `many_guests` | N (limit 2) | Y | Y | Y |
+| `cpu_emulation` | N | N | N | Y |
 | Guest OS | macOS | Linux | Linux | Linux |
 | Arch | arm64 | arm64 | arm64 | x86_64, arm64, riscv64, other |
 | Performance tier (1 best) | 1 | 1 | 2 | 4 |
@@ -1260,3 +1262,7 @@ Worked examples (each is a unit test in R-103; host = dev host, all probes `yes`
 | fleet of 6 × 8 GB on a 32 GB host | `limit_memory` with the numbers |
 | linux arm64, require [many_guests, gui_accel] | `vz-linux` |
 | macos, require [many_guests] | unsatisfiable; eliminated: many_guests → vz-macos; suggestions: drop [many_guests] → vz-macos |
+| linux arm64, require [cpu_emulation] | `qemu-tcg` (notes: slow) |
+| linux arm64, require [cpu_emulation, gdb, serial, halt_at_start] | `qemu-tcg` (notes: slow) |
+| linux arm64, require [], prefer [cpu_emulation] | `vz-linux` with `preferredDenied: [cpu_emulation]` (rule 7) |
+| macos, require [cpu_emulation] | unsatisfiable; eliminated: cpu_emulation → vz-macos (the engine runs the guest CPU natively); suggestions: drop [cpu_emulation] → vz-macos |

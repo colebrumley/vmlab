@@ -27,3 +27,4 @@
 | `shared_dir` | compute | A host directory mounted in the guest |
 | `cloud_init` | boot | First-boot provisioning for Linux guests |
 | `many_guests` | compute | More than two instances may run at once |
+| `cpu_emulation` | compute | The guest CPU is emulated in software: deterministic `-icount`, instruction tracing, any CPU model; many times slower than hardware virtualization |

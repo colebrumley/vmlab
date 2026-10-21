@@ -36,6 +36,7 @@ column is what the development host recorded (`docs/dev-host-facts.json`, refres
 | `shared_dir` | Y (virtiofs) | Y (virtiofs) | Y (9p) | Y (9p) |  |
 | `cloud_init` | N | Y | Y | Y |  |
 | `many_guests` | N (limit 2) | Y | Y | Y |  |
+| `cpu_emulation` | N | N | N | Y |  |
 | Guest OS | macOS | Linux | Linux | Linux |  |
 | Arch | arm64 | arm64 | arm64 | x86_64, arm64, riscv64, other |  |
 | Performance tier (1 best) | 1 | 1 | 2 | 4 |  |
@@ -71,6 +72,9 @@ column is what the development host recorded (`docs/dev-host-facts.json`, refres
 - `nested_virt` on `qemu-hvf`: HVF does not expose nested virtualization to QEMU guests.
 - `cloud_init` on `vz-macos`: cloud-init is for Linux guests.
 - `many_guests` on `vz-macos`: macOS allows at most two macOS guests at once.
+- `cpu_emulation` on `vz-macos`: the engine runs the guest CPU natively.
+- `cpu_emulation` on `vz-linux`: the engine runs the guest CPU natively.
+- `cpu_emulation` on `qemu-hvf`: the engine runs the guest CPU natively.
 
 ## Engine notes
 
