@@ -122,7 +122,8 @@ public struct SSHFileTransfer: Sendable {
   }
 
   /// Renames `source` to `name` in the directory `parent`, replacing a file or symlink there and
-  /// never following one; across volumes, copies it in with `openat(O_NOFOLLOW)`.
+  /// never following one; across volumes, copies it in with `openat(O_NOFOLLOW)` (a file through
+  /// a temporary name renamed over the old one when complete).
   static func move(_ source: URL, into parent: Int32, name: String, shown: String)
     throws(VMLabError)
   {
@@ -155,18 +156,24 @@ public struct SSHFileTransfer: Sendable {
       }
       return 0
     case S_IFREG:
-      var existing = stat()
-      if fstatat(parent, name, &existing, AT_SYMLINK_NOFOLLOW) == 0 {
-        guard unlinkat(parent, name, 0) == 0 else { return errno }
-      }
+      // Into a fresh name first, renamed over `name` only once complete, so a failed copy (a
+      // full volume) leaves what was there and no partial file under `name`.
+      let temporary = ".\(name).\(UUID().uuidString).part"
       let output = openat(
-        parent, name, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o644)
+        parent, temporary, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o644)
       guard output >= 0 else { return errno }
-      defer { close(output) }
       let input = open(source, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
-      guard input >= 0 else { return errno }
-      defer { close(input) }
-      return fcopyfile(input, output, nil, copyfile_flags_t(COPYFILE_DATA)) == 0 ? 0 : errno
+      var code: Int32 = 0
+      if input < 0 {
+        code = errno
+      } else {
+        if fcopyfile(input, output, nil, copyfile_flags_t(COPYFILE_DATA)) != 0 { code = errno }
+        close(input)
+      }
+      if close(output) != 0, code == 0 { code = errno }
+      if code == 0, renameat(parent, temporary, parent, name) != 0 { code = errno }
+      if code != 0 { unlinkat(parent, temporary, 0) }
+      return code
     default:
       return 0  // scp makes no links or devices; nothing else is copied.
     }
