@@ -178,6 +178,24 @@ import VMLabCore
 
   /// A template no VM was created from or reads through, unchanged for a week, goes; one a VM
   /// names, one a backing chain reads, a young one and a plain pulled image stay.
+  /// A dump written through `vm_memory_dump`'s `local` lies outside every VM directory: never an
+  /// item, however old (R-1205).
+  @Test func leavesDumpsOutsideTheVMDirectoryAlone() async throws {
+    let f = try Fixture()
+    let vm = try await f.create([.serial, .memoryDump])
+    let inside = f.store.directory(of: vm.id).appending(path: "dumps/old.raw")
+    try Self.write(inside, modified: Self.old)
+    let outside = FileManager.default.temporaryDirectory.appending(path: "vmlab-dump-\(UUID())")
+    defer { try? FileManager.default.removeItem(at: outside) }
+    let dump = outside.appending(path: "old.raw")
+    try Self.write(dump, modified: Self.old)
+    var collector = GarbageCollector(manager: f.manager)
+    collector.processes = Processes().inspector
+    let report = await collector.run()
+    #expect(report.items.filter { $0.kind == .dump }.map(\.target) == [inside.path])
+    #expect(FileManager.default.fileExists(atPath: dump.path))
+  }
+
   @Test func collectsUnusedTemplates() async throws {
     let f = try Fixture()
     let vm = try await f.create()

@@ -1,9 +1,16 @@
 import Foundation
 import VMLabCore
 
-/// `vm_memory_dump`: guest physical memory to a file under `<vm>/dumps/`, through the VM's
-/// `memory_dump` channel. A range is raw bytes (`<time>-<address>-<size>.raw`); no range is the
-/// whole memory as an ELF core (`<time>.elf`). A range over 256 MB needs `confirm: true`.
+/// `vm_memory_dump`: guest physical memory to a file under `<vm>/dumps/`, or at the host path
+/// `local`, through the VM's `memory_dump` channel. A range is raw bytes
+/// (`<time>-<address>-<size>.raw`); no range is the whole memory as an ELF core (`<time>.elf`).
+/// A range over 256 MB needs `confirm: true`.
+///
+/// `local` is a host write the model names, checked exactly as `vm_file pull`'s
+/// (`LocalDestination`, the write side of `PathPolicy`) before the engine is asked: an existing
+/// directory receives the default name, an existing file is replaced. The engine writes
+/// `<final>.part` beside it, which the handler renames into the checked directory, so a partial
+/// dump never has the final name and a symlink planted there is replaced, not followed.
 struct VMMemoryDumpHandler: ToolHandler {
   static let confirmAbove: UInt64 = 256 << 20
 
@@ -33,17 +40,54 @@ struct VMMemoryDumpHandler: ToolHandler {
         hint: "Call vm_memory_dump again with confirm: true, or dump a smaller range.",
         data: ["bytes": .number(Double(size))])
     }
+    let name = Self.fileName(address: address, size: size, at: Date())
+    let policy = PathPolicy.load(home: context.home)
+    let target = try VMFileHandler.localPath(
+      try arguments.string("local"), policy: policy, access: .write
+    ).map { local throws(VMLabError) in
+      try LocalDestination.open(local, defaultName: name, policy: policy)
+    }
+    defer { target?.close() }
     let vm = try await context.manager.attach(try arguments.string("vm") ?? "")
     let dumper = try vm.channel(.memoryDump)
+    if let target {
+      return try await Self.dump(
+        MemoryDumpRequest(address: address, size: size, path: target.url), to: target,
+        with: dumper)
+    }
     let directory = context.store.directory(of: vm.id).appending(path: "dumps")
     do {
       try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     } catch {
       throw ToolRendering.internalError(error, doing: "creating \(directory.path)")
     }
-    let path = directory.appending(path: Self.fileName(address: address, size: size, at: Date()))
+    let path = directory.appending(path: name)
     let result = try await dumper.dump(MemoryDumpRequest(address: address, size: size, path: path))
-    return ToolResult([
+    return Self.render(result)
+  }
+
+  /// Dumps `request` to `<final>.part` in `target`'s directory and renames it into place.
+  static func dump(
+    _ request: MemoryDumpRequest, to target: LocalDestination, with dumper: any MemoryDumper
+  ) async throws(VMLabError) -> ToolResult {
+    let part = target.name + ".part"
+    unlinkat(target.parent, part, 0)
+    var staged = request
+    staged.path = target.directory.appending(path: part)
+    var result: MemoryDumpResult
+    do {
+      result = try await dumper.dump(staged)
+      try target.move(staged.path)
+    } catch {
+      unlinkat(target.parent, part, 0)
+      throw error
+    }
+    result.path = target.url
+    return render(result)
+  }
+
+  static func render(_ result: MemoryDumpResult) -> ToolResult {
+    ToolResult([
       "path": .string(result.path.path), "bytes": .number(Double(result.bytes)),
       "format": .string(result.format.rawValue),
     ])
