@@ -259,7 +259,7 @@ func eventually(_ condition: () async -> Bool) async -> Bool {
     try Data("one\ntwo\nthree\n".utf8).write(to: log)
     let channel = SerialChannel(
       socketPath: "", logURL: directory.appending(path: "serial.log"), consoleLog: log)
-    try await channel.openLog()
+    #expect(await channel.openLog())
     #expect(await !channel.isConnected)
     #expect(await channel.read(since: 4).text == "two\nthree\n")
     #expect(
@@ -279,6 +279,12 @@ func eventually(_ condition: () async -> Bool) async -> Bool {
     }
     await channel.stop()
     #expect(!FileManager.default.fileExists(atPath: directory.appending(path: "serial.log").path))
+    // No log: nothing to open, and nothing is created.
+    let gone = directory.appending(path: "gone/console.log")
+    let none = SerialChannel(
+      socketPath: "", logURL: directory.appending(path: "serial.log"), consoleLog: gone)
+    #expect(await !none.openLog())
+    #expect(!FileManager.default.fileExists(atPath: gone.deletingLastPathComponent().path))
   }
 
   @Test func writeReachesTheGuest() async throws {

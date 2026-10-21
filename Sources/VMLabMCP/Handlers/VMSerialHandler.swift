@@ -70,6 +70,7 @@ struct VMSerialHandler: ToolHandler {
       return ToolResult(
         ["text": .string(""), "offset": .number(Double(offset)), "truncated": .bool(false)])
     }
+    if action == "wait" { try SerialChannel.validate(pattern: pattern ?? "") }
     let request = Request(
       action: action, since: since, lines: lines, pattern: pattern ?? "", timeout: timeout)
     let console: SerialConsole
@@ -122,32 +123,35 @@ struct VMSerialHandler: ToolHandler {
     case "tail":
       return Self.result(await serial.read(tail: request.lines))
     default:
-      let outcome = try await context.progress.during(
-        "waiting for \(request.pattern) on the serial console", every: context.heartbeat
-      ) { () throws(VMLabError) in
-        try await LongOperation.typed("vm_serial wait", vm: vm.id) {
-          try await serial.waitOrEnd(
-            for: request.pattern, since: from, timeout: .seconds(request.timeout))
+      let ended: VMLabError
+      do {
+        let outcome = try await context.progress.during(
+          "waiting for \(request.pattern) on the serial console", every: context.heartbeat
+        ) { () throws(VMLabError) in
+          try await LongOperation.typed("vm_serial wait", vm: vm.id) {
+            try await serial.waitOrEnd(
+              for: request.pattern, since: from, timeout: .seconds(request.timeout))
+          }
         }
-      }
-      switch outcome {
-      case .matched(let match):
-        return await Self.matched(match, serial: serial, from: from)
-      case .ended(let offset):
-        // The record flips to stopped later (the event watcher, a settle), so look at the engine.
-        guard try await engineExited(vm.id, within: exitGrace, context: context) else {
-          throw VMLabError(
+        switch outcome {
+        case .matched(let match):
+          return await Self.matched(match, serial: serial, from: from)
+        case .ended:
+          ended = VMLabError(
             code: .guestUnreachable, message: "The serial channel of VM \(vm.id) stopped reading.",
             hint: "The engine is still running; check the VM with vm_inspect, or wait again.",
             data: ["vm": .string(vm.id)])
         }
-        // The log is final now: scan what the channel had not (it rescans an overlap).
-        let overlap: UInt64 = 4096
-        return try await stopped(
-          vm.id, log: context.store.directory(of: vm.id).appending(path: "console.log"),
-          request, scanFrom: max(from, offset > overlap ? offset - overlap : 0), textFrom: from,
-          context: context)
+      } catch let error where error.code == .guestUnreachable {
+        // The backend closed the channel (a kill, the engine's exit): the same as its end.
+        ended = error
       }
+      // The record flips to stopped later (the event watcher, a settle), so look at the engine.
+      guard try await engineExited(vm.id, within: exitGrace, context: context) else { throw ended }
+      // The log is final now: scan it all again from `from`, so anchors keep their context.
+      return try await stopped(
+        vm.id, log: context.store.directory(of: vm.id).appending(path: "console.log"), request,
+        from: from, context: context)
     }
   }
 
@@ -169,31 +173,26 @@ struct VMSerialHandler: ToolHandler {
   }
 
   /// A VM that is not running: the console log is the record. With no log yet, nothing was
-  /// printed. A wait scans from `scanFrom` (default: `since`'s default) and, with no match,
-  /// returns at once with `stopped: true` and the last of the text from `textFrom`.
+  /// printed. A wait scans from `from` (default: `since`'s) and, with no match, returns at once
+  /// with `stopped: true` and the last of the text.
   func stopped(
-    _ id: String, log: URL, _ request: Request, scanFrom: UInt64? = nil, textFrom: UInt64? = nil,
-    context: ToolContext
+    _ id: String, log: URL, _ request: Request, from: UInt64? = nil, context: ToolContext
   ) async throws(VMLabError) -> ToolResult {
     let from =
-      textFrom ?? request.since.map(UInt64.init)
+      from ?? request.since.map(UInt64.init)
       ?? ConsoleRun.start(vmDirectory: context.store.directory(of: id))
-    guard FileManager.default.fileExists(atPath: log.path) else {
+    let serial = SerialChannel(
+      socketPath: "", logURL: log.deletingLastPathComponent().appending(path: "serial.log"),
+      consoleLog: log)
+    guard await serial.openLog() else {
       var result: [String: JSONValue] = [
         "text": .string(""), "offset": .number(0), "truncated": .bool(false),
       ]
       if request.action == "wait" { result["stopped"] = .bool(true) }
       return ToolResult(result)
     }
-    let serial = SerialChannel(
-      socketPath: "", logURL: log.deletingLastPathComponent().appending(path: "serial.log"),
-      consoleLog: log)
     do {
-      try await LongOperation.typed("vm_serial \(request.action)", vm: id) {
-        try await serial.openLog()
-      }
-      let result = try await Self.answer(
-        request, from: from, scanFrom: max(scanFrom ?? from, from), log: serial, vm: id)
+      let result = try await Self.answer(request, from: from, log: serial, vm: id)
       await serial.stop()
       return result
     } catch {
@@ -204,7 +203,7 @@ struct VMSerialHandler: ToolHandler {
 
   /// `stopped`'s answer from the opened log.
   static func answer(
-    _ request: Request, from: UInt64, scanFrom: UInt64, log serial: SerialChannel, vm id: String
+    _ request: Request, from: UInt64, log serial: SerialChannel, vm id: String
   ) async throws(VMLabError) -> ToolResult {
     switch request.action {
     case "read":
@@ -214,7 +213,7 @@ struct VMSerialHandler: ToolHandler {
     default:
       let outcome = try await LongOperation.typed("vm_serial wait", vm: id) {
         try await serial.waitOrEnd(
-          for: request.pattern, since: scanFrom, timeout: .seconds(request.timeout))
+          for: request.pattern, since: from, timeout: .seconds(request.timeout))
       }
       switch outcome {
       case .matched(let match):

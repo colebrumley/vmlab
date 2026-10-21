@@ -296,11 +296,14 @@ public actor SerialChannel {
 
   /// Opens the console log with no socket and no engine behind it (a guest that is not running,
   /// R-1201): reads and tails answer from the file as it is now, and a wait that finds no match
-  /// in it ends (`SerialWaitOutcome.ended`) rather than waiting. Needs a `consoleLog`; `stop`
-  /// closes it.
-  public func openLog() throws {
-    guard socket == nil, console == nil, !closed, let consoleLog else { return }
-    let file = try ConsoleFile(url: consoleLog)
+  /// in it ends (`SerialWaitOutcome.ended`) rather than waiting. False, with nothing created, when
+  /// there is no `consoleLog` or no file there (the guest never printed, or its directory was
+  /// removed); `stop` closes it.
+  @discardableResult
+  public func openLog() -> Bool {
+    guard socket == nil, console == nil, !closed, let consoleLog,
+      let file = ConsoleFile(existing: consoleLog)
+    else { return console != nil }
     console = file
     let size = file.size
     ring = ByteRing(
@@ -308,6 +311,7 @@ public actor SerialChannel {
     linesFrom = size
     partialLineStart = ring.end
     follow()
+    return true
   }
 
   /// Reads what the console log gained since the last look into the ring.
@@ -443,19 +447,7 @@ public actor SerialChannel {
   public func waitOrEnd(
     for pattern: String, since: UInt64? = nil, timeout: Duration
   ) async throws -> SerialWaitOutcome {
-    if let reason = Self.rejection(for: pattern) {
-      throw VMLabError.invalidRequest(
-        field: "pattern", reason: reason,
-        hint: "Match a plainer pattern, for example \"login:\" or \"=+ done\"; a quantifier on a "
-          + "group that already repeats backtracks exponentially.")
-    }
-    do {
-      _ = try Regex(pattern)
-    } catch {
-      throw VMLabError.invalidRequest(
-        field: "pattern", reason: "not a valid regular expression: \(error)",
-        hint: "Pass a Swift Regex pattern, for example \"login:\" or \"\\\\$ $\".")
-    }
+    try Self.validate(pattern: pattern)
     let literal = SerialMatcher.literal(of: pattern).map { Array($0.utf8) }
     if literal == nil {
       guard let matcherPath, FileManager.default.isExecutableFile(atPath: matcherPath) else {
@@ -498,6 +490,24 @@ public actor SerialChannel {
   /// `guest_unreachable` once `stop` closed the channel.
   private var outputEnded: any Error {
     closed ? Self.unreachable(socketPath) : OutputEnded(offset: ring.end)
+  }
+
+  /// `invalid_request` unless `wait` accepts `pattern`: not `rejection(for:)`, and a valid Swift
+  /// `Regex`.
+  public static func validate(pattern: String) throws(VMLabError) {
+    if let reason = rejection(for: pattern) {
+      throw VMLabError.invalidRequest(
+        field: "pattern", reason: reason,
+        hint: "Match a plainer pattern, for example \"login:\" or \"=+ done\"; a quantifier on a "
+          + "group that already repeats backtracks exponentially.")
+    }
+    do {
+      _ = try Regex(pattern)
+    } catch {
+      throw VMLabError.invalidRequest(
+        field: "pattern", reason: "not a valid regular expression: \(error)",
+        hint: "Pass a Swift Regex pattern, for example \"login:\" or \"\\\\$ $\".")
+    }
   }
 
   /// Why `pattern` is refused before compiling, or nil: longer than `maxPatternBytes`, or a group
@@ -942,6 +952,13 @@ final class ConsoleFile: Sendable {
         hint: "Check permissions on \(url.path).",
         data: ["path": .string(url.path), "errno": .number(Double(errno))])
     }
+  }
+
+  /// The log at `url` read-only, creating nothing; nil when it does not exist or will not open.
+  init?(existing url: URL) {
+    self.url = url
+    fd = Darwin.open(url.path, O_RDONLY | O_CLOEXEC)
+    guard fd >= 0 else { return nil }
   }
 
   deinit { Darwin.close(fd) }

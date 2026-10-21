@@ -289,6 +289,38 @@ import VMLabCore
     await f.cleanUp()
   }
 
+  /// The backend closes the channel during a wait (a kill drops it): with the engine gone, that
+  /// is `stopped` too, not `guest_unreachable`.
+  @Test func aWaitWhoseChannelTheBackendClosesIsStopped() async throws {
+    let f = try await Fixture()
+    try f.console("halting\n")
+    let waiting = Task {
+      try await f.call([
+        "action": .string("wait"), "pattern": .string("nev[e]r"), "since": .number(0),
+        "timeoutSeconds": .number(60),
+      ])
+    }
+    try await Task.sleep(for: .milliseconds(100))
+    await f.channel.stop()
+    let result = try await waiting.value
+    #expect(result.value["stopped"] == .bool(true))
+    #expect(result.value["text"] == .string("halting\n"))
+    await f.cleanUp()
+  }
+
+  /// A bad pattern is `invalid_request` whether or not there is a log to scan.
+  @Test func aStoppedWaitChecksItsPatternWithoutALog() async throws {
+    let f = try await Fixture()
+    try f.settle(.created)
+    try? FileManager.default.removeItem(at: f.directory.appending(path: "console.log"))
+    for pattern in ["[", "(a+)+"] {
+      await #expect {
+        try await f.call(["action": .string("wait"), "pattern": .string(pattern)])
+      } throws: { ($0 as? VMLabError)?.code == .invalidRequest }
+    }
+    await f.cleanUp()
+  }
+
   /// The reader ended but the engine still runs after the grace: `guest_unreachable` as before.
   @Test func aWaitWhoseEngineStillRunsIsUnreachable() async throws {
     let f = try await Fixture()
