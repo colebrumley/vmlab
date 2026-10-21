@@ -38,7 +38,9 @@ the only fix is a new VM. Think through the whole task before `vm_create`: will 
 console, a debugger, live checkpoints, the screen before the OS is up, a private network? Put each
 in `require`. A feature you only might use and that costs nothing to have is still worth
 requiring; one that would force a slow engine (anything only `qemu-tcg` has on arm64, such as
-`nested_virt` on an M1) belongs in `prefer` until you know you need it.
+`nested_virt` on an M1) belongs in `prefer` until you know you need it. The exception is
+`cpu_emulation`: preferring it never moves an arm64 guest onto `qemu-tcg`, so require it when you
+need `-icount`, instruction tracing or a CPU model the host does not have.
 
 Call `vm_plan` with the same `requirements` when you are unsure a combination is possible. It
 creates nothing.
@@ -263,7 +265,7 @@ not `-device=...`), in QEMU's `key=value,...` form (`,,` is a literal comma; no 
 - **`-machine` / `-M`** properties join vmlab's own `-machine` (`["-machine", "highmem=off"]`).
   Under `qemu-tcg` you may also name another board (`sbsa-ref`); under `qemu-hvf` the board stays
   `virt`. `accel=` and the boot keys (`kernel=`, `dtb=`, ...) are refused: use `boot`.
-  `-icount` needs `qemu-tcg`.
+  `-icount` needs `qemu-tcg`: require `cpu_emulation`.
 - **Another serial port:** vmlab keeps `-serial` (it is `vm_serial`'s console). Add
   `["-chardev", "socket,id=s1,path=/tmp/s1.sock,server=on,wait=off", "-device",
   "pci-serial,chardev=s1"]` (`isa-serial` on x86_64), or a `virtconsole` on a virtio-serial bus.

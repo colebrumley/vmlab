@@ -16,7 +16,7 @@ import Testing
   }
 
   @Test func everyFeatureHasASummary() {
-    #expect(Feature.allCases.count == 27)
+    #expect(Feature.allCases.count == 28)
     for feature in Feature.allCases {
       #expect(!feature.summary.isEmpty)
     }
