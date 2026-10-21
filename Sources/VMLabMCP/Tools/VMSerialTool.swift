@@ -10,7 +10,11 @@ extension ToolSpec {
       + "returns text from byte offset since (default: where the VM's last start began; 0 reaches "
       + "earlier runs); tail returns the last lines lines; write sends text (include \\n to press "
       + "Enter); wait blocks until the regular expression pattern appears after since or "
-      + "timeoutSeconds passes. Every result returns the offset to pass as since next time. Use "
+      + "timeoutSeconds passes, and returns stopped: true (with the text since since) when the "
+      + "guest powers off or is killed first. Works on a stopped guest: the log is the record, so "
+      + "read, tail and wait answer from it (a wait with no match returns stopped: true at once); "
+      + "write needs the guest running. Every result returns the offset to pass as since next "
+      + "time. Use "
       + "it to watch boot, kernel messages and panics, or to run commands when SSH is down: on a "
       + "Linux guest the console is a root shell (write \\n, wait for \"# \"). Needs the serial "
       + "feature.",
@@ -30,6 +34,8 @@ extension ToolSpec {
         "timeoutSeconds": Schema.timeoutSeconds(
           "wait: the longest to block.", maximum: VMSerialHandler.maxTimeoutSeconds, default: 30),
       ], required: ["vm", "action"]),
-    outputShape: "{ text, offset, matched?, truncated }",
-    errors: [.vmNotFound, .wrongState, .capabilityMissing, .invalidRequest, .timeout])
+    outputShape: "{ text, offset, matched?, stopped?, truncated }",
+    errors: [
+      .vmNotFound, .wrongState, .capabilityMissing, .invalidRequest, .timeout, .guestUnreachable,
+    ])
 }

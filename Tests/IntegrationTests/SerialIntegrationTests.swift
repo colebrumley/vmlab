@@ -148,4 +148,103 @@ import VMLabQEMU
     #expect(answer.value["matched"] == "uid=0")
     _ = try? await backend.kill(store.load(id: created.id))
   }
+
+  /// R-1201 Verify (integration): the bare kernel powers off (`SYSTEM_OFF`). It starts halted
+  /// (`haltAtStart`), so a wait for a pattern it never prints is registered on the live channel
+  /// before `vm_debug continue` lets it run; the wait returns `stopped: true` with its message
+  /// within two seconds rather than waiting out its timeout. Once the VM is `stopped`, `read`
+  /// returns the message, `write` is `wrong_state`, and `vmlab serial wait` from the CLI says
+  /// `stopped: true`.
+  @Test(.enabled(if: integrationEnabled), .timeLimit(.minutes(2)))
+  func aPoweredOffGuestEndsAWaitAndStaysReadable() async throws {
+    let lab = try await QEMUBootIntegrationTests.BareServer(tag: "so")
+    defer { lab.shutdown() }
+    let message = "w2 kernel says goodbye"
+    let kernel = lab.home.appending(path: "bare-off.img")
+    try BareKernel.write(to: kernel, message: message, then: .powerOff)
+    let requirements: JSONValue = [
+      "guest": ["os": "linux", "arch": "arm64"],
+      "require": ["serial", "net_none", "gdb", "halt_at_start"],
+      "resources": ["cpus": 1, "memoryGB": 1], "image": "debian-13-arm64",
+      "boot": ["mode": "kernel", "kernel": .string(kernel.path), "haltAtStart": true],
+    ]
+    let made = try await lab.server.call(
+      "vm_create", ["requirements": requirements, "name": "bare-off"])
+    try #require(made.isError == false, "\(made.text)")
+    try #require(made.value["plan"]?["profile"]?.stringValue == "qemu-hvf", "\(made.text)")
+    try #require(lab.state("bare-off") == "running")
+    let server = lab.server
+    let waiting = Task {
+      try await server.call(
+        "vm_serial",
+        ["vm": "bare-off", "action": "wait", "pattern": "never printed", "timeoutSeconds": 60])
+    }
+    // The CPU is halted, so the wait can only be pending while it registers; give it ample time.
+    try await Task.sleep(for: .seconds(2))
+    let pid = try #require(TwoServersIntegrationTests.qemuPIDs(in: lab.home).first)
+    let go = try await lab.server.call("vm_debug", ["vm": "bare-off", "action": "continue"])
+    try #require(go.isError == false, "\(go.text)")
+    let continued = ContinuousClock.now
+    // Time the wait from the engine's exit, as the acceptance does.
+    while kill(pid, 0) == 0, ContinuousClock.now - continued < .seconds(10) {
+      try await Task.sleep(for: .milliseconds(10))
+    }
+    let exited = ContinuousClock.now
+    let wait = try await waiting.value
+    let elapsed = ContinuousClock.now - exited
+    #expect(wait.value["stopped"] == true, "\(wait.text)")
+    #expect(wait.value["matched"] == nil)
+    #expect(wait.value["text"]?.stringValue?.contains(message) == true, "\(wait.text)")
+    #expect(elapsed < .seconds(2), "the wait ended \(elapsed) after QEMU exited")
+    while lab.state("bare-off") != "stopped", ContinuousClock.now - continued < .seconds(15) {
+      try await Task.sleep(for: .milliseconds(100))
+    }
+    try #require(lab.state("bare-off") == "stopped")
+    let read = try await lab.server.call("vm_serial", ["vm": "bare-off", "action": "read"])
+    #expect(read.isError == false, "\(read.text)")
+    #expect(read.value["text"]?.stringValue?.contains(message + "\n") == true, "\(read.text)")
+    let again = try await lab.server.call(
+      "vm_serial", ["vm": "bare-off", "action": "wait", "pattern": "never printed"])
+    #expect(again.value["stopped"] == true, "\(again.text)")
+    let write = try await lab.server.call(
+      "vm_serial", ["vm": "bare-off", "action": "write", "text": "x\n"])
+    #expect(write.isError == true)
+    #expect(write.text.contains("wrong_state"), "\(write.text)")
+    let cli = try await Self.cli(lab.home, ["bare-off", "wait", "never printed"])
+    #expect(cli["stopped"] == true, "\(cli)")
+    #expect(cli["text"]?.stringValue?.contains(message) == true, "\(cli)")
+  }
+
+  /// R-1201: a running guest killed during a wait (the halting kernel, its QEMU SIGKILLed) ends the
+  /// wait with `stopped: true` within two seconds of the engine's exit, though the record still
+  /// says `running` then.
+  @Test(.enabled(if: integrationEnabled), .timeLimit(.minutes(2)))
+  func aKilledGuestEndsAWait() async throws {
+    let lab = try await QEMUBootIntegrationTests.BareServer(tag: "sk")
+    defer { lab.shutdown() }
+    let message = "w2 kernel idles"
+    try await lab.create("bare-kill", message: message, then: .halt)
+    let start = try await lab.server.call("vm_lifecycle", ["vm": "bare-kill", "action": "start"])
+    try #require(start.isError == false, "\(start.text)")
+    let printed = try await lab.server.call(
+      "vm_serial",
+      ["vm": "bare-kill", "action": "wait", "pattern": .string(message), "timeoutSeconds": 10])
+    try #require(printed.value["matched"] == .string(message), "\(printed.text)")
+    let server = lab.server
+    let waiting = Task {
+      try await server.call(
+        "vm_serial",
+        ["vm": "bare-kill", "action": "wait", "pattern": "never printed", "timeoutSeconds": 60])
+    }
+    try await Task.sleep(for: .milliseconds(500))
+    let pids = TwoServersIntegrationTests.qemuPIDs(in: lab.home)
+    try #require(!pids.isEmpty)
+    for pid in pids { kill(pid, SIGKILL) }
+    let killed = ContinuousClock.now
+    let wait = try await waiting.value
+    let elapsed = ContinuousClock.now - killed
+    #expect(wait.value["stopped"] == true, "\(wait.text)")
+    #expect(wait.value["text"]?.stringValue?.contains(message) == true, "\(wait.text)")
+    #expect(elapsed < .seconds(2), "the wait ended \(elapsed) after the kill")
+  }
 }

@@ -106,7 +106,7 @@ before selection: `serial` on a macOS guest, `net_port_forward` with `network.mo
 | Long commands (builds, test suites) | `vm_exec` with `background: true`, then `vm_job wait` | No call blocks for minutes; output is collected as it comes |
 | Moving files | `vm_file` push and pull | Recursive, binary-safe |
 | A guest with no network | `vm_exec` with `via: agent` (`exec_agent`, QEMU only) | Goes through qemu-guest-agent on a virtio-serial port |
-| Boot messages, kernel logs, panics, a hung or unbootable guest | `vm_serial` (`serial`) | Captured from the first byte of boot; works when SSH and the display are dead |
+| Boot messages, kernel logs, panics, a hung or unbootable guest | `vm_serial` (`serial`) | Captured from the first byte of boot; works when SSH and the display are dead, and on a stopped guest (the log is the record) |
 | Firmware and bootloaders, CPU state | `vm_debug` (`gdb`, `halt_at_start`) | Halt, step, breakpoints, registers, memory |
 | Machine state the guest cannot report | `vm_introspect` (`introspection`) | Asks QEMU directly; works when the guest is hung |
 | Guest memory as a file, for host tools | `vm_memory_dump` (`memory_dump`) | A raw range or an ELF core; pass `local` to keep it past `destroy` |
@@ -132,7 +132,10 @@ console even when X is gone.
 Every `vm_serial` and `vm_computer` result tells you how to continue: `vm_serial` returns an
 `offset` to pass as `since` next time, so you read only new text (offsets are positions in the VM's
 console log, so they hold across calls, the CLI and server restarts; without `since`, `read` and
-`wait` start at the VM's last start); `vm_computer screenshot` returns
+`wait` start at the VM's last start). It works on a stopped guest too: `read`, `tail` and `wait`
+answer from the log, and a `wait` whose guest powers off or is killed before the pattern appears
+returns `stopped: true` with the text, which is how a bare kernel's test run ends, not an error;
+only `write` needs the guest running. `vm_computer screenshot` returns
 an `id` to pass as `diffFrom`, so the next one returns only the region that changed.
 
 **Host paths.** vmlab reads host files you name (`vm_file push`, `images register`, `boot`, disk
