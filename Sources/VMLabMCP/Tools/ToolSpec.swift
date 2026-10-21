@@ -200,7 +200,11 @@ enum Schema {
               "Guest ports to make reachable from the host."),
           ], description: "Networking; omitted means NAT."),
         "image": string(
-          "Image or template name (images list). Omitted: the default image for the guest."),
+          "Image or template name (images list). Omitted: the default image for the guest. "
+            + "\"none\": a bare machine for boot.mode kernel, binary or firmware (give the file "
+            + "in boot): no disk, no seed, no SSH, and no feature that needs a guest OS or a disk "
+            + "(exec_ssh, exec_agent, cloud_init, gui_desktop, shared_dir, net_port_forward, "
+            + "rosetta, checkpoint_disk, checkpoint_live)."),
         "boot": object(
           [
             "mode": string(

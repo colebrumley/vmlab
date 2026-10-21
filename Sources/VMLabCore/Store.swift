@@ -186,6 +186,13 @@ public struct VMRecord: Codable, Sendable, Hashable {
     tartClone = try c.decodeIfPresent(String.self, forKey: .tartClone)
   }
 
+  /// A bare machine (R-1202, created with `image: "none"`): no image and a kernel, binary or
+  /// firmware boot. It has no disk, no seed and no SSH key.
+  public var isBare: Bool { image == nil && (boot?.mode ?? .disk) != .disk }
+
+  /// The image name tools show: the record's, `"none"` for a bare machine, else nil.
+  public var imageName: String? { image ?? (isBare ? ImageStore.noImage : nil) }
+
   /// `vm-` plus six lowercase RFC 4648 base32 characters.
   public static func isValidID(_ id: String) -> Bool {
     guard id.hasPrefix("vm-") else { return false }

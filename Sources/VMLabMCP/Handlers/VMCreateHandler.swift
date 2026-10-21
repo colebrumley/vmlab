@@ -2,7 +2,7 @@ import Foundation
 import VMLabCore
 
 /// `vm_create`: plans the request as `vm_plan` does (an impossible one is its refusal), pulls the
-/// image when it is not pulled yet, has `VMManager` create the VM and, unless `autostart` is
+/// image when it is not pulled yet (none for a bare machine, `image: "none"`), has `VMManager` create the VM and, unless `autostart` is
 /// false, starts it under the start gate. Each slow step reports progress. The call is all or
 /// nothing: if it is cancelled or a later step fails, the VM is destroyed and no directory is left.
 struct VMCreateHandler: ToolHandler {
@@ -31,7 +31,9 @@ struct VMCreateHandler: ToolHandler {
       for: requirements, catalogue: images.catalogue, guestOf: { images.guest(of: $0) })
     var warnings: [String] = []
     let confirm = try arguments.bool("confirm")
-    if try await LongOperation.pullIfMissing(image, confirm: confirm, context: context) != nil {
+    if let image,
+      try await LongOperation.pullIfMissing(image, confirm: confirm, context: context) != nil
+    {
       warnings.append("pulled image \(image) first")
     }
     try LongOperation.checkCancellation("vm_create")
@@ -105,13 +107,15 @@ struct VMCreateHandler: ToolHandler {
       + "reach the guest ports at its NAT address (endpoints.forwards[].hostReachable)"
   }
 
-  /// The image the VM boots: the request's, or the first catalogue image for its guest. A named
-  /// image whose guest (`guestOf`, else the catalogue's) differs from the request's is refused,
-  /// so an amd64 image never lands on a profile that cannot run it (R-1000).
+  /// The image the VM boots: the request's, or the first catalogue image for its guest; nil for a
+  /// bare machine (`image: "none"`, R-1202). A named image whose guest (`guestOf`, else the
+  /// catalogue's) differs from the request's is refused, so an amd64 image never lands on a
+  /// profile that cannot run it (R-1000).
   static func image(
     for requirements: Requirements, catalogue: ImageCatalogue,
     guestOf: (String) -> GuestSpec? = { _ in nil }
-  ) throws(VMLabError) -> String {
+  ) throws(VMLabError) -> String? {
+    if requirements.isBare { return nil }
     if let image = requirements.image {
       // Fleet sets `image` after decoding, so the name is checked here too (CR-4).
       try ImageStore.checkName(image, field: "image")

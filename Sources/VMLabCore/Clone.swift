@@ -32,6 +32,7 @@ extension VMManager {
 
     // Refused before anything is stored: a failed clone's cleanup must never run (CR-1).
     guard backend.supportsClone else { throw VMLabError.cloneUnsupported(source.profile) }
+    guard !source.isBare else { throw Self.bareMachine(source, cannot: "clone it") }
 
     var draft = source
     draft.name = name ?? ""

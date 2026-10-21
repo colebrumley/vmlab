@@ -331,12 +331,23 @@ public actor ImageStore {
     !name.isEmpty && name != "." && name != ".." && !name.contains("/") && !name.contains("\0")
   }
 
-  /// `invalid_request` on `field` unless `isImageName(name)`.
+  /// The reserved image name of a bare machine (R-1202): a kernel, binary or firmware boot with
+  /// no disk, no seed and no guest OS. No image may be pulled, registered or made under it.
+  public static let noImage = "none"
+
+  /// `invalid_request` on `field` unless `isImageName(name)` and `name` is not the reserved
+  /// `none`. `Requirements` accepts `none` before calling this.
   public static func checkName(_ name: String, field: String) throws(VMLabError) {
     guard isImageName(name) else {
       throw VMLabError.invalidRequest(
         field: field, reason: "\(name) is not an image name",
         hint: "Use a name from images list.")
+    }
+    guard name != noImage else {
+      throw VMLabError.invalidRequest(
+        field: field, reason: "\"none\" is reserved: it names a bare machine, not an image",
+        hint: "Choose another name; vm_create takes image \"none\" for a kernel, binary or "
+          + "firmware boot with no disk.")
     }
   }
 

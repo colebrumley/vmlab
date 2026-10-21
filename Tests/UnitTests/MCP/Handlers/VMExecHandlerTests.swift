@@ -111,4 +111,38 @@ import VMLabCore
       #expect(error?.data["field"] == .string(field))
     }
   }
+
+  /// R-1202: a bare machine runs no guest OS, so every exec channel, `vm_file` and `vm_job` are
+  /// `capability_missing`.
+  @Test func aBareMachineHasNoExec() async throws {
+    let f = try Fixture()
+    defer { f.cleanUp() }
+    _ = try await f.create(["requirements": try VMCreateHandlerTests.bare("kernel")])
+    for via in ["auto", "ssh", "agent"] {
+      let error = await #expect(throws: VMLabError.self) {
+        try await Self.exec(["command": .string("true"), "via": .string(via)], in: f)
+      }
+      #expect(error?.code == .capabilityMissing)
+    }
+    let background = await #expect(throws: VMLabError.self) {
+      try await Self.exec(["command": .string("true"), "background": .bool(true)], in: f)
+    }
+    #expect(background?.code == .capabilityMissing)
+    let file = await #expect(throws: VMLabError.self) {
+      try await ToolHandlers.call(
+        "vm_file",
+        arguments: .object([
+          "vm": .string("web"), "action": .string("pull"), "remote": .string("/etc/hostname"),
+        ]), context: f.context)
+    }
+    #expect(file?.code == .capabilityMissing)
+    let job = await #expect(throws: VMLabError.self) {
+      try await ToolHandlers.call(
+        "vm_job",
+        arguments: .object([
+          "vm": .string("web"), "job": .string("j-0123456789ab"), "action": .string("read"),
+        ]), context: f.context)
+    }
+    #expect(job?.code == .capabilityMissing)
+  }
 }

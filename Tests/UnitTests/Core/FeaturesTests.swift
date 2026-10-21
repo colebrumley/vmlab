@@ -77,6 +77,27 @@ import Testing
       json: #"{"guest":{"os":"linux","arch":"arm64"},"#
         + #""network":{"mode":"none","forwards":[{"guest":22}]}}"#,
       field: "network.forwards"),
+    // R-1202: image "none" is a bare machine: a file boot, and no feature that needs an image.
+    .init(
+      json: #"{"guest":{"os":"linux","arch":"arm64"},"image":"none"}"#, field: "image"),
+    .init(
+      json: #"{"guest":{"os":"linux","arch":"arm64"},"image":"none","boot":{"mode":"disk"}}"#,
+      field: "image"),
+    .init(
+      json: #"{"guest":{"os":"linux","arch":"arm64"},"image":"none","boot":{"mode":"kernel"}}"#,
+      field: "boot.kernel"),
+    .init(
+      json: #"{"guest":{"os":"linux","arch":"arm64"},"image":"none","#
+        + #""boot":{"mode":"kernel","kernel":"/k"},"require":["serial","checkpoint_disk"]}"#,
+      field: "require[1]"),
+    .init(
+      json: #"{"guest":{"os":"linux","arch":"arm64"},"image":"none","#
+        + #""boot":{"mode":"kernel","kernel":"/k"},"provision":{"packages":["jq"]}}"#,
+      field: "provision"),
+    .init(
+      json: #"{"guest":{"os":"linux","arch":"arm64"},"image":"none","#
+        + #""boot":{"mode":"firmware","firmware":"/f"},"network":{"forwards":[{"guest":22}]}}"#,
+      field: "network.forwards"),
     // CR-2: sizes past the caps of Appendix G.
     .init(
       json: #"{"guest":{"os":"linux","arch":"arm64"},"resources":{"diskGB":9223372036854775807}}"#,
@@ -155,6 +176,9 @@ import Testing
     #"{"guest":{"os":"linux","arch":"arm64"},"boot":{"mode":"kernel","cmdline":"console=ttyAMA0"}}"#,
     #"{"guest":{"os":"linux","arch":"x86_64"},"boot":{"mode":"firmware","firmware":"/b","firmwareFormat":"bios"}}"#,
     #"{"guest":{"os":"linux","arch":"arm64"},"boot":{"mode":"binary","binary":"/b","loadAddress":"0x40080000","dtb":"/d"}}"#,
+    #"{"guest":{"os":"linux","arch":"arm64"},"image":"none","require":["serial","gdb"],"prefer":["exec_ssh"],"boot":{"mode":"kernel","kernel":"/k"}}"#,
+    #"{"guest":{"os":"linux","arch":"arm64"},"image":"none","boot":{"mode":"binary","binary":"/b","loadAddress":"0x40080000"}}"#,
+    #"{"guest":{"os":"linux","arch":"arm64"},"image":"none","boot":{"mode":"firmware","firmware":"/f"}}"#,
   ]
 
   @Test(arguments: valid)

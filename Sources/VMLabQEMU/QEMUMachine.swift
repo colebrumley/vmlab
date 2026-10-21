@@ -51,6 +51,17 @@ public struct QEMULaunchRequest: Sendable {
 }
 
 extension QEMULaunchRequest {
+  /// The command-line options the request launches with: `disk.qcow2` only over a base image
+  /// and `seed.iso` only with a seed, so a bare machine (R-1202) gets neither.
+  func options() throws(VMLabError) -> QEMULaunchOptions {
+    var options = QEMULaunchOptions(
+      boot: boot, disk: baseImage != nil, seed: seed != nil, gdbPort: gdbPort,
+      sshHostPort: sshHostPort, forwards: forwards, vmnet: vmnet,
+      sharedDirectory: sharedDirectory?.path, segment: segment)
+    if boot.mode == .disk { options.firmware = try installation.firmware(for: plan.guest.arch) }
+    return options
+  }
+
   /// Whether the guest has a UEFI variable store: disk boot, or custom firmware as pflash.
   var usesEFIVars: Bool {
     switch boot.mode {
@@ -170,14 +181,7 @@ public actor QEMUMachine {
         data: ["state": .string(VMState.running.rawValue), "pid": .number(Double(pid))])
     }
     try await prepare(request)
-    var options = QEMULaunchOptions(
-      boot: request.boot, disk: request.baseImage != nil, seed: request.seed != nil,
-      gdbPort: request.gdbPort, sshHostPort: request.sshHostPort, forwards: request.forwards,
-      vmnet: request.vmnet, sharedDirectory: request.sharedDirectory?.path,
-      segment: request.segment)
-    if request.boot.mode == .disk {
-      options.firmware = try request.installation.firmware(for: request.plan.guest.arch)
-    }
+    var options = try request.options()
     if request.plan.grants(.gdb), options.gdbPort == nil {
       options.gdbPort = try freeLoopbackPort()
     }

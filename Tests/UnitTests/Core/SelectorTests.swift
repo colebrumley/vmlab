@@ -451,4 +451,30 @@ import Testing
       Plan.self, from: JSONEncoder().encode(JSONValue.object(object)))
     #expect(decoded == plan)
   }
+
+  /// R-1202: a bare machine's plan has none of the features that need an image, denies them when
+  /// preferred, carries no disk size, and notes an ignored `diskGB`.
+  @Test func aBareMachinePlansWithoutImageFeatures() throws {
+    let bare = try Requirements(
+      guest: Self.arm, require: [.serial], prefer: [.execSSH, .gdb, .checkpointLive],
+      resources: ResourceSpec(diskGB: 64), image: "none",
+      boot: BootSpec(mode: .kernel, kernel: "/k"))
+    let plan = try select(bare, host: Self.devHost(), running: .empty).get()
+    #expect(plan.profile == .qemuHVF)
+    #expect(plan.features.allSatisfy { !Requirements.needsImage.contains($0) })
+    #expect(plan.grants(.serial) && plan.grants(.gdb) && plan.grants(.directKernelBoot))
+    #expect(plan.preferredDenied == [.execSSH, .checkpointLive])
+    #expect(plan.resources.diskGB == nil)
+    #expect(plan.notes.contains { $0.contains("diskGB (64) is ignored") })
+
+    // Without diskGB, no note; with an image the same request keeps its features and disk.
+    var plain = bare
+    plain.resources = ResourceSpec()
+    #expect(
+      !(try select(plain, host: Self.devHost(), running: .empty).get().notes
+        .contains { $0.contains("diskGB") }))
+    plain.image = nil
+    let imaged = try select(plain, host: Self.devHost(), running: .empty).get()
+    #expect(imaged.grants(.execSSH) && imaged.resources.diskGB == 32)
+  }
 }

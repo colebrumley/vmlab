@@ -173,14 +173,13 @@ public struct VZBackend: Backend {
     let boot =
       record.boot == nil
       ? nil : try await ImageStore(home: store.home).resolvingBoot(record.boot, image: record.image)
-    let rootDisk = FileManager.default.fileExists(atPath: dir.appending(path: "disk.raw").path)
+    let (rootDisk, seed) = VZRunnerConfig.storage(in: dir)
     let diskKernel =
       rootDisk && (boot?.mode ?? .disk) == .disk
       ? await stageDiskKernel(vmDirectory: dir, warnings: &warnings) : nil
     let config = try VZRunnerConfig.linux(
       record: record, vmDirectory: dir, boot: boot,
-      seed: FileManager.default.fileExists(atPath: dir.appending(path: "seed.iso").path),
-      rootDisk: rootDisk,
+      seed: seed, rootDisk: rootDisk,
       segmentAttachSocket: record.segment.map {
         SegmentStore(home: store.home).attachSocket(of: $0.segment).path
       },

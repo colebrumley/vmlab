@@ -944,7 +944,7 @@ that builds it ticks the line in its own pull request and nobody else edits it.
   Integration tests run serially (`--no-parallel`).
 - [x] **R-1200 A bare arm64 test kernel** — docs/specs/kernel-loop.md, item W1, size S.
 - [ ] **R-1201 `vm_serial` reads a stopped guest and `wait` notices the power-off** — docs/specs/kernel-loop.md, item W2, size M.
-- [ ] **R-1202 `image: "none"` for kernel, binary and firmware boots** — docs/specs/kernel-loop.md, item W3, size M.
+- [x] **R-1202 `image: "none"` for kernel, binary and firmware boots** — docs/specs/kernel-loop.md, item W3, size M.
 - [ ] **R-1203 `reset` relaunches a QEMU file boot whose files changed** — docs/specs/kernel-loop.md, item W4, size M.
 - [ ] **R-1204 The `cpu_emulation` feature** — docs/specs/kernel-loop.md, item W5, size M.
 - [ ] **R-1205 `vm_memory_dump` writes to a path the model names** — docs/specs/kernel-loop.md, item W6, size S.
@@ -1179,6 +1179,7 @@ six 4 GB guests with the default reserve; macOS 26.6 → VZ save/restore APIs pr
 | Setting | Default |
 |---|---|
 | CPUs / memory / disk | 2 / 4 GB / 32 GB (macOS: 4 / 8 GB / image size) |
+| Image | the first catalogue image for the guest (`debian-13-arm64` for Linux arm64); `"none"` is a bare machine for a kernel, binary or firmware boot: no disk (`diskGB` ignored), no seed, no SSH (R-1202) |
 | Largest CPUs / memory / disk a request may ask for | 256 / 4096 GB / 65536 GB (`ResourceLimits.maxCPUs`, `maxMemoryGB`, `maxDiskGB`; more is `invalid_request`) |
 | Memory reserve kept free on the host | 4 GB (after every guest on the host, from any `VMLAB_HOME`; also against the host's available memory) |
 | Host memory pressure at which a start is refused | `warn` (`kern.memorystatus_vm_pressure_level` ≥ 2); off with `VMLAB_IGNORE_MEMORY_PRESSURE=1` or `ignoreMemoryPressure: true` in `config.json` (owner only) |

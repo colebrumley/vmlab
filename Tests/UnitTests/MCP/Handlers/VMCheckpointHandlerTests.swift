@@ -66,4 +66,25 @@ import VMLabCore
       #expect(error?.code == .invalidRequest)
     }
   }
+
+  /// R-1202: a bare machine has no disk, so no checkpoint mode and no restore, stopped or running.
+  @Test(arguments: [false, true])
+  func aBareMachineHasNoCheckpoints(running: Bool) async throws {
+    let f = try Fixture()
+    defer { f.cleanUp() }
+    _ = try await f.create([
+      "requirements": try VMCreateHandlerTests.bare("kernel"), "autostart": .bool(running),
+    ])
+    for arguments: [String: JSONValue] in [
+      ["action": .string("create"), "name": .string("A")],
+      ["action": .string("create"), "name": .string("A"), "mode": .string("auto")],
+      ["action": .string("create"), "name": .string("A"), "mode": .string("disk")],
+      ["action": .string("create"), "name": .string("A"), "mode": .string("live")],
+      ["action": .string("restore"), "name": .string("A")],
+    ] {
+      let error = await #expect(throws: VMLabError.self) { try await Self.call(arguments, in: f) }
+      #expect(error?.code == .capabilityMissing)
+      #expect(error?.data["image"] == .string("none"))
+    }
+  }
 }

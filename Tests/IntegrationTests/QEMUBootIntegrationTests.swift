@@ -82,16 +82,19 @@ import VMLabQEMU
     }
 
     /// Writes a kernel printing `message` and creates (without starting) a `qemu-hvf` VM that boots it.
-    func create(_ name: String, message: String, then: BareKernel.Then) async throws {
+    func create(
+      _ name: String, message: String, then: BareKernel.Then, image: String = "debian-13-arm64",
+      require: JSONValue = ["serial", "net_none"]
+    ) async throws {
       let kernel = home.appending(path: "\(name).img")
       try BareKernel.write(to: kernel, message: message, then: then)
-      // W3 has not landed: the kernel boot ignores the image. Serial and net_none alone land on
-      // vz-linux; preferring introspection, which qemu-hvf grants without a probe and VZ never does,
-      // keeps it on qemu-hvf, whose PL011 the kernel writes to.
+      // With an image the kernel boot ignores it; "none" makes a bare machine (R-1202). Serial
+      // and net_none alone land on vz-linux; preferring introspection, which qemu-hvf grants
+      // without a probe and VZ never does, keeps it on qemu-hvf, whose PL011 the kernel writes to.
       let requirements: JSONValue = [
-        "guest": ["os": "linux", "arch": "arm64"], "require": ["serial", "net_none"],
+        "guest": ["os": "linux", "arch": "arm64"], "require": require,
         "prefer": ["introspection"],
-        "resources": ["cpus": 1, "memoryGB": 1], "image": "debian-13-arm64",
+        "resources": ["cpus": 1, "memoryGB": 1], "image": .string(image),
         "boot": ["mode": "kernel", "kernel": .string(kernel.path)],
       ]
       let made = try await server.call(
@@ -163,5 +166,48 @@ import VMLabQEMU
     let kill = try await lab.server.call("vm_lifecycle", ["vm": "bare-h", "action": "kill"])
     #expect(kill.isError == false, "\(kill.text)")
     #expect(lab.state("bare-h") == "stopped")
+  }
+
+  /// R-1202 Verify (integration): the bare kernel on `qemu-hvf` with `image: "none"` (and NAT, so
+  /// a guest with an image would get an SSH port): no disk, no seed, no key in the VM directory,
+  /// `start` returns in under five seconds without `ssh_unreachable`, and `vm_inspect` shows
+  /// `image: "none"` with no SSH endpoint.
+  @Test(.enabled(if: integrationEnabled), .timeLimit(.minutes(2)))
+  func bareKernelWithoutImage() async throws {
+    let lab = try await BareServer(tag: "n")
+    defer { lab.shutdown() }
+    try await lab.create(
+      "bare-n", message: "bare kernel without an image", then: .halt, image: "none",
+      require: ["serial"])
+    let id = try Store(home: lab.home).find("bare-n").id
+    let directory = Store(home: lab.home).directory(of: id)
+    for file in ["disk.qcow2", "seed.iso", "id_ed25519", "id_ed25519.pub"] {
+      #expect(
+        !FileManager.default.fileExists(atPath: directory.appending(path: file).path), "\(file)")
+    }
+    let started = ContinuousClock.now
+    let start = try await lab.server.call("vm_lifecycle", ["vm": "bare-n", "action": "start"])
+    let elapsed = ContinuousClock.now - started
+    try #require(start.isError == false, "\(start.text)")
+    #expect(elapsed < .seconds(5), "start took \(elapsed)")
+    #expect(!start.text.contains("ssh_unreachable"), "\(start.text)")
+    let wait = try await lab.server.call(
+      "vm_serial",
+      ["vm": "bare-n", "action": "wait", "pattern": "without an image", "timeoutSeconds": 10])
+    #expect(wait.value["matched"] == "without an image", "\(wait.text)")
+    for file in ["disk.qcow2", "seed.iso"] {
+      #expect(
+        !FileManager.default.fileExists(atPath: directory.appending(path: file).path), "\(file)")
+    }
+    let qemu =
+      (try? String(contentsOf: directory.appending(path: "qemu.log"), encoding: .utf8)) ?? ""
+    #expect(!qemu.contains("hostfwd"), "\(qemu)")
+    let inspect = try await lab.server.call("vm_inspect", ["vm": "bare-n"])
+    #expect(inspect.value["image"] == "none", "\(inspect.text)")
+    #expect(inspect.value["endpoints"]?["ssh"] == nil, "\(inspect.text)")
+    #expect(inspect.value["endpoints"]?["serial"] != nil, "\(inspect.text)")
+    #expect(inspect.value["provision"] == .null, "\(inspect.text)")
+    let kill = try await lab.server.call("vm_lifecycle", ["vm": "bare-n", "action": "kill"])
+    #expect(kill.isError == false, "\(kill.text)")
   }
 }

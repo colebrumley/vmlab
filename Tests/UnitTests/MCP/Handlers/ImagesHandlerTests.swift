@@ -190,4 +190,31 @@ import VMLabCore
     #expect(extracted.value["version"] == .string("6.10.0"))
     #expect(extracted.value["files"]?.arrayValue?.count == 4)
   }
+
+  /// R-1202: `none` is reserved for a bare machine; no images action takes it as a name.
+  @Test func noneIsAReservedName() async throws {
+    let f = try Fixture()
+    defer { f.cleanUp() }
+    let file = FileManager.default.temporaryDirectory.appending(
+      path: "vmlab-none-\(UUID().uuidString)")
+    try Data([0]).write(to: file)
+    defer { try? FileManager.default.removeItem(at: file) }
+    _ = try await f.create(["autostart": .bool(false)])
+    for arguments: [String: JSONValue] in [
+      ["action": .string("pull")],
+      ["action": .string("remove")],
+      ["action": .string("extract_kernel")],
+      ["action": .string("template_create"), "vm": .string("web")],
+      ["action": .string("register"), "kernel": .string(file.path)],
+      ["action": .string("register"), "path": .string(file.path)],
+      ["action": .string("register"), "path": .string(file.path + ".ipsw")],
+    ] {
+      var arguments = arguments
+      arguments["name"] = .string("none")
+      let error = await #expect(throws: VMLabError.self) { try await Self.images(arguments, in: f) }
+      #expect(error?.code == .invalidRequest, "\(arguments)")
+      #expect(error?.data["field"] == .string("name"), "\(arguments)")
+    }
+    #expect(!FileManager.default.fileExists(atPath: f.context.images.imageDirectory("none").path))
+  }
 }

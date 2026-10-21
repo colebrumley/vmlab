@@ -166,6 +166,17 @@ public struct VZRunnerConfig: Codable, Sendable, Hashable {
     nestedVirtualization = try c.decodeIfPresent(Bool.self, forKey: .nestedVirtualization) ?? false
   }
 
+  /// Which of `<vm>/disk.raw` and `<vm>/seed.iso` the guest has: `VZBackend.create` makes neither
+  /// for a kernel-only image's kernel boot or a bare machine (R-1202), which then run with no
+  /// storage device.
+  public static func storage(in vmDirectory: URL) -> (rootDisk: Bool, seed: Bool) {
+    let files = FileManager.default
+    return (
+      files.fileExists(atPath: vmDirectory.appending(path: "disk.raw").path),
+      files.fileExists(atPath: vmDirectory.appending(path: "seed.iso").path)
+    )
+  }
+
   /// The guest command line for `.kernel` boot without one: the root on the first virtio disk and
   /// the console on the virtio console.
   public static let defaultCommandLine = "console=hvc0 root=/dev/vda1 rw"

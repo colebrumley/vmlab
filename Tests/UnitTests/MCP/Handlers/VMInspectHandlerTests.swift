@@ -101,4 +101,27 @@ import VMLabCore
         "provision_failed: \(record.id) step runCommands[0] `exit 3` exited 3"))
     #expect(failed.value["provision"]?["steps"]?.arrayValue?.count == 2)
   }
+
+  /// R-1202: a bare machine shows `image: "none"` in vm_inspect and vm_list, with no SSH endpoint
+  /// and no provisioning; an image's VM shows its image.
+  @Test func aBareMachineShowsImageNone() async throws {
+    let f = try VMCreateHandlerTests.Fixture()
+    defer { f.cleanUp() }
+    _ = try await f.create(["requirements": try VMCreateHandlerTests.bare("kernel")])
+    let inspect = try await ToolHandlers.call(
+      "vm_inspect", arguments: .object(["vm": .string("web")]), context: f.context)
+    #expect(inspect.value["image"] == .string("none"))
+    #expect(inspect.value["record"]?["image"] == nil)
+    #expect(inspect.value["endpoints"]?["ssh"] == nil)
+    #expect(inspect.value["provision"] == .null)
+    #expect(!inspect.warnings.contains { $0.hasPrefix("provision_") })
+    _ = try await f.create(["name": .string("db"), "autostart": .bool(false)])
+    let list = try await ToolHandlers.call("vm_list", arguments: .object([:]), context: f.context)
+    let images = Dictionary(
+      uniqueKeysWithValues: (list.value["vms"]?.arrayValue ?? []).map {
+        ($0["name"]?.stringValue ?? "", $0["image"])
+      })
+    #expect(images["web"] == .string("none"))
+    #expect(images["db"] == .string("tiny-arm64"))
+  }
 }

@@ -405,6 +405,18 @@ public struct Requirements: Codable, Sendable, Hashable {
     case guest, require, prefer, resources, network, image, boot, extra, provision, share
   }
 
+  /// `image: "none"` (R-1202): a bare machine for a kernel, binary or firmware boot, with no
+  /// disk, no seed and no guest OS.
+  public var isBare: Bool { image == ImageStore.noImage }
+
+  /// The features a bare machine cannot have: each needs a guest OS or a disk (QEMU checkpoints
+  /// of either mode are qcow2 snapshots of `disk.qcow2`; VZ disk checkpoints clone the disk).
+  /// Required or implied, they contradict `image: "none"`; preferred, they are denied.
+  public static let needsImage: [Feature] = [
+    .execSSH, .execAgent, .cloudInit, .guiDesktop, .sharedDir, .netPortForward, .rosetta,
+    .checkpointDisk, .checkpointLive,
+  ]
+
   public init(from decoder: any Decoder) throws {
     let c = try decoder.container(keyedBy: CodingKeys.self)
     guest = try c.decode(GuestSpec.self, forKey: .guest)
@@ -520,8 +532,10 @@ public struct Requirements: Codable, Sendable, Hashable {
     return named
   }
 
-  private func validate() throws(VMLabError) {
-    if let image { try ImageStore.checkName(image, field: "image") }
+  /// Checks the request as decoding does; for a caller that changed a field after decoding
+  /// (`fleet create`'s `image`).
+  public func validate() throws(VMLabError) {
+    if let image, !isBare { try ImageStore.checkName(image, field: "image") }
     if case .other(let name) = guest.arch, name.isEmpty {
       throw .invalidRequest(
         field: "guest.arch", reason: "empty architecture",
@@ -571,6 +585,19 @@ public struct Requirements: Codable, Sendable, Hashable {
           hint: "Give boot.loadAddress in hex, such as \"0x40080000\".")
       }
     }
+    if isBare {
+      let mode = boot?.mode ?? .disk
+      if mode == .disk {
+        throw .invalidRequest(
+          field: "image", reason: "image \"none\" has no disk to boot",
+          hint: "a disk boot needs an image; set boot.mode or name an image")
+      }
+      if mode == .kernel, boot?.kernel == nil {
+        throw .invalidRequest(
+          field: "boot.kernel", reason: "image \"none\" has no kernel to extract",
+          hint: "Give boot.kernel the host path of the kernel to boot.")
+      }
+    }
     try extra?.validate()
     try provision?.validate(guest: guest)
     try share?.validate(guest: guest.os)
@@ -579,6 +606,17 @@ public struct Requirements: Codable, Sendable, Hashable {
 
   private func checkContradictions() throws(VMLabError) {
     let named = namedFeatures
+    if isBare {
+      let needed =
+        require.enumerated().map { ($0.element, "require[\($0.offset)]") }
+        + impliedFeatures
+      for (feature, field) in needed where Self.needsImage.contains(feature) {
+        throw .invalidRequest(
+          field: field,
+          reason: "\(feature.rawValue) needs a guest OS or a disk, and image \"none\" has neither",
+          hint: "Drop \(feature.rawValue), or name an image instead of \"none\".")
+      }
+    }
     if guest.os == .macos {
       for (feature, field) in named
       where [.directKernelBoot, .customFirmware, .serial].contains(feature) {

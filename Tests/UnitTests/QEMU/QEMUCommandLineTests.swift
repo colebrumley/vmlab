@@ -423,4 +423,42 @@ extension QEMUCommandLineTests {
     // After the NAT NIC.
     #expect(args.firstIndex(of: "-netdev")! < netdev - 1)
   }
+
+  /// R-1202: a bare machine's launch (`QEMUBackend.request`, then the options `launch` uses) has
+  /// no `-drive`, no seed and no guest-agent chardev, but keeps `ramfb` and the input devices.
+  @Test func aBareMachineHasNoDriveSeedOrAgent() async throws {
+    // Short: the QMP socket path must fit sun_path.
+    let home = URL(filePath: "/tmp/vqb-\(UInt32.random(in: 0...UInt32.max))")
+    try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: home) }
+    let kernel = home.appending(path: "kernel.bin")
+    try Data([0]).write(to: kernel)
+    let requirements = try Requirements(
+      guest: GuestSpec(os: .linux, arch: .arm64), require: [.serial, .gdb],
+      prefer: [.execAgent, .guiPreboot], image: "none",
+      boot: BootSpec(mode: .kernel, kernel: kernel.path))
+    let plan = try ProfileSelector.select(
+      requirements, host: SelectorTests.devHost(), running: .empty
+    ).get()
+    #expect(plan.profile == .qemuHVF && !plan.grants(.execAgent))
+    let record = VMRecord(
+      id: "vm-bare01", profile: plan.profile, guest: plan.guest, features: plan.features,
+      resources: plan.resources, boot: requirements.boot)
+    #expect(record.isBare)
+    let backend = QEMUBackend(
+      profile: .qemuHVF, store: Store(home: home),
+      installation: QEMUInstallation(
+        binDirectory: home.appending(path: "bin"), shareDirectory: home.appending(path: "share")))
+    var request = try await backend.request(record, plan: plan, seed: true)
+    #expect(request.baseImage == nil && request.seed == nil)
+    request.gdbPort = 41234
+    let args = try QEMUCommandLine.arguments(
+      record: record, plan: plan, layout: backend.layout(of: record.id),
+      options: try request.options())
+    #expect(!args.contains("-drive"))
+    #expect(
+      !args.contains { $0.contains("qga0") || $0.contains("disk.qcow2") || $0.contains("seed") })
+    #expect(args.contains("ramfb") && args.contains("usb-tablet"))
+    #expect(args.firstIndex(of: "-kernel").map { args[$0 + 1] } == kernel.path)
+  }
 }
