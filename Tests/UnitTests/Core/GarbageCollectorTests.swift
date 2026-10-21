@@ -404,7 +404,7 @@ import VMLabCore
     let foreign = try home("vmlab-test-3-h1", engine: 6003)
     let reused = try home("vmlab-test-4-h1", engine: nil, vz: 6004)
     let unreadable = try home("vmlab-test-5-h1", engine: 6005)
-    let mac = try home("vmlab-test-6-h1", engine: nil)
+    let mac = try home("vmlab-test-6-h1", engine: nil, vz: 6006)
     let clone = root.appending(path: "tart/vm-macmac")
     try FileManager.default.createDirectory(at: clone, withIntermediateDirectories: true)
     var record = VMRecord(
@@ -424,12 +424,13 @@ import VMLabCore
 
     let terminated = Mutex<[Int32]>([])
     let processes = ProcessInspector(
-      isAlive: { (6001...6005).contains($0) },
+      isAlive: { (6001...6006).contains($0) },
       executablePath: {
         switch $0 {
         case 6001, 6003: "/opt/homebrew/bin/qemu-system-aarch64"
         case 6002: "/Users/x/vmlab/.build/debug/vmlab-switch"
         case 6004: "/bin/sleep"
+        case 6006: "/usr/local/bin/vmlab-vz"
         default: nil
         }
       },
@@ -438,13 +439,14 @@ import VMLabCore
         switch pid {
         case 6001: directory == stale.appending(path: "vms/vm-aaaaaa")
         case 6002: directory == stale.appending(path: "segments/lan")
+        case 6006: directory == mac.appending(path: "vms/vm-aaaaaa")
         default: false
         }
       })
 
     let lines = await GarbageCollector.sweepTestHomes(
       roots: [root], olderThan: .seconds(24 * 3600), processes: processes)
-    #expect(terminated.withLock { $0 } == [6001, 6002])
+    #expect(terminated.withLock { $0 } == [6001, 6002, 6006])
     #expect(!FileManager.default.fileExists(atPath: stale.path))
     #expect(!FileManager.default.fileExists(atPath: reused.path))
     for kept in [young, foreign, unrelated, unreadable, mac] {

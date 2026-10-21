@@ -327,7 +327,8 @@ public struct GarbageCollector: Sendable {
   /// segment whose `VMLAB_HOME` is that home. A live pid that runs an engine or a switch but cannot
   /// be confirmed, or whose executable cannot be read, leaves the whole home; one that runs
   /// anything else is a reused pid and is ignored. A home whose record names a Tart clone that
-  /// still exists is left too: only the macOS backend's destroy removes the clone. One line per
+  /// still exists has its processes ended but is left: only the macOS backend's destroy removes
+  /// the clone. One line per
   /// home removed or left.
   public static func sweepTestHomes(
     roots: [URL], olderThan age: Duration, processes: ProcessInspector = .system,
@@ -344,12 +345,6 @@ public struct GarbageCollector: Sendable {
           let newest = newestModification(in: home),
           now.timeIntervalSince(newest) > Double(age.components.seconds)
         else { continue }
-        let clones = ((try? Store(home: home).list().records) ?? []).compactMap(\.tartClone)
-          .filter { FileManager.default.fileExists(atPath: $0) }
-        guard clones.isEmpty else {
-          lines.append("left \(home.path): Tart clone \(clones.joined(separator: ", ")) remains")
-          continue
-        }
         var confirmed: [(pid: Int32, path: String)] = []
         var unconfirmed: [Int32] = []
         for (pid, scope, isSwitch) in recordedPIDs(in: home) where processes.isAlive(pid) {
@@ -375,6 +370,13 @@ public struct GarbageCollector: Sendable {
         let ended =
           confirmed.isEmpty
           ? "" : " (ended " + confirmed.map { "pid \($0.pid)" }.joined(separator: ", ") + ")"
+        let clones = ((try? Store(home: home).list().records) ?? []).compactMap(\.tartClone)
+          .filter { FileManager.default.fileExists(atPath: $0) }
+        guard clones.isEmpty else {
+          let list = clones.joined(separator: ", ")
+          lines.append("left \(home.path)\(ended): Tart clone \(list) remains")
+          continue
+        }
         do {
           try FileManager.default.removeItem(at: home)
           lines.append("removed \(home.path)\(ended)")
