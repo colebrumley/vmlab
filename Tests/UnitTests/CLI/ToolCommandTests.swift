@@ -85,6 +85,9 @@ import VMLabMCP
         == .object([
           "vm": .string("web"), "address": .string("0x40000000"), "size": .number(4096),
         ]))
+    #expect(
+      try MemoryDumpCommand.parse(["web", "--local", "/tmp/ram.elf"]).arguments()
+        == .object(["vm": .string("web"), "local": .string("/tmp/ram.elf")]))
     for command in [
       FactsCommand.self, DoctorCommand.self, PlanCommand.self, ListCommand.self,
       InspectCommand.self, LogsCommand.self, IntrospectCommand.self, MemoryDumpCommand.self,

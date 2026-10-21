@@ -161,8 +161,9 @@ import VMLabCore
 /// R-1102: which tool inputs are host paths. Each one goes through `PathPolicy`; a new one must
 /// be added here and to the policy's callers.
 @Suite struct HostPathInputsTests {
-  @Test func memoryDumpTakesNoHostPath() {
+  /// Its one host path, `local` (R-1205), is a write checked as `vm_file pull`'s.
+  @Test func memoryDumpTakesOnlyLocalAsAHostPath() {
     let properties = ToolSpec.vmMemoryDump.inputSchema["properties"]?.objectValue ?? [:]
-    #expect(Set(properties.keys) == ["vm", "address", "size", "confirm"])
+    #expect(Set(properties.keys) == ["vm", "address", "size", "confirm", "local"])
   }
 }
