@@ -8,7 +8,8 @@ import VMLabVZ
 /// A throwaway `VMLAB_HOME` under /tmp (short, so socket paths fit `sockaddr_un`) whose `images/`
 /// is a real directory holding links to each image in `~/.vmlab/images`, so a test can write a
 /// template there without touching the shared cache. It registers the QEMU backends and, when the
-/// signed runner is built, `VZBackend`. `shutdown()` kills every guest it knows and removes the home.
+/// signed runner is built, `VZBackend`. `shutdown()` kills every guest it knows, stops every segment
+/// switch and removes the home; homes of killed runs are left to `TestHomeSweep`.
 struct LabHome {
   /// `codesign` of one binary from two suites at once fails; sign once per test process.
   static let signOnce: Void = { try? VZRunnerIntegrationTests.signRunner() }()
@@ -24,6 +25,7 @@ struct LabHome {
   let segments: SegmentStore
 
   init(tag: String = "h") throws {
+    _ = TestHomeSweep.done
     let n = Self.counterLock.withLock {
       Self.counter += 1
       return Self.counter

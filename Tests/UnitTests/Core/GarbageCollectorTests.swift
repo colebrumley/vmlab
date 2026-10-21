@@ -178,6 +178,24 @@ import VMLabCore
 
   /// A template no VM was created from or reads through, unchanged for a week, goes; one a VM
   /// names, one a backing chain reads, a young one and a plain pulled image stay.
+  /// A dump written through `vm_memory_dump`'s `local` lies outside every VM directory: never an
+  /// item, however old (R-1205).
+  @Test func leavesDumpsOutsideTheVMDirectoryAlone() async throws {
+    let f = try Fixture()
+    let vm = try await f.create([.serial, .memoryDump])
+    let inside = f.store.directory(of: vm.id).appending(path: "dumps/old.raw")
+    try Self.write(inside, modified: Self.old)
+    let outside = FileManager.default.temporaryDirectory.appending(path: "vmlab-dump-\(UUID())")
+    defer { try? FileManager.default.removeItem(at: outside) }
+    let dump = outside.appending(path: "old.raw")
+    try Self.write(dump, modified: Self.old)
+    var collector = GarbageCollector(manager: f.manager)
+    collector.processes = Processes().inspector
+    let report = await collector.run()
+    #expect(report.items.filter { $0.kind == .dump }.map(\.target) == [inside.path])
+    #expect(FileManager.default.fileExists(atPath: dump.path))
+  }
+
   @Test func collectsUnusedTemplates() async throws {
     let f = try Fixture()
     let vm = try await f.create()
@@ -245,5 +263,217 @@ import VMLabCore
 
     // A VM nothing depends on is destroyed without force, the clone included.
     #expect(try await f.manager.perform(.destroy, on: clone.id) == nil)
+  }
+
+  // MARK: R-1207
+
+  static func age(_ directory: URL, to date: Date) throws {
+    let walker = FileManager.default.enumerator(atPath: directory.path)
+    while let relative = walker?.nextObject() as? String {
+      try FileManager.default.setAttributes(
+        [.modificationDate: date], ofItemAtPath: directory.appending(path: relative).path)
+    }
+    try FileManager.default.setAttributes(
+      [.modificationDate: date], ofItemAtPath: directory.path)
+  }
+
+  static func writeSegment(_ segments: SegmentStore, _ name: String, members: [String] = [])
+    throws
+  {
+    var segment = Segment(name: name, index: 1, createdAt: Date())
+    segment.members = members.map {
+      SegmentMember(
+        vm: $0, name: $0, address: "10.1.0.10", mac: "52:54:00:00:00:01", joinedAt: Date())
+    }
+    let encoder = JSONEncoder()
+    encoder.dateEncodingStrategy = .iso8601
+    try FileManager.default.createDirectory(
+      at: segments.directory(of: name), withIntermediateDirectories: true)
+    try encoder.encode(segment).write(to: segments.recordURL(of: name))
+  }
+
+  @Test func switchPredicateNamesOnlyTheSwitch() {
+    #expect(EngineProcess.isSwitch("/Users/x/vmlab/.build/debug/vmlab-switch"))
+    #expect(!EngineProcess.isSwitch("/opt/homebrew/bin/qemu-system-aarch64"))
+    #expect(!EngineProcess.isSwitch("/usr/local/bin/vmlab-vz"))
+    #expect(!EngineProcess.isEngine("/Users/x/vmlab/.build/debug/vmlab-switch"))
+  }
+
+  /// The switch of a segment no VM uses goes; one with a member, one a live VM names, one of
+  /// another home stay. A directory with no manifest goes after `grace`, a young one stays, and a
+  /// manifest with no switch running is left alone.
+  @Test func endsTheSwitchesOfUnusedSegments() async throws {
+    let f = try Fixture()
+    let segments = f.manager.segments
+    let user = try await f.create()
+    try f.store.update(id: user.id) {
+      $0.state = .running
+      $0.segment = SegmentAttachment(
+        segment: "live", address: "10.1.0.10", mac: "52:54:00:00:00:02")
+    }
+    try Self.writeSegment(segments, "idle")
+    try Self.writeSegment(segments, "member", members: ["vm-abcdef"])
+    try Self.writeSegment(segments, "live")
+    try Self.writeSegment(segments, "other")
+    try Self.writeSegment(segments, "quiet")
+    let pids: [String: Int32] = [
+      "idle": 5001, "member": 5002, "live": 5003, "other": 5004, "gone": 5005, "fresh": 5006,
+    ]
+    for (name, pid) in pids {
+      try Self.write(segments.pidFile(of: name), bytes: 0)
+      try "\(pid)\n".write(to: segments.pidFile(of: name), atomically: true, encoding: .utf8)
+    }
+    try Self.age(segments.directory, to: Self.old)
+    try Self.write(segments.directory(of: "fresh").appending(path: "switch.log"))
+
+    let terminated = Mutex<[Int32]>([])
+    let other = segments.directory(of: "other")
+    var collector = GarbageCollector(manager: f.manager)
+    collector.processes = ProcessInspector(
+      isAlive: { (5001...5006).contains($0) },
+      executablePath: { _ in "/Users/x/vmlab/.build/debug/vmlab-switch" },
+      terminate: { pid in terminated.withLock { $0.append(pid) } },
+      runsVM: { pid, directory in
+        // 5004 is the switch of another segment, whose pid file "other" still names.
+        pid == 5004
+          ? directory != other
+          : directory.deletingLastPathComponent().path == segments.directory.path
+      })
+
+    collector.dryRun = true
+    let preview = await collector.run()
+    #expect(terminated.withLock { $0 }.isEmpty)
+    #expect(FileManager.default.fileExists(atPath: segments.directory(of: "gone").path))
+
+    collector.dryRun = false
+    let report = await collector.run()
+    #expect(report.errors.isEmpty, "\(report.errors)")
+    #expect(report.items == preview.items)
+    #expect(terminated.withLock { $0.sorted() } == [5001, 5005, 5006])
+    let byKind = Dictionary(grouping: report.items, by: \.kind)
+    #expect(byKind[.orphanProcess]?.compactMap(\.vm).sorted() == ["fresh", "gone", "idle"])
+    #expect(byKind[.orphanDirectory]?.map(\.vm) == ["gone"])
+    #expect(!FileManager.default.fileExists(atPath: segments.directory(of: "gone").path))
+    for name in ["idle", "member", "live", "other", "quiet", "fresh"] {
+      #expect(FileManager.default.fileExists(atPath: segments.directory(of: name).path), "\(name)")
+    }
+  }
+
+  /// The lock files of an id with neither record nor directory go; young ones, those of a record
+  /// or a directory, and the store, segment and start-gate locks stay.
+  @Test func removesStaleLocks() async throws {
+    let f = try Fixture()
+    let record = try await f.create()
+    let locks = f.store.locksDirectory
+    let stale = ["vm-gone22.lock", "vm-gone22.op.lock", "vm-gone22.qmp-events.lock"]
+    let kept = [
+      "\(record.id).lock", "\(record.id).op.lock", "vm-dir222.lock", "store.lock",
+      "segments.lock", "segment-lan.lock", "switch-lan.lock", "starts/admit.lock",
+      "starts/slot-0.lock",
+    ]
+    for name in stale + kept {
+      try Self.write(locks.appending(path: name), bytes: 0, modified: Self.old)
+    }
+    try Self.write(locks.appending(path: "vm-young2.lock"), bytes: 0)
+    try FileManager.default.createDirectory(
+      at: f.store.directory(of: "vm-dir222"), withIntermediateDirectories: true)
+
+    var collector = GarbageCollector(manager: f.manager)
+    collector.processes = Processes().inspector
+    let report = await collector.run()
+    #expect(report.errors.isEmpty, "\(report.errors)")
+    let removed = report.items.filter { $0.kind == .staleLock }
+    #expect(removed.map(\.target) == stale.sorted().map { locks.appending(path: $0).path })
+    #expect(Set(removed.compactMap(\.vm)) == ["vm-gone22"])
+    for name in stale {
+      #expect(!FileManager.default.fileExists(atPath: locks.appending(path: name).path))
+    }
+    for name in kept + ["vm-young2.lock"] {
+      #expect(FileManager.default.fileExists(atPath: locks.appending(path: name).path), "\(name)")
+    }
+  }
+
+  /// A test home older than the limit has its confirmed engine and switch ended and goes; a young
+  /// home, and one whose engine pid runs elsewhere, stay. A pid reused by another program is
+  /// ignored.
+  @Test func sweepsStaleTestHomes() async throws {
+    let root = FileManager.default.temporaryDirectory.appending(path: "vmlab-sweep-\(UUID())")
+    defer { try? FileManager.default.removeItem(at: root) }
+    func home(_ name: String, engine: Int32?, vz: Int32? = nil, switch: Int32? = nil) throws -> URL
+    {
+      let home = root.appending(path: name)
+      let vm = home.appending(path: "vms/vm-aaaaaa")
+      try FileManager.default.createDirectory(at: vm, withIntermediateDirectories: true)
+      for (file, pid) in [("qemu.pid", engine), ("vz.pid", vz)] {
+        if let pid {
+          try "\(pid)\n".write(to: vm.appending(path: file), atomically: true, encoding: .utf8)
+        }
+      }
+      if let pid = `switch` {
+        let segment = home.appending(path: "segments/lan")
+        try FileManager.default.createDirectory(at: segment, withIntermediateDirectories: true)
+        try "\(pid)\n".write(
+          to: segment.appending(path: "switch.pid"), atomically: true, encoding: .utf8)
+      }
+      return home
+    }
+    let stale = try home("vmlab-test-1-h1", engine: 6001, switch: 6002)
+    let young = try home("vmlab-test-2-h1", engine: 6001)
+    let foreign = try home("vmlab-test-3-h1", engine: 6003)
+    let reused = try home("vmlab-test-4-h1", engine: nil, vz: 6004)
+    let unreadable = try home("vmlab-test-5-h1", engine: 6005)
+    let mac = try home("vmlab-test-6-h1", engine: nil, vz: 6006)
+    let clone = root.appending(path: "tart/vm-macmac")
+    try FileManager.default.createDirectory(at: clone, withIntermediateDirectories: true)
+    var record = VMRecord(
+      id: "vm-macmac", name: "mac", profile: .vzMacOS, guest: GuestSpec(os: .macos, arch: .arm64),
+      features: [], image: "macos-base")
+    record.tartClone = clone.path
+    let encoder = JSONEncoder()
+    encoder.dateEncodingStrategy = .iso8601
+    try FileManager.default.createDirectory(
+      at: mac.appending(path: "vms/vm-macmac"), withIntermediateDirectories: true)
+    try encoder.encode(record).write(to: mac.appending(path: "vms/vm-macmac/vm.json"))
+    let unrelated = try home("other-1", engine: 6001)
+    let dayAgo = Date().addingTimeInterval(-25 * 3600)
+    for directory in [stale, foreign, reused, unrelated, unreadable, mac] {
+      try Self.age(directory, to: dayAgo)
+    }
+
+    let terminated = Mutex<[Int32]>([])
+    let processes = ProcessInspector(
+      isAlive: { (6001...6006).contains($0) },
+      executablePath: {
+        switch $0 {
+        case 6001, 6003: "/opt/homebrew/bin/qemu-system-aarch64"
+        case 6002: "/Users/x/vmlab/.build/debug/vmlab-switch"
+        case 6004: "/bin/sleep"
+        case 6006: "/usr/local/bin/vmlab-vz"
+        default: nil
+        }
+      },
+      terminate: { pid in terminated.withLock { $0.append(pid) } },
+      runsVM: { pid, directory in
+        switch pid {
+        case 6001: directory == stale.appending(path: "vms/vm-aaaaaa")
+        case 6002: directory == stale.appending(path: "segments/lan")
+        case 6006: directory == mac.appending(path: "vms/vm-aaaaaa")
+        default: false
+        }
+      })
+
+    let lines = await GarbageCollector.sweepTestHomes(
+      roots: [root], olderThan: .seconds(24 * 3600), processes: processes)
+    #expect(terminated.withLock { $0 } == [6001, 6002, 6006])
+    #expect(!FileManager.default.fileExists(atPath: stale.path))
+    #expect(!FileManager.default.fileExists(atPath: reused.path))
+    for kept in [young, foreign, unrelated, unreadable, mac] {
+      #expect(FileManager.default.fileExists(atPath: kept.path), "\(kept.lastPathComponent)")
+    }
+    #expect(lines.count == 5, "\(lines)")
+    #expect(lines.contains { $0.hasPrefix("left \(unreadable.path)") && $0.contains("6005") })
+    #expect(lines.contains { $0.hasPrefix("left \(mac.path)") && $0.contains("Tart clone") })
+    #expect(lines.contains { $0.hasPrefix("removed \(stale.path)") && $0.contains("pid 6002") })
+    #expect(lines.contains { $0.hasPrefix("left \(foreign.path)") && $0.contains("6003") })
   }
 }

@@ -12,6 +12,19 @@ extension Tag {
   @Tag static var slow: Self
 }
 
+/// R-1207: once per test process, the homes of runs killed before their teardown are collected:
+/// `vmlab-test-*` under `/tmp` (integration homes) and the temporary directory (unit-test homes)
+/// whose newest file is a day old, their confirmed engines and switches ended first. The first
+/// admission waits for it; the first home only starts it, since it never touches a young home.
+enum TestHomeSweep {
+  static let done = Task<Void, Never> {
+    let lines = await GarbageCollector.sweepTestHomes(
+      roots: [URL(filePath: "/tmp"), FileManager.default.temporaryDirectory],
+      olderThan: .seconds(24 * 3600))
+    for line in lines { print("test home sweep: \(line)") }
+  }
+}
+
 /// The start gate every integration start goes through: the in-process slots and budget plus the
 /// live host-memory admission a real server applies (`HostMemoryGuard`: pressure, available
 /// memory, guests of every other home), so an overcommitted run fails fast with `limit_memory`
@@ -28,6 +41,7 @@ enum IntegrationAdmission {
   static func start<T: Sendable>(
     _ vm: String, store: Store, _ body: () async throws -> T
   ) async throws -> T {
+    await TestHomeSweep.done.value
     let record = try store.load(id: vm)
     let host = HostProbe(home: store.home, runningGuests: { store.runningGuests() }).gather()
     return try await gate.withStart(

@@ -107,11 +107,17 @@ before selection: `serial` on a macOS guest, `net_port_forward` with `network.mo
 | Boot messages, kernel logs, panics, a hung or unbootable guest | `vm_serial` (`serial`) | Captured from the first byte of boot; works when SSH and the display are dead, and on a stopped guest (the log is the record) |
 | Firmware and bootloaders, CPU state | `vm_debug` (`gdb`, `halt_at_start`) | Halt, step, breakpoints, registers, memory |
 | Machine state the guest cannot report | `vm_introspect` (`introspection`) | Asks QEMU directly; works when the guest is hung |
+| Guest memory as a file, for host tools | `vm_memory_dump` (`memory_dump`) | A raw range or an ELF core; pass `local` to keep it past `destroy` |
 | Something only a person at the screen would see or do | `vm_computer` (`gui`) | Screenshots and input, like a computer-use tool |
 
 Prefer text channels. Use the screen only when the task is about the screen (a GUI app, a desktop
 session, a dialog no command can answer). A screenshot costs far more than `vm_exec` and tells you
 less: to check whether a window manager runs, `pgrep` it; to read an error, read the log.
+
+A dump without `local` lands in the VM's `dumps/`, which `destroy` removes with the VM. To keep
+one, pass `local` (say `/tmp/kernel-run-3.raw`, or a directory for the default name) rather than
+copying the file out before you destroy: it follows `vm_file pull`'s write rules (`/tmp`, `$TMPDIR`,
+`~/vmlab-files`) and the result's `path` says where it went.
 
 When the display is dead, use serial. A desktop that crashed, a guest stuck before its network
 came up, a kernel panic: `vm_serial tail` shows what happened, and `vm_serial write` runs commands
