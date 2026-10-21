@@ -29,6 +29,7 @@ public enum Feature: String, CaseIterable, Codable, Sendable {
   case sharedDir = "shared_dir"
   case cloudInit = "cloud_init"
   case manyGuests = "many_guests"
+  case cpuEmulation = "cpu_emulation"
 
   /// How the model uses a feature.
   public enum Kind: String, CaseIterable, Codable, Sendable {
@@ -43,7 +44,7 @@ public enum Feature: String, CaseIterable, Codable, Sendable {
     case .directKernelBoot, .customFirmware, .customDevices, .haltAtStart, .cloudInit: .boot
     case .checkpointDisk, .checkpointLive, .pause: .state
     case .netNAT, .netFast, .netSegment, .netPortForward, .netNone: .net
-    case .guiAccel, .rosetta, .nestedVirt, .sharedDir, .manyGuests: .compute
+    case .guiAccel, .rosetta, .nestedVirt, .sharedDir, .manyGuests, .cpuEmulation: .compute
     }
   }
 
@@ -76,6 +77,9 @@ public enum Feature: String, CaseIterable, Codable, Sendable {
     case .sharedDir: "A host directory mounted in the guest"
     case .cloudInit: "First-boot provisioning for Linux guests"
     case .manyGuests: "More than two instances may run at once"
+    case .cpuEmulation:
+      "The guest CPU is emulated in software: deterministic `-icount`, instruction tracing, any "
+        + "CPU model; many times slower than hardware virtualization"
     }
   }
 

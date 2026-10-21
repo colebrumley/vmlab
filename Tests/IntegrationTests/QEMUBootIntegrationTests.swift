@@ -139,7 +139,7 @@ import VMLabQEMU
       let elapsed = ContinuousClock.now - started
       #expect(lab.state(name) == "stopped", "\(name) after \(elapsed)")
       #expect(elapsed < .seconds(10), "\(name) stopped after \(elapsed)")
-      // vm_serial refuses a stopped guest until W2; the console log is the record.
+      // The console log is the record (vm_serial reads it too once stopped, R-1201).
       let console = lab.console(name)
       #expect(console.contains(message + "\n"), "\(console)")
       #expect(!console.contains(name == "bare-a" ? "bare kernel B" : "bare kernel A"))

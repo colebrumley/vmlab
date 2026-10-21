@@ -143,6 +143,8 @@ public enum Capabilities {
     "Virtualization.framework boots only Apple EFI or a Linux kernel"
   private static let vzNoFirmware = vzBootsOnlyEFIOrKernel
   private static let vzFixedDevices = vzBootsOnlyEFIOrKernel
+  /// R-1204: why only `qemu-tcg` has `cpu_emulation`.
+  private static let nativeCPU = "the engine runs the guest CPU natively"
 
   /// The unresolved matrix entry for `feature` on `profile`.
   public static func entry(_ feature: Feature, on profile: Profile) -> Entry {
@@ -239,6 +241,9 @@ public enum Capabilities {
     case (.manyGuests, .vzMacOS):
       n("macOS allows at most two macOS guests at once", note: "limit 2")
     case (.manyGuests, _): y()
+
+    case (.cpuEmulation, .qemuTCG): y()
+    case (.cpuEmulation, _): n(nativeCPU)
     }
   }
 

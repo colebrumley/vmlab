@@ -324,9 +324,9 @@ cursor_position: { x, y }; screen_info: { width, height }
 
 ## `vm_serial`
 
-The guest's serial console, captured from the first byte of boot. Offsets are byte offsets into the VM's console log, which keeps every run and is written whether or not anyone is reading, so they hold across calls, CLI invocations and server restarts. read returns text from byte offset since (default: where the VM's last start began; 0 reaches earlier runs); tail returns the last lines lines; write sends text (include \n to press Enter); wait blocks until the regular expression pattern appears after since or timeoutSeconds passes. Every result returns the offset to pass as since next time. Use it to watch boot, kernel messages and panics, or to run commands when SSH is down: on a Linux guest the console is a root shell (write \n, wait for "# "). Needs the serial feature.
+The guest's serial console, captured from the first byte of boot. Offsets are byte offsets into the VM's console log, which keeps every run and is written whether or not anyone is reading, so they hold across calls, CLI invocations and server restarts. read returns text from byte offset since (default: where the VM's last start began; 0 reaches earlier runs); tail returns the last lines lines; write sends text (include \n to press Enter); wait blocks until the regular expression pattern appears after since or timeoutSeconds passes, and returns stopped: true (with the text since since) when the guest powers off or is killed first. Works on a stopped guest: the log is the record, so read, tail and wait answer from it (a wait with no match returns stopped: true at once); write needs the guest running. Every result returns the offset to pass as since next time. Use it to watch boot, kernel messages and panics, or to run commands when SSH is down: on a Linux guest the console is a root shell (write \n, wait for "# "). Needs the serial feature.
 
-**Errors:** `vm_not_found`, `wrong_state`, `capability_missing`, `invalid_request`, `timeout`
+**Errors:** `vm_not_found`, `wrong_state`, `capability_missing`, `invalid_request`, `timeout`, `guest_unreachable`
 
 **Input**
 
@@ -343,7 +343,7 @@ The guest's serial console, captured from the first byte of boot. Offsets are by
 **Result**
 
 ```
-{ text, offset, matched?, truncated }
+{ text, offset, matched?, stopped?, truncated }
 ```
 
 ## `vm_debug`
@@ -574,13 +574,13 @@ The `requirements` object of `vm_plan`, `vm_create` and `fleet` (`Requirements` 
 | `network.forwards[].host` | integer, 1–65535 |  | Host port on 127.0.0.1; omit to let vmlab choose one. |
 | `network.mode` | `nat` \| `none` |  | nat for outbound internet, none for no network device at all. |
 | `network.segment` | string, ≤ 32 characters |  | A private segment (net_segment) to join with a second NIC. Lowercase letters, digits and '-', at most 32 characters. |
-| `prefer` | array of `exec_ssh` \| `exec_agent` \| `gui` \| `gui_preboot` \| `gui_desktop` \| `gui_accel` \| `serial` \| `gdb` \| `introspection` \| `memory_dump` \| `direct_kernel_boot` \| `custom_firmware` \| `custom_devices` \| `halt_at_start` \| `checkpoint_disk` \| `checkpoint_live` \| `pause` \| `net_nat` \| `net_fast` \| `net_segment` \| `net_port_forward` \| `net_none` \| `rosetta` \| `nested_virt` \| `shared_dir` \| `cloud_init` \| `many_guests` |  | Features to have when possible; they rank profiles but never rule one out. |
+| `prefer` | array of `exec_ssh` \| `exec_agent` \| `gui` \| `gui_preboot` \| `gui_desktop` \| `gui_accel` \| `serial` \| `gdb` \| `introspection` \| `memory_dump` \| `direct_kernel_boot` \| `custom_firmware` \| `custom_devices` \| `halt_at_start` \| `checkpoint_disk` \| `checkpoint_live` \| `pause` \| `net_nat` \| `net_fast` \| `net_segment` \| `net_port_forward` \| `net_none` \| `rosetta` \| `nested_virt` \| `shared_dir` \| `cloud_init` \| `many_guests` \| `cpu_emulation` |  | Features to have when possible; they rank profiles but never rule one out. |
 | `provision` | object |  | First-boot provisioning beyond vmlab's own setup. |
 | `provision.packages` | array of string |  | Packages cloud-init installs on first boot (Linux only). |
 | `provision.runCommands` | array of string |  | Commands run in order on first boot: as root after cloud-init (Linux), or over SSH as the login user (macOS). The first that fails stops the rest; vm_inspect reports it as provision_failed. |
 | `provision.sudoPassword` | string |  | macOS only: the guest login user's password, for sudo. Needed only for a share.guest other than /Volumes/My Shared Files on an image that records no password (macos-base has one). Kept in the VM directory, never in vm.json or provision.json. |
 | `provision.userData` | string |  | cloud-init user-data merged after vmlab's own (its keys win, lists append); must start with #cloud-config, #!, #cloud-boothook or #include (Linux only). |
-| `require` | array of `exec_ssh` \| `exec_agent` \| `gui` \| `gui_preboot` \| `gui_desktop` \| `gui_accel` \| `serial` \| `gdb` \| `introspection` \| `memory_dump` \| `direct_kernel_boot` \| `custom_firmware` \| `custom_devices` \| `halt_at_start` \| `checkpoint_disk` \| `checkpoint_live` \| `pause` \| `net_nat` \| `net_fast` \| `net_segment` \| `net_port_forward` \| `net_none` \| `rosetta` \| `nested_virt` \| `shared_dir` \| `cloud_init` \| `many_guests` |  | Features the VM must have; a profile lacking any is ruled out. Default [] (VZ). |
+| `require` | array of `exec_ssh` \| `exec_agent` \| `gui` \| `gui_preboot` \| `gui_desktop` \| `gui_accel` \| `serial` \| `gdb` \| `introspection` \| `memory_dump` \| `direct_kernel_boot` \| `custom_firmware` \| `custom_devices` \| `halt_at_start` \| `checkpoint_disk` \| `checkpoint_live` \| `pause` \| `net_nat` \| `net_fast` \| `net_segment` \| `net_port_forward` \| `net_none` \| `rosetta` \| `nested_virt` \| `shared_dir` \| `cloud_init` \| `many_guests` \| `cpu_emulation` |  | Features the VM must have; a profile lacking any is ruled out. Default [] (VZ). |
 | `resources` | object |  | Guest resources; each omitted field takes the guest's default. |
 | `resources.cpus` | integer, 1–256 |  | Virtual CPUs. |
 | `resources.diskGB` | integer, 1–65536 |  | Disk size in GB. |

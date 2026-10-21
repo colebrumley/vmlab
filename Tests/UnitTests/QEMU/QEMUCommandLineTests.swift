@@ -221,6 +221,8 @@ import VMLabCore
     } throws: { error in
       guard let error = error as? VMLabError, error.code == .invalidRequest else { return false }
       let field = index < 0 ? "extra.qemuArgs" : "extra.qemuArgs[\(index)]"
+      // R-1204: the way out is an emulated CPU, which the model asks for by feature.
+      if fixture == "hvf", !error.hint.contains("require cpu_emulation") { return false }
       return error.data["field"] == .string(field)
     }
   }

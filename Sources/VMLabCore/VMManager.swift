@@ -400,6 +400,26 @@ public actor VMManager {
     return try await backends.backend(for: current.profile).attach(current)
   }
 
+  /// What `vm_serial` reads (R-1201): the serial channel of a running or paused VM, else, in any
+  /// other state, the VM's console log, which holds every byte the guest printed (the channel only
+  /// follows it). `capability_missing` in every state when the plan lacks the serial feature.
+  public func serialConsole(_ vm: String) async throws(VMLabError) -> SerialConsole {
+    var record = try store.find(vm)
+    guard Channel.serial.features.contains(where: record.features.contains) else {
+      throw RunningVMErrors.capabilityMissing(.serial, vm: record.id, profile: record.profile)
+    }
+    if record.state.isLive {
+      do {
+        let running = try await attach(record.id)
+        return .live(running, try running.channel(.serial))
+      } catch let error where error.code == .wrongState {
+        // It stopped since the look above.
+        record = try store.find(record.id)
+      }
+    }
+    return .log(record, store.directory(of: record.id).appending(path: "console.log"))
+  }
+
   /// Attaches every running or paused guest's backend, so the server watches what it did not
   /// start itself (R-304 panic detection on serial and QMP events, R-1101 dead-peer detection)
   /// from the moment it starts, not only once a tool touches the VM. Failures are ignored: the
@@ -464,4 +484,12 @@ extension VMManager {
     checked.binary = try check(boot.binary, "boot.binary")
     return checked
   }
+}
+
+/// Where `vm_serial` reads a VM's console (`VMManager.serialConsole`).
+public enum SerialConsole: Sendable {
+  /// A running or paused VM and its serial channel.
+  case live(any RunningVM, SerialChannel)
+  /// A VM in any other state and its `console.log`, which may not exist yet.
+  case log(VMRecord, URL)
 }
