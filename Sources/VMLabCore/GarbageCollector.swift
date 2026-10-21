@@ -54,7 +54,8 @@ public struct ProcessInspector: Sendable {
   /// SIGTERM, a short wait, then SIGKILL.
   public var terminate: @Sendable (Int32) async -> Void
   /// Whether `pid` runs the VM in the directory (`EngineProcess.isRunning(_:vmDirectory:)`) or,
-  /// for a segment switch, serves the home the directory is (`EngineProcess.isSwitchRunning`).
+  /// for a segment switch, is the switch of the segment directory
+  /// (`EngineProcess.isSwitchRunning(_:segmentDirectory:)`).
   public var runsVM: @Sendable (Int32, URL) -> Bool
 
   public init(
@@ -62,7 +63,8 @@ public struct ProcessInspector: Sendable {
     executablePath: @escaping @Sendable (Int32) -> String?,
     terminate: @escaping @Sendable (Int32) async -> Void,
     runsVM: @escaping @Sendable (Int32, URL) -> Bool = {
-      EngineProcess.isRunning($0, vmDirectory: $1) || EngineProcess.isSwitchRunning($0, home: $1)
+      EngineProcess.isRunning($0, vmDirectory: $1)
+        || EngineProcess.isSwitchRunning($0, segmentDirectory: $1)
     }
   ) {
     self.isAlive = isAlive
@@ -263,7 +265,7 @@ public struct GarbageCollector: Sendable {
 
   /// R-1207: ends the switch of each segment no VM uses and removes the directory of each segment
   /// whose manifest is gone. A switch counts only when `switch.pid` names a live `vmlab-switch`
-  /// serving this home; the segment's lock is held (and skipped when busy) so a join in flight is
+  /// of that segment serving this home; the segment's lock is held (and skipped when busy) so a join in flight is
   /// either seen or comes after.
   func collectSegments(records: [VMRecord], into report: inout GCReport) async {
     let segments = manager.segments
@@ -286,7 +288,7 @@ public struct GarbageCollector: Sendable {
       if let text = try? String(contentsOf: segments.pidFile(of: name), encoding: .utf8),
         let pid = Int32(text.trimmingCharacters(in: .whitespacesAndNewlines)), pid > 0,
         processes.isAlive(pid), let path = processes.executablePath(pid),
-        EngineProcess.isSwitch(path), processes.runsVM(pid, store.home)
+        EngineProcess.isSwitch(path), processes.runsVM(pid, directory)
       {
         if !dryRun { await processes.terminate(pid) }
         report.items.append(
@@ -321,10 +323,12 @@ public struct GarbageCollector: Sendable {
   /// R-1207: removes each `vmlab-test-*` directory under `roots` whose newest entry is older than
   /// `age`, a home a test run killed before its teardown left. First it ends the processes its
   /// `vms/*/qemu.pid`, `vms/*/vz.pid` and `segments/*/switch.pid` name, each confirmed as gc
-  /// confirms them: an engine whose arguments lie in that VM directory, or a switch whose
-  /// `VMLAB_HOME` is that home. A live pid that runs an engine or a switch but cannot be
-  /// confirmed leaves the whole home; one that runs anything else is a reused pid and is ignored.
-  /// One line per home removed or left.
+  /// confirms them: an engine whose arguments lie in that VM directory, or the switch of that
+  /// segment whose `VMLAB_HOME` is that home. A live pid that runs an engine or a switch but cannot
+  /// be confirmed, or whose executable cannot be read, leaves the whole home; one that runs
+  /// anything else is a reused pid and is ignored. A home whose record names a Tart clone that
+  /// still exists is left too: only the macOS backend's destroy removes the clone. One line per
+  /// home removed or left.
   public static func sweepTestHomes(
     roots: [URL], olderThan age: Duration, processes: ProcessInspector = .system,
     now: Date = Date()
@@ -340,12 +344,22 @@ public struct GarbageCollector: Sendable {
           let newest = newestModification(in: home),
           now.timeIntervalSince(newest) > Double(age.components.seconds)
         else { continue }
+        let clones = ((try? Store(home: home).list().records) ?? []).compactMap(\.tartClone)
+          .filter { FileManager.default.fileExists(atPath: $0) }
+        guard clones.isEmpty else {
+          lines.append("left \(home.path): Tart clone \(clones.joined(separator: ", ")) remains")
+          continue
+        }
         var confirmed: [(pid: Int32, path: String)] = []
         var unconfirmed: [Int32] = []
-        for (pid, scope, isSwitch) in recordedPIDs(in: home) {
-          guard processes.isAlive(pid), let path = processes.executablePath(pid),
-            isSwitch ? EngineProcess.isSwitch(path) : EngineProcess.isEngine(path)
-          else { continue }
+        for (pid, scope, isSwitch) in recordedPIDs(in: home) where processes.isAlive(pid) {
+          guard let path = processes.executablePath(pid) else {
+            unconfirmed.append(pid)
+            continue
+          }
+          guard isSwitch ? EngineProcess.isSwitch(path) : EngineProcess.isEngine(path) else {
+            continue
+          }
           if processes.runsVM(pid, scope) {
             confirmed.append((pid, path))
           } else {
@@ -373,7 +387,7 @@ public struct GarbageCollector: Sendable {
   }
 
   /// The pids a home's pid files name, each with the directory it must be confirmed against (the
-  /// VM's directory for an engine, the home for a switch) and whether it is a switch.
+  /// VM's directory for an engine, the segment's for a switch) and whether it is a switch.
   static func recordedPIDs(in home: URL) -> [(Int32, URL, Bool)] {
     func pid(_ url: URL) -> Int32? {
       guard let text = try? String(contentsOf: url, encoding: .utf8),
@@ -394,8 +408,9 @@ public struct GarbageCollector: Sendable {
     let segments = home.appending(path: "segments")
     let names = (try? FileManager.default.contentsOfDirectory(atPath: segments.path)) ?? []
     for name in names.sorted() {
-      if let found = pid(segments.appending(path: name).appending(path: "switch.pid")) {
-        out.append((found, home, true))
+      let directory = segments.appending(path: name)
+      if let found = pid(directory.appending(path: "switch.pid")) {
+        out.append((found, directory, true))
       }
     }
     return out

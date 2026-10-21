@@ -309,13 +309,18 @@ import VMLabCore
     try Self.write(segments.directory(of: "fresh").appending(path: "switch.log"))
 
     let terminated = Mutex<[Int32]>([])
-    let home = f.store.home
+    let other = segments.directory(of: "other")
     var collector = GarbageCollector(manager: f.manager)
     collector.processes = ProcessInspector(
       isAlive: { (5001...5006).contains($0) },
       executablePath: { _ in "/Users/x/vmlab/.build/debug/vmlab-switch" },
       terminate: { pid in terminated.withLock { $0.append(pid) } },
-      runsVM: { pid, directory in pid != 5004 && directory == home })
+      runsVM: { pid, directory in
+        // 5004 is the switch of another segment, whose pid file "other" still names.
+        pid == 5004
+          ? directory != other
+          : directory.deletingLastPathComponent().path == segments.directory.path
+      })
 
     collector.dryRun = true
     let preview = await collector.run()
@@ -398,25 +403,41 @@ import VMLabCore
     let young = try home("vmlab-test-2-h1", engine: 6001)
     let foreign = try home("vmlab-test-3-h1", engine: 6003)
     let reused = try home("vmlab-test-4-h1", engine: nil, vz: 6004)
+    let unreadable = try home("vmlab-test-5-h1", engine: 6005)
+    let mac = try home("vmlab-test-6-h1", engine: nil)
+    let clone = root.appending(path: "tart/vm-macmac")
+    try FileManager.default.createDirectory(at: clone, withIntermediateDirectories: true)
+    var record = VMRecord(
+      id: "vm-macmac", name: "mac", profile: .vzMacOS, guest: GuestSpec(os: .macos, arch: .arm64),
+      features: [], image: "macos-base")
+    record.tartClone = clone.path
+    let encoder = JSONEncoder()
+    encoder.dateEncodingStrategy = .iso8601
+    try FileManager.default.createDirectory(
+      at: mac.appending(path: "vms/vm-macmac"), withIntermediateDirectories: true)
+    try encoder.encode(record).write(to: mac.appending(path: "vms/vm-macmac/vm.json"))
     let unrelated = try home("other-1", engine: 6001)
     let dayAgo = Date().addingTimeInterval(-25 * 3600)
-    for directory in [stale, foreign, reused, unrelated] { try Self.age(directory, to: dayAgo) }
+    for directory in [stale, foreign, reused, unrelated, unreadable, mac] {
+      try Self.age(directory, to: dayAgo)
+    }
 
     let terminated = Mutex<[Int32]>([])
     let processes = ProcessInspector(
-      isAlive: { (6001...6004).contains($0) },
+      isAlive: { (6001...6005).contains($0) },
       executablePath: {
         switch $0 {
         case 6001, 6003: "/opt/homebrew/bin/qemu-system-aarch64"
         case 6002: "/Users/x/vmlab/.build/debug/vmlab-switch"
-        default: "/bin/sleep"
+        case 6004: "/bin/sleep"
+        default: nil
         }
       },
       terminate: { pid in terminated.withLock { $0.append(pid) } },
       runsVM: { pid, directory in
         switch pid {
         case 6001: directory == stale.appending(path: "vms/vm-aaaaaa")
-        case 6002: directory == stale
+        case 6002: directory == stale.appending(path: "segments/lan")
         default: false
         }
       })
@@ -426,10 +447,12 @@ import VMLabCore
     #expect(terminated.withLock { $0 } == [6001, 6002])
     #expect(!FileManager.default.fileExists(atPath: stale.path))
     #expect(!FileManager.default.fileExists(atPath: reused.path))
-    for kept in [young, foreign, unrelated] {
+    for kept in [young, foreign, unrelated, unreadable, mac] {
       #expect(FileManager.default.fileExists(atPath: kept.path), "\(kept.lastPathComponent)")
     }
-    #expect(lines.count == 3, "\(lines)")
+    #expect(lines.count == 5, "\(lines)")
+    #expect(lines.contains { $0.hasPrefix("left \(unreadable.path)") && $0.contains("6005") })
+    #expect(lines.contains { $0.hasPrefix("left \(mac.path)") && $0.contains("Tart clone") })
     #expect(lines.contains { $0.hasPrefix("removed \(stale.path)") && $0.contains("pid 6002") })
     #expect(lines.contains { $0.hasPrefix("left \(foreign.path)") && $0.contains("6003") })
   }

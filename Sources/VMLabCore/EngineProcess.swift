@@ -53,17 +53,21 @@ public enum EngineProcess {
     URL(filePath: path).lastPathComponent == "vmlab-switch"
   }
 
-  /// `pid` is a live `vmlab-switch` serving `home`: its `VMLAB_HOME` environment (or a
-  /// `VMLAB_HOME=` argument) names that directory. False when neither can be read.
-  public static func isSwitchRunning(_ pid: Int32, home: URL) -> Bool {
+  /// `pid` is a live `vmlab-switch` for the segment whose directory is `segmentDirectory`
+  /// (`<home>/segments/<name>`): its argument is `<name>` and its `VMLAB_HOME` environment (or a
+  /// `VMLAB_HOME=` argument) names `<home>`. False when either cannot be read, so a pid reused by
+  /// another segment's switch of the same home is not this one's.
+  public static func isSwitchRunning(_ pid: Int32, segmentDirectory: URL) -> Bool {
     guard LivenessProbe.processExists(pid), let path = HostProcesses.executablePath(pid),
-      isSwitch(path)
+      isSwitch(path), let arguments = HostProcesses.arguments(pid),
+      arguments.contains(segmentDirectory.lastPathComponent)
     else { return false }
-    let fromArguments = HostProcesses.arguments(pid)?.last { $0.hasPrefix("VMLAB_HOME=") }
+    let fromArguments = arguments.last { $0.hasPrefix("VMLAB_HOME=") }
       .map { String($0.dropFirst("VMLAB_HOME=".count)) }
     guard let value = HostProcesses.environment(pid)?["VMLAB_HOME"] ?? fromArguments else {
       return false
     }
+    let home = segmentDirectory.deletingLastPathComponent().deletingLastPathComponent()
     return sameDirectory(value, home)
   }
 
