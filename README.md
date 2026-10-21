@@ -25,6 +25,11 @@ scripts/build.sh              # swift build + sign the VZ runner
 .build/debug/vmlab install-mcp --client claude-code
 ```
 
+Known issue: on Homebrew 7 and newer, `brew install cirruslabs/cli/tart` fails because the
+cirruslabs tap's formula is not yet updated for it. `scripts/bootstrap.sh` prints the manual
+workaround (a local tap holding the same formula minus two lines). Tart is needed only for macOS
+guests; everything on QEMU works without it.
+
 ### Connect a client
 
 `vmlab install-mcp` prints the MCP configuration that runs `vmlab serve` (the executable you ran
