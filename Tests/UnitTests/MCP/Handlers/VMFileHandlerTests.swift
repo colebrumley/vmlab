@@ -94,21 +94,28 @@ import VMLabCore
       atPath: scratch.appending(path: "ssh").path, withDestinationPath: home + "/.ssh")
     try FileManager.default.createSymbolicLink(
       atPath: scratch.appending(path: "tree/aws").path, withDestinationPath: home + "/.aws")
-    for local in [
-      home + "/.ssh/id_ed25519", home + "/.SSH/id_rsa", home + "/.aws/credentials",
-      home + "/.config/gh/hosts.yml", home + "/.netrc",
-      home + "/Library/Keychains/login.keychain-db",
-      home + "/library/Cookies", home, scratch.path + "/ssh/id_ed25519",
-      home + "/src/vmlab-nope/.env", home + "/src/vmlab-nope/.ssh/id_ed25519",
-      scratch.path + "/tree/server.pem", f.context.home.path + "/vms",
-    ] {
+    // Typed and built in parts: CI's Swift 6.2 times out inferring one long literal.
+    let underHome: [String] = [
+      "/.ssh/id_ed25519", "/.SSH/id_rsa", "/.aws/credentials", "/.config/gh/hosts.yml", "/.netrc",
+      "/Library/Keychains/login.keychain-db", "/library/Cookies", "",
+      "/src/vmlab-nope/.env", "/src/vmlab-nope/.ssh/id_ed25519",
+    ]
+    let elsewhere: [String] = [
+      scratch.path + "/ssh/id_ed25519", scratch.path + "/tree/server.pem",
+      f.context.home.path + "/vms",
+    ]
+    let locals: [String] = underHome.map { home + $0 } + elsewhere
+    for local in locals {
       let error = await #expect(throws: VMLabError.self) {
         try await Self.file(
-          ["action": .string("push"), "remote": .string("/x"), "local": .string(local)], in: f)
+          [
+            "action": JSONValue.string("push"), "remote": JSONValue.string("/x"),
+            "local": JSONValue.string(local),
+          ], in: f)
       }
       #expect(error?.code == .invalidRequest, "\(local)")
-      #expect(error?.data["field"] == .string("local"), "\(local)")
-      #expect(error?.data["access"] == .string("read"), "\(local)")
+      #expect(error?.data["field"] == JSONValue.string("local"), "\(local)")
+      #expect(error?.data["access"] == JSONValue.string("read"), "\(local)")
     }
   }
 
