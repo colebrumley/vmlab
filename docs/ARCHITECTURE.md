@@ -7,6 +7,54 @@ Constraint C3 is enforced by `Tests/UnitTests/BoundariesTests.swift`: Core impor
 MCP module, and `VMLabMCP` and `vmlab` import no backend module; `vmlab` reaches the engines only
 through `VMLabEngines` (which also registers the RFB display connector behind Core's `DisplayConnector`).
 
+## Overview
+
+### Processes
+
+```
+ MCP client (Claude Code, ...)            vmlab <tool> (CLI, one call per process)
+        | stdio                                   |
+        v                                         v
+ vmlab serve  ---------------------------- same ToolHandlers, VMManager, Store
+   |  per call: vmlab-match helper (serial regex waits; killed when the wait ends)
+   |
+   +-- QEMU guest:  qemu-system-<arch>  (daemonized; one per guest)
+   |      qmp.sock + qmp2.sock (QMP), serial.sock, vnc.sock, qga.sock, -gdb tcp:127.0.0.1:<port>
+   |
+   +-- VZ guest:    vmlab-vz run <vm-dir>  (one runner per guest; owns the VZVirtualMachine)
+   |      control.sock (JSON lines), serial.sock (bridge), console.log
+   |
+   +-- segment:     vmlab-switch <name>  (one per segment; userspace Ethernet switch)
+   |      switch.sock (QEMU -netdev dgram), attach.sock (socketpair fd for vmlab-vz), stats.sock
+   |
+   +-- tart, qemu-img, ssh, scp, hdiutil, codesign  (short-lived, argument arrays only)
+```
+
+Guests, runners and switches are detached from the server: they keep running when `vmlab serve`
+exits, and a new server (or another server on the same `VMLAB_HOME`) reattaches through the pid
+files and sockets in each VM directory (`Store.reconcile`, `QEMUMachine.attach`,
+`VMLabVZ.attach`). Only `vmlab-vz` carries the `com.apple.security.virtualization` entitlement; the
+server never imports Virtualization.framework. Cross-process coordination is `flock` on files under
+`locks/` (per-VM record and operation locks, start-gate slots, segment and switch locks).
+
+### Data on disk
+
+Everything lives under `VMLAB_HOME` (default `~/.vmlab`; Appendix F), except the slow-probe results,
+which are host facts kept in `~/.vmlab/host-facts.json` whatever `VMLAB_HOME` says, and a
+`vz-macos` guest's Tart clone, under Tart's own home.
+
+```
+VMLAB_HOME/
+  config.json            owner settings: allowAnyPath, writeRoots, allowHostCode, ignoreMemoryPressure
+  images/<name>/         image.json, disk.raw and/or disk.qcow2, checksums, kernel/
+  vms/<id>/              vm.json (VMRecord), events.jsonl, disk, seed.iso, efi-vars.bin, SSH key,
+                         sockets and pid file, console.log, engine and provision logs,
+                         checkpoints.json and checkpoints/, backing/, manifests/, exec/, dumps/, pulled/
+  segments/<name>/       segment.json, switch sockets, switch.pid, switch.log, ports/
+  fleets/<name>.json
+  locks/                 <id>.lock, <id>.op.lock, store.lock, starts/, segment and switch locks
+```
+
 ## Targets
 
 **`VMLabCore`** (library). The engine-free model: the feature catalogue, the four profiles, the
@@ -131,7 +179,7 @@ is waited for (`SpawnWindow.reachesEndOfFile`, `SpawnWindow.eventually`), never 
 A bare machine (R-1202) is `Requirements.image == "none"` (`ImageStore.noImage`, which `ImageStore.checkName` refuses as an image name, so `images` never makes or removes one): `Requirements.validate` needs a `kernel`, `binary` or `firmware` boot (and `boot.kernel` for a kernel boot) and refuses every feature in `Requirements.needsImage` (`exec_ssh`, `exec_agent`, `cloud_init`, `gui_desktop`, `shared_dir`, `net_port_forward`, `rosetta`, `checkpoint_disk`, `checkpoint_live`) that `require` names or the request implies; the selector leaves them out of the plan's `features` (preferred, they are `preferredDenied`), drops the disk size and notes an ignored `diskGB`. `vm_create` and `fleet create` (which validates again after its `image` override) pull nothing and store no image; `VMRecord.isBare` (no image, a file boot) is how the rest knows: `VMManager.create` makes no SSH key, a start waits for no SSH, `VMManager.clone`, `restoreCheckpoint` and `resolveMode` refuse with `capability_missing` (`VMManager.bareMachine`), `QEMUBackend.request` has no base image (so no `disk.qcow2`, no seed; `QEMULaunchRequest.options()` is what `launch` passes on) and `start` forwards no SSH port, `VZBackend.create` makes no `disk.raw` or seed so `VZRunnerConfig.storage(in:)` gives the runner no storage device, and `vm_list` and `vm_inspect` show `image: "none"` (`VMRecord.imageName`).
 `CloudInit` builds the NoCloud seed both engines attach: from a plain `CloudInitConfig` (hostname, user, SSH key, packages, optional `GUIStack` (R-504: Xfce, LightDM autologin with `logind-check-graphical=false` since the cloud kernel has no DRM and X runs on fbdev, and, only when a VNC password is given, x11vnc on port 5900 with X on the dummy driver at `GUIStack.vncScreen` (1280x800; `/etc/X11/xorg.conf.d/10-vmlab-dummy.conf`) because a VZ guest under the cloud kernel has no virtio-gpu driver and no EFI framebuffer; `GUIStack.inGuestVNC(vmDirectory:)` makes or reuses `<vm>/vnc.pass`), `SegmentNIC`, `GuestMount`s, `ConsoleDevice` (`ttyAMA0` on QEMU arm64, `ttyS0` on other QEMU arches, `hvc0` on VZ; a getty on it; with `rootConsole`, which both backends set when the plan grants `serial`, a `bootcmd` writes `serial-getty@<dev>.service.d/autologin.conf` (`ExecStart=-/sbin/agetty --autologin root ...`) and runs `daemon-reload` before getty first starts, so the console is a root shell even on first boot (`CloudInit.autologinBootCommand`); for `hvc0` also a first-boot `bootcmd` that writes a GRUB drop-in, `CloudInit.hvc0GrubDropIn`, and runs `update-grub`, putting `console=hvc0` on the kernel command line from the next boot), `rosetta` (mounts the `rosetta` virtiofs tag at `/mnt/rosetta`, writes `RosettaGuest.binfmtLine` to `/etc/binfmt.d/rosetta.conf` with a `systemd-binfmt` drop-in ordering it after the mount, and restarts `systemd-binfmt`), `dhcpIdentifierMAC` (a `network-config` NIC with `dhcp-identifier: mac`, so vmnet's lease file is keyed by the MAC), extra user-data merged last as a MIME part) it emits `user-data`, `meta-data` and `network-config` with a small hand-written YAML emitter (every string double-quoted; no YAML library, C5) and runs `hdiutil makehybrid` to make the `cidata` ISO. `FeatureDocs` renders `docs/FEATURES.md` from the matrix, with a last column from the committed slow-probe snapshot `docs/dev-host-facts.json` (never `VMLAB_HOME`). It depends on swift-log only.
 
-**`VMLabQEMU`** (library). The QEMU backend: launching and supervising `qemu-system-aarch64`, the QMP
+**`VMLabQEMU`** (library). The QEMU backend: launching and supervising `qemu-system-<arch>`, the QMP
 client, the GDB stub endpoint, and qcow2 internal snapshots. The serial channel itself is Core's
 `SerialChannel`, shared with VZ.
 `QEMUInstallation` finds the binaries and Homebrew's edk2 firmware (`<prefix>/share/qemu`).
@@ -201,9 +249,9 @@ guest is stopped, the QMP jobs `snapshot-save`/`snapshot-load`/`snapshot-delete`
 node (memory and disk; polled with `query-jobs`, then dismissed) while it runs, when live is
 allowed (TCG, `checkpoint_live` granted, or `qemu_hvf_live_snapshot` yes); a mode the state cannot
 serve is `wrong_state`, never an implicit stop or start. `QEMULiveSnapshotProbe` is that slow
-`QEMUClone.swift` (R-803): a clone's `disk.qcow2` is `qemu-img create -b` over a frozen layer in the source's `backing/` directory that nothing writes again: an APFS clone of the stopped source's disk (`disk-<clone>.qcow2`), the same with the checkpoint applied (`<checkpoint>.qcow2`, shared by every clone of that checkpoint), or, while the source runs, `qemu-img convert -U -l snapshot.name=` of the immutable snapshot into a delta over the source's backing file; `efi-vars.bin` is copied, and the chain is read back with `qemu-img info --backing-chain`. The frozen layer is written into the clone's `backingChain` before it or the overlay is made (`recordIntent`), so `vmlab gc` never collects it after a crash. `VZClone.swift` clones `disk.raw` (or a checkpoint's `checkpoints/<id>/disk.raw`, which R-608 will make) with `clonefile(2)` and reruns `create` for the seed; its chain is empty.
 probe: an image-free HVF guest (an empty qcow2, so edk2 drops to its UEFI shell on serial) saved,
 loaded and typed at; `VMLabEngines.Engines.registerProbes()` registers it for `vmlab doctor --probe`.
+`QEMUClone.swift` (R-803): a clone's `disk.qcow2` is `qemu-img create -b` over a frozen layer in the source's `backing/` directory that nothing writes again: an APFS clone of the stopped source's disk (`disk-<clone>.qcow2`), the same with the checkpoint applied (`<checkpoint>.qcow2`, shared by every clone of that checkpoint), or, while the source runs, `qemu-img convert -U -l snapshot.name=` of the immutable snapshot into a delta over the source's backing file; `efi-vars.bin` is copied, and the chain is read back with `qemu-img info --backing-chain`. The frozen layer is written into the clone's `backingChain` before it or the overlay is made (`recordIntent`), so `vmlab gc` never collects it after a crash. `VZClone.swift` clones `disk.raw` (or a checkpoint's `checkpoints/<id>/disk.raw`, R-608) with `clonefile(2)` and reruns `create` for the seed; its chain is empty.
 
 **`VMLabVZ`** (library). The Virtualization.framework backend, seen from the server; it never
 imports Virtualization (`BoundariesTests`), which is loaded only in `vmlab-vz`. `ControlProtocol.swift`
@@ -264,7 +312,7 @@ a `vmlab-vz-error: <json>` line in `vz.log`. `VMLabVZ.attach(socketPath:)` / `at
 reconnect by socket path alone. `VZBackend` (profile `vz-linux`) conforms to Core's `Backend`:
 create clones the pulled raw image to `<vm>/disk.raw`, extends it (sparse `ftruncate`, `VZDisk.grow`) to `resources.diskGB` GiB (Linux default 32; a size below the image's is `invalid_request` on `resources.diskGB`, disks only grow; the seed's `growpart`/`resize_rootfs` grow `/` on first boot) and writes the VM's key and `seed.iso`
 (image login user, console `hvc0`, DHCP by MAC, and when the plan provisions a desktop the R-504 `GUIStack` with its x11vnc password in `<vm>/vnc.pass`, the share mounted over virtiofs, Rosetta when wanted; `SharedDirSpec.checkHostDirectory` at create and start), start resolves a kernel boot through `ImageStore.resolvingBoot` (R-604: `VZLinuxBootLoader`, default command line `console=hvc0 root=/dev/vda1 rw`) and stages a disk boot's kernel from the guest's own disk (`stageDiskKernel` over Core's `DiskBoot.stage`: boot `.linuxFromDisk` from `<vm>/boot-cache/`, an event naming what it boots and whether the cache was refreshed; on failure EFI with a start warning, returned through `Backend.start(_:warnings:)`), launches and waits up to `leaseTimeout` for
-the lease, recorded as `runtime.ip` (and `runtime.serialSocket`); a lease that comes later is picked up by `sshEndpoint` (both VZ backends, `VZBackend.lateLease`, keyed by the NAT MAC in `vz-config.json`), which records it under the VM's lock, and `VMManager.refreshingAddress` asks for it without waiting before `attach`, `vm_inspect`, `vm_list` and `vm_computer`; stop/kill wait for the runner to exit. A guest granted `serial` gets one Core `SerialChannel` on `serial.sock` per backend (`VZSerialChannels`, connected at start, reconnected on attach when lost, dropped on stop/kill/destroy), reading the runner's `<vm>/console.log` with a `ConsolePanicWatch`; `VZRunningVM` offers that serial channel, exec over SSH to the leased address (`SSHExecChannel`), and no display or checkpoint channel yet (R-503, R-605; its display endpoint is Core's `DisplayEndpoint.forVM`, which `vm_computer` and `vm_inspect` use directly).
+the lease, recorded as `runtime.ip` (and `runtime.serialSocket`); a lease that comes later is picked up by `sshEndpoint` (both VZ backends, `VZBackend.lateLease`, keyed by the NAT MAC in `vz-config.json`), which records it under the VM's lock, and `VMManager.refreshingAddress` asks for it without waiting before `attach`, `vm_inspect`, `vm_list` and `vm_computer`; stop/kill wait for the runner to exit. A guest granted `serial` gets one Core `SerialChannel` on `serial.sock` per backend (`VZSerialChannels`, connected at start, reconnected on attach when lost, dropped on stop/kill/destroy), reading the runner's `<vm>/console.log` with a `ConsolePanicWatch`; `VZRunningVM` offers that serial channel, exec over SSH to the leased address (`SSHExecChannel`) and its `VZCheckpoints`, but no display handle: the display endpoint is Core's `DisplayEndpoint.forVM`, which `vm_computer` and `vm_inspect` use directly.
 `VZMacBackend` (profile `vz-macos`, R-605) runs macOS guests in the same runner: `Tart.swift` wraps
 the `tart` CLI (`Tart.locate`, `clone`, `setDiskSize`, `delete`, under `TART_HOME` or `~/.tart`) and reads a clone's
 `config.json` (`TartVMConfig`, Tart 2.x `version: 1`; any other layout is `engine_error`). Create runs
@@ -360,7 +408,7 @@ field, required fields present; `ToolArguments` has typed accessors) and runs th
 the `ResourceLimits`, the `BackendRegistry` with one `VMManager` over it, the `ImageStore` and the
 `StartGating` gate of one `VMLAB_HOME`, the `DisplaySessions` actor (one display session per VM, held for the server's life, with the pointer position last sent and the last screenshot's geometry for `scaled: true`; each session holds that VM's screenshot cache), plus the call's `progress` and `heartbeat` interval. A `ToolResult` is the Appendix C result object (always with
 `warnings`) plus image blocks; `ToolRendering` turns results and `VMLabError`s into JSON (the MCP text)
-or a terminal line. Built so far: `host_facts`, `host_doctor` (checks with `detail` and `fix`, the runner and its
+or a terminal line. The handlers: `host_facts`, `host_doctor` (checks with `detail` and `fix`, the runner and its
 entitlement, the probes with owner and date; `probe: true` runs `SlowProbeRunners.shared`),
 `vm_plan` (an unsatisfiable request is a result with `satisfiable: false`, never an error),
 `vm_list`, `vm_inspect` (the record, the creating `Plan` that `VMManager.create` stores in
@@ -368,7 +416,7 @@ entitlement, the probes with owner and date; `probe: true` runs `SlowProbeRunner
 `vm_logs` (events rendered one per line, tails of `console.log` (`serial.log` when there is none) and `provision.log`; `all` is each
 source in turn, prefixed), `vm_create` (plan, pull the image if missing, `VMManager.create`, then
 start unless `autostart: false`; all or nothing: a cancelled or failed call destroys the VM),
-`vm_lifecycle` (start/stop/kill/pause/resume/reset/destroy; clone waits for R-803; a start's
+`vm_lifecycle` (start/stop/kill/pause/resume/reset/destroy, and clone through `VMManager.clone`; a start's
 `ssh_unreachable` warning comes from `VMManager.Outcome`; after a reset the VM's debug session
 inserts its points again, and a destroy drops the session), `vm_exec` (R-401: validates the
 request into an `ExecRequest`, picks the channel by `via` (`Channel.execSSH`, `.execAgent`,
@@ -379,7 +427,8 @@ the VM's `SSHExecChannel` and returns `{ job }`), `vm_job` (read/wait/kill: `out
 SSH channel, absolute host paths only, returning `bytes` and `path`; `vm_inspect` and `vm_create`
 endpoints carry `share` `{ host, guest }`), `vm_manifest` (R-801: `profile` defaults to the guest's OS,
 `custom` needs `paths`; a running VM only; returns `{ id, path, profile, counts }` with the
-manifest's warnings), `vm_checkpoint diff` (`Handlers/CheckpointDiff.swift`, R-802: each side
+manifest's warnings), `vm_checkpoint` create/list/restore/delete (`Handlers/VMCheckpointHandler.swift`
+over `VMManager`'s checkpoint calls) and `diff` (`Handlers/CheckpointDiff.swift`, R-802: each side
 is `@now`, taken with the other side's profile and roots, a manifest id, or a checkpoint whose node
 has a manifest; sections capped at 500 entries with the counts and `truncated`, the whole diff's
 `path`), `vm_serial` (read/tail/write/wait on the backend's
@@ -394,7 +443,8 @@ an `attach` that fails because the engine already exited), and the handler then 
 gone (`EngineProcess.isRunning`) or the record no longer live, rescans the final log and answers
 `stopped: true` (scanning again from `since`), else `guest_unreachable`; `write` needs a live
 VM), `images`
-(list/pull/remove), `vm_computer` (`Handlers/VMComputerHandler.swift`, R-502: resolves the VM's
+(list, pull, remove, register, template_create, prune, extract_kernel; see `Images.swift`,
+`ImageRegistration.swift`, `Templates.swift`, `ImageCache.swift`), `vm_computer` (`Handlers/VMComputerHandler.swift`, R-502: resolves the VM's
 `DisplayEndpoint`, gets its session from `ToolContext.displays` inside `DisplaySessions.exclusive(vm:)` (one call per VM at a time, so gestures and modifiers never interleave), checks every argument before sending input, and maps the computer-use actions
 onto pointer, key and type events; clicks move first and hold the button 30 ms, double and triple clicks repeat 60 ms apart,
 drags hold the left button over eight steps, scroll strikes wheel buttons; coordinates are checked
@@ -428,12 +478,19 @@ that `scripts/gen-docs.sh` uses. A tool subcommand conforms to `ToolCommand` (`S
 it turns its flags into the tool's JSON arguments and calls the same `ToolHandlers.call` as
 `tools/call`, printing the result object with `--json` or a short human rendering; a `VMLabError` goes
 to stderr (the Appendix D object with `--json`) with exit status 1; a long call's progress messages
-go to stderr. Built: `facts`, `doctor`, `plan`, `create` (the `plan` flags plus `--name`,
-`--no-start`), `list`, `inspect`, `logs`, `start`, `stop`, `kill`, `pause`, `resume`, `reset`,
-`destroy`, `exec` and `job` (`Sources/vmlab/ExecCommands.swift`: stdout to stdout, stderr and a
-non-zero status to stderr), `images pull|list|remove`, `computer <vm> <action>` (`--at x,y`, `--out` writes the image), `debug <vm> <action>`, `introspect`, `memory-dump`, `serve`, `--version`. It bootstraps logging and hands off to Core and `VMLabMCP`.
-`destroy`, `exec`, `job` and `file` (`Sources/vmlab/ExecCommands.swift`: stdout to stdout, stderr and a
-non-zero status to stderr), `images pull|list|remove`, `computer <vm> <action>` (`--at x,y`, `--out` writes the image), `introspect`, `memory-dump`, `serve`, `--version`, and `install-mcp --client claude-code|claude-desktop` (`Sources/vmlab/InstallMCP.swift`: prints the `mcpServers` entry that runs this `vmlab serve` with `VMLAB_HOME`, and for Claude Code the `claude mcp add` line; `--write` merges it into `~/.claude.json` or Claude Desktop's `claude_desktop_config.json`, keeping every other key; the entry and the merge are `MCPServerEntry`/`MCPClient` in `VMLabMCP/ClientInstall.swift`, which take the home directory as a parameter). It bootstraps logging and hands off to Core and `VMLabMCP`.
+go to stderr. The subcommands: `facts`, `doctor`, `images` (`pull`, `list`, `remove`, `register`,
+`prune`, `extract-kernel`, `template create`), `plan`, `create` (the `plan` flags plus `--name`,
+`--no-start`, `--confirm`), `list`, `inspect`, `start`, `stop`, `kill`, `pause`, `resume`, `reset`,
+`destroy`, `clone`, `exec`, `job` and `file` (`Sources/vmlab/ExecCommands.swift`: stdout to stdout,
+stderr and a non-zero status to stderr), `logs`, `serial`, `computer <vm> <action>` (`--at x,y`,
+`--out` writes the image), `debug <vm> <action>`, `introspect`, `memory-dump`, `checkpoint`,
+`manifest`, `segment`, `fleet`, the CLI-only `gc` (R-805) and `install-mcp --client
+claude-code|claude-desktop` (`Sources/vmlab/InstallMCP.swift`: prints the `mcpServers` entry that
+runs this `vmlab serve` with `VMLAB_HOME`, and for Claude Code the `claude mcp add` line; `--write`
+merges it into `~/.claude.json` or Claude Desktop's `claude_desktop_config.json`, keeping every
+other key; the entry and the merge are `MCPServerEntry`/`MCPClient` in
+`VMLabMCP/ClientInstall.swift`, which take the home directory as a parameter), `serve` and
+`--version`. It bootstraps logging, registers the engines and hands off to Core and `VMLabMCP`.
 
 **`VMLabEngines`** (library). The engine wiring, and the only module that imports both Core and the
 backends for that purpose: `Engines.registerAll(store:into:displays:debug:)` registers `QEMUBackend` for `qemu-hvf`

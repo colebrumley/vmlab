@@ -16,6 +16,6 @@ extension ToolSpec {
         "timeoutSeconds": Schema.timeoutSeconds(
           "wait: the longest to block.", default: VMJobHandler.defaultWaitSeconds),
       ], required: ["vm", "job", "action"]),
-    outputShape: "{ output, finished, exitCode? }",
+    outputShape: "{ job, output, finished, exitCode?, more, logPath }",
     errors: [.vmNotFound, .invalidRequest, .guestUnreachable, .timeout])
 }

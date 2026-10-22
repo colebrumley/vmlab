@@ -1154,9 +1154,8 @@ six 4 GB guests with the default reserve; macOS 26.6 → VZ save/restore APIs pr
 
 ```
 ~/.vmlab/                      (VMLAB_HOME)
-  config.json                  reserveGB, parallelStarts, allowAnyPath, ignoreMemoryPressure, allowHostCode, writeRoots, defaults
+  config.json                  allowAnyPath, ignoreMemoryPressure, allowHostCode, writeRoots (the only keys read)
   host-facts.json              slow probe results
-  board.json                   session board (R-002; never committed)
   images/<name>/               image.json, disk.(raw|qcow2), kernel/, checksums
   vms/<id>/
     vm.json                    VMRecord (schemaVersion)
@@ -1170,7 +1169,7 @@ six 4 GB guests with the default reserve; macOS 26.6 → VZ save/restore APIs pr
     serial.log, vz.log, console.log, qemu.log, provision.log, provision.json
     checkpoints.json, checkpoints/<id>/ (VZ state files and disk clones)
     backing/<key>.qcow2        frozen layers that clones' disks are backed by (R-803)
-    manifests/<id>.json, exec/<job>.log, dumps/, pulled/, screenshots/
+    manifests/<id>.json, exec/<job>.log, dumps/, pulled/
   segments/<name>/             segment.json, switch.sock, stats.sock, attach.sock, switch.pid, switch.log, ports/
   fleets/<name>.json
   locks/

@@ -14,7 +14,8 @@ extension ToolSpec {
         endpoints: { ssh?, ip?, serial?, gdb?,
           display?: { kind, address, auth, passwordFile?, hostSide },
           forwards?: [ { guest, host: "127.0.0.1:port" | null, hostReachable: "addr:port" } ] },
-        segments: [ { segment, subnet, ip, prefixLength, mac, names } ], events: [ Event ], panic?: { line, offset, at },
+        segments: [ { segment, subnet, ip, prefixLength, mac, names } ], events: [ Event ],
+        panic: Event | null (data: { source, pattern?, offset?, end? }),
         provision?: { vm, finishedAt, steps: [ { name, command, status, exitCode?, durationMs?,
           error? } ] }, warnings }
       """,
