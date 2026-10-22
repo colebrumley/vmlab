@@ -386,4 +386,40 @@ import VMLabCore
     let directory = f.context.store.directory(of: record.id)
     #expect(ProvisionReport.load(from: directory) == nil)
   }
+
+  /// Model-named host paths the engine reads and the guest then sees (a `-cdrom` in
+  /// `extra.qemuArgs`, `boot.kernel`) follow the read policy: no home dotfile or dot-directory,
+  /// `~/Library` or symlink to them; nothing is created.
+  @Test func readPathsInQemuArgsAndBootAreRefused() async throws {
+    let f = try Fixture()
+    defer { f.cleanUp() }
+    let home = FileManager.default.homeDirectoryForCurrentUser.path
+    let link = FileManager.default.temporaryDirectory.appending(
+      path: "vmlab-ssh-\(UUID().uuidString)")
+    try FileManager.default.createSymbolicLink(
+      atPath: link.path, withDestinationPath: home + "/.ssh")
+    defer { try? FileManager.default.removeItem(at: link) }
+    for path in [
+      home + "/.ssh/id_ed25519", link.path + "/id_ed25519", home + "/Library/Keychains/x",
+      home + "/.Config/gh/hosts.yml",
+    ] {
+      var requirements = Fixture.requirements.objectValue ?? [:]
+      requirements["require"] = .array([.string("serial"), .string("custom_devices")])
+      requirements["extra"] = .object(["qemuArgs": .array([.string("-cdrom"), .string(path)])])
+      let cdrom = await #expect(throws: VMLabError.self) {
+        try await f.create(["requirements": .object(requirements)])
+      }
+      #expect(cdrom?.code == .invalidRequest, "\(path)")
+      #expect(cdrom?.data["field"] == .string("extra.qemuArgs[1]"), "\(path)")
+
+      var bare = try Self.bare("kernel").objectValue ?? [:]
+      bare["boot"] = .object(["mode": .string("kernel"), "kernel": .string(path)])
+      let kernel = await #expect(throws: VMLabError.self) {
+        try await f.create(["requirements": .object(bare)])
+      }
+      #expect(kernel?.code == .invalidRequest, "\(path)")
+      #expect(kernel?.data["field"] == .string("boot.kernel"), "\(path)")
+    }
+    #expect(try f.context.store.list().records.isEmpty)
+  }
 }

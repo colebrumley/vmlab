@@ -159,7 +159,8 @@ import VMLabCore
 }
 
 /// Reads versus writes: a write lands only under /tmp, `$TMPDIR`, `~/vmlab-files` or the owner's
-/// `writeRoots`, and never on a home dotfile, `~/Library` or `VMLAB_HOME`.
+/// `writeRoots`, and never on a home dotfile, `~/Library` or `VMLAB_HOME`; a read lies under the
+/// home, /tmp or `$TMPDIR` and never on a home dotfile, `~/Library` or `VMLAB_HOME` either.
 @Suite struct PathPolicyWriteTests {
   /// A fake user home, `$TMPDIR` and outside directory; `VMLAB_HOME` lies inside the fake
   /// `$TMPDIR`, so its refusal is not just a missing root.
@@ -214,34 +215,35 @@ import VMLabCore
   /// base), whether a read passes, whether a write passes.
   static let rows: [(String, Bool, Bool)] = [
     ("H/project/a.txt", true, false),
-    ("H", true, false),
-    ("H/.zshrc", true, false),
-    ("H/.ssh/authorized_keys", true, false),
-    ("H/.config/fish/config.fish", true, false),
-    ("H/Library/LaunchAgents/x.plist", true, false),
-    ("H/LIBRARY/LaunchAgents/x.plist", true, false),
-    ("H/library/x", true, false),
-    ("H/.SSH/authorized_keys", true, false),
+    // The home itself is a directory holding its dotfiles: a read of it is refused.
+    ("H", false, false),
+    ("H/.zshrc", false, false),
+    ("H/.ssh/authorized_keys", false, false),
+    ("H/.config/fish/config.fish", false, false),
+    ("H/Library/LaunchAgents/x.plist", false, false),
+    ("H/LIBRARY/LaunchAgents/x.plist", false, false),
+    ("H/library/x", false, false),
+    ("H/.SSH/authorized_keys", false, false),
     ("H/vmlab-files/out.txt", true, true),
     ("H/VMLAB-FILES/out.txt", true, true),
-    ("H/vmlab-files/.hidden", true, false),
-    ("H/project/../.zshrc", true, false),
+    ("H/vmlab-files/.hidden", false, false),
+    ("H/project/../.zshrc", false, false),
     ("/tmp/vmlab-write-x", true, true),
     ("/tmp/.vmlab-write-x", true, true),
     ("T/out.log", true, true),
     ("T/sub/new/file", true, true),
     ("T/inner/new.txt", true, true),
-    ("V/vms/x/qmp.sock", true, false),
-    ("V/VMS/x/disk.raw", true, false),
+    ("V/vms/x/qmp.sock", false, false),
+    ("V/VMS/x/disk.raw", false, false),
     ("O/x", false, false),
     ("/etc/x", false, false),
     // Symlinks: the target counts, also for a file that does not exist yet.
-    ("T/to-ssh/authorized_keys", true, false),
+    ("T/to-ssh/authorized_keys", false, false),
     ("T/to-outside/x", false, false),
     ("T/to-project/new/file", true, false),
-    ("T/dangling", true, false),
+    ("T/dangling", false, false),
     // `..` after a link goes up from its target, as the kernel resolves it: H/.zshrc.
-    ("T/deep/../../.zshrc", true, false),
+    ("T/deep/../../.zshrc", false, false),
   ]
 
   func expand(_ path: String, _ f: Fixture) -> String {
@@ -382,5 +384,146 @@ import VMLabCore
       #expect(error?.data["access"] == .string("write"))
     }
     #expect(try f.store.list().records.isEmpty)
+  }
+}
+
+/// Reads (the security fix to R-1102): a model-named path vmlab reads, and may hand to a guest,
+/// is never a home dotfile or dot-directory, `~/Library` or `VMLAB_HOME`, after every symlink is
+/// resolved and whatever its case; `allowAnyPath` does not lift that, the owner's `readRoots` do.
+/// A directory is read whole, so nothing in it (followed through symlinks) may be refused.
+@Suite struct PathPolicyReadTests {
+  typealias Fixture = PathPolicyWriteTests.Fixture
+
+  /// The write fixture plus a few files and trees to read.
+  static func fixture() throws -> Fixture {
+    let f = try Fixture()
+    let files = FileManager.default
+    for dir in [
+      f.home.appending(path: "project/.git"), f.home.appending(path: ".cache/kernel-builds"),
+      f.home.appending(path: ".config"), f.tmpdir.appending(path: "tree/a"),
+      f.tmpdir.appending(path: "leaky/a"), f.tmpdir.appending(path: "cycle"),
+    ] {
+      try files.createDirectory(at: dir, withIntermediateDirectories: true)
+    }
+    for file in [
+      "home/project/a.txt", "home/project/.git/config", "home/.ssh/id_ed25519",
+      "home/.cache/kernel-builds/Image", "tmpdir/tree/a/b.txt", "tmpdir/leaky/a/b.txt",
+    ] {
+      try Data("x".utf8).write(to: f.base.appending(path: file))
+    }
+    // A tree that reaches ~/.ssh through a link two levels down, and one with a link cycle.
+    try files.createSymbolicLink(
+      at: f.tmpdir.appending(path: "leaky/a/keys"),
+      withDestinationURL: f.home.appending(path: ".ssh"))
+    try files.createSymbolicLink(
+      at: f.tmpdir.appending(path: "cycle/self"),
+      withDestinationURL: f.tmpdir.appending(path: "cycle"))
+    try files.createSymbolicLink(
+      at: f.tmpdir.appending(path: "to-key"),
+      withDestinationURL: f.home.appending(path: ".ssh/id_ed25519"))
+    try files.createSymbolicLink(
+      at: f.tmpdir.appending(path: "to-builds"),
+      withDestinationURL: f.home.appending(path: ".cache/kernel-builds"))
+    return f
+  }
+
+  /// Each row: a path (`H` home, `T` temp dir, `V` VMLAB_HOME, `O` outside) and whether a read
+  /// passes with the default config, with `allowAnyPath`, and with
+  /// `readRoots: ["~/.cache/kernel-builds"]`.
+  static let rows: [(String, Bool, Bool, Bool)] = [
+    ("H/project/a.txt", true, true, true),
+    ("H/project", false, false, false),  // holds .git
+    ("H/.ssh/id_ed25519", false, false, false),
+    ("H/.SSH/ID_ED25519", false, false, false),
+    ("H/.zshrc", false, false, false),
+    ("H/.netrc", false, false, false),
+    ("H/project/.git/config", false, false, false),
+    ("H/project/.env", false, false, false),
+    ("H/.config/gh/hosts.yml", false, false, false),
+    ("H/Library/Keychains/login.keychain-db", false, false, false),
+    ("H/library/Application Support/Google/Chrome/Default/Cookies", false, false, false),
+    ("H/LIBRARY/x", false, false, false),
+    ("H", false, false, false),
+    ("H/.cache/kernel-builds/Image", false, false, true),
+    ("H/.CACHE/Kernel-Builds/Image", false, false, true),
+    ("H/.cache/other", false, false, false),
+    ("V/vms/x/id_ed25519", false, false, false),
+    ("V/config.json", false, false, false),
+    ("T/to-ssh/id_ed25519", false, false, false),
+    ("T/to-key", false, false, false),
+    ("T/to-builds/Image", false, false, true),
+    ("T/tree", true, true, true),
+    ("T/tree/a/b.txt", true, true, true),
+    ("T/leaky", false, false, false),
+    ("T/leaky/a/b.txt", true, true, true),
+    ("T/cycle", true, true, true),
+    ("O/x", false, true, false),
+    ("/etc/hosts", false, true, false),
+  ]
+
+  @Test(arguments: rows) func reads(row: (String, Bool, Bool, Bool)) throws {
+    let f = try Self.fixture()
+    defer { f.cleanUp() }
+    let path = PathPolicyWriteTests().expand(row.0, f)
+    for (config, expected) in [
+      (#"{}"#, row.1), (#"{"allowAnyPath": true}"#, row.2),
+      (#"{"readRoots": ["~/.cache/kernel-builds"]}"#, row.3),
+    ] {
+      let policy = try f.policy(config: config)
+      let read = Result { () throws(VMLabError) in try policy.check(path, field: "f") }
+      #expect(((try? read.get()) != nil) == expected, "read \(row.0) with \(config)")
+      if case .failure(let error) = read {
+        #expect(error.code == .invalidRequest)
+        #expect(error.data["field"] == .string("f"))
+        #expect(error.data["access"] == .string("read"))
+        #expect(error.message.contains(path))
+      }
+    }
+  }
+
+  @Test func aRefusalSaysWhyAndNamesReadRoots() throws {
+    let f = try Self.fixture()
+    defer { f.cleanUp() }
+    let policy = try f.policy()
+    let link = f.tmpdir.path + "/to-ssh/id_ed25519"
+    let error = #expect(throws: VMLabError.self) { try policy.check(link, field: "local") }
+    #expect(error?.message.contains(link) == true)
+    #expect(error?.message.contains(f.home.path + "/.ssh/id_ed25519") == true)
+    #expect(error?.data["reason"]?.stringValue?.contains(".ssh") == true)
+    #expect(error?.hint.contains("readRoots") == true)
+    #expect(error?.hint.contains(VMLabConfig.url(home: f.vmlab).path) == true)
+    let library = #expect(throws: VMLabError.self) {
+      try policy.check(f.home.path + "/Library/Keychains/x", field: "kernel")
+    }
+    #expect(library?.data["reason"]?.stringValue?.contains("Library") == true)
+    let tree = #expect(throws: VMLabError.self) {
+      try policy.check(f.tmpdir.path + "/leaky", field: "local")
+    }
+    #expect(tree?.data["reason"]?.stringValue?.contains(".ssh") == true)
+  }
+
+  /// A readRoot opens a dot-directory, not VMLAB_HOME around it; one inside VMLAB_HOME opens
+  /// only itself.
+  @Test func readRootsOpenOnlyWhatTheyList() throws {
+    let f = try Self.fixture()
+    defer { f.cleanUp() }
+    let whole = try f.policy(config: #"{"readRoots": ["~"]}"#)
+    #expect(throws: Never.self) { try whole.check(f.home.path + "/.ssh/id_ed25519", field: "f") }
+    let outer = try f.policy(config: #"{"readRoots": ["\#(f.tmpdir.path)"]}"#)
+    #expect(throws: VMLabError.self) { try outer.check(f.vmlab.path + "/config.json", field: "f") }
+    var images = try f.policy()
+    images.readRoots.append(PathPolicy.canonical(f.vmlab.path + "/images"))
+    #expect(throws: Never.self) { try images.check(f.vmlab.path + "/images/k/vmlinuz", field: "f") }
+    #expect(throws: VMLabError.self) { try images.check(f.vmlab.path + "/vms/x/disk", field: "f") }
+  }
+
+  /// A hard link is a second name for the same file: it cannot be told from a path, so one in
+  /// /tmp to a file in ~/.ssh reads (docs/AGENT.md says so). Only the owner can make one there.
+  @Test func aHardLinkIsNotDetectable() throws {
+    let f = try Self.fixture()
+    defer { f.cleanUp() }
+    let link = f.tmpdir.appending(path: "hard")
+    try FileManager.default.linkItem(at: f.home.appending(path: ".ssh/id_ed25519"), to: link)
+    #expect(throws: Never.self) { try f.policy().check(link.path, field: "f") }
   }
 }

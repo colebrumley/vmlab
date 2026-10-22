@@ -71,6 +71,8 @@ public struct PathPolicy: Sendable, Hashable {
   public var allowAnyPath: Bool
   /// Canonical directories a read path must be under.
   public var roots: [String]
+  /// Canonical folders the owner lists as readable although they are dot-directories.
+  public var readRoots: [String] = []
   /// Canonical directories a write path must be under.
   public var writeRoots: [String]
   /// The canonical user home whose dotfiles and `Library` are never written.

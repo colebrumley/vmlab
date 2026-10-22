@@ -43,7 +43,7 @@ import VMLabCore
   }
 
   /// A pull writes `local`: a home dotfile, `~/Library` or a home folder outside the write roots
-  /// is refused before any copy; a push may still read the home.
+  /// is refused before any copy.
   @Test func pullDestinationsFollowTheWritePolicy() async throws {
     let f = try Fixture()
     defer { f.cleanUp() }
@@ -62,12 +62,46 @@ import VMLabCore
       #expect(error?.data["access"] == .string("write"))
     }
     // Passes the policy and reaches the channel (the fake backend has no SSH).
-    for (action, local) in [("pull", "/tmp/vmlab-pulled"), ("push", home)] {
+    for (action, local) in [("pull", "/tmp/vmlab-pulled"), ("push", "/etc/../tmp")] {
       let error = await #expect(throws: VMLabError.self) {
         try await Self.file(
           ["action": .string(action), "remote": .string("/x"), "local": .string(local)], in: f)
       }
       #expect(error?.code == .guestUnreachable, "\(action) \(local)")
+    }
+  }
+
+  /// A push reads `local` and hands it to the guest: a home dotfile or dot-directory, anything
+  /// in `~/Library` or `VMLAB_HOME`, the home itself, a symlink to any of them and a directory
+  /// reaching one through a link are refused before any copy, whatever the case.
+  @Test func pushSourcesFollowTheReadPolicy() async throws {
+    let f = try Fixture()
+    defer { f.cleanUp() }
+    _ = try await f.create()
+    let home = FileManager.default.homeDirectoryForCurrentUser.path
+    let scratch = URL(filePath: PathPolicy.canonical(FileManager.default.temporaryDirectory.path))
+      .appending(path: "vmlab-push-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(
+      at: scratch.appending(path: "tree"), withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: scratch) }
+    try FileManager.default.createSymbolicLink(
+      atPath: scratch.appending(path: "ssh").path, withDestinationPath: home + "/.ssh")
+    try FileManager.default.createSymbolicLink(
+      atPath: scratch.appending(path: "tree/aws").path, withDestinationPath: home + "/.aws")
+    for local in [
+      home + "/.ssh/id_ed25519", home + "/.SSH/id_rsa", home + "/.aws/credentials",
+      home + "/.config/gh/hosts.yml", home + "/.netrc",
+      home + "/Library/Keychains/login.keychain-db",
+      home + "/library/Cookies", home, scratch.path + "/ssh/id_ed25519", scratch.path + "/tree",
+      f.context.home.path + "/vms",
+    ] {
+      let error = await #expect(throws: VMLabError.self) {
+        try await Self.file(
+          ["action": .string("push"), "remote": .string("/x"), "local": .string(local)], in: f)
+      }
+      #expect(error?.code == .invalidRequest, "\(local)")
+      #expect(error?.data["field"] == .string("local"), "\(local)")
+      #expect(error?.data["access"] == .string("read"), "\(local)")
     }
   }
 
