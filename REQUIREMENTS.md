@@ -887,10 +887,14 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   Paths in `vm_file`, `vm_memory_dump`, `images register` and `shared_dir` are canonicalised.
   A path vmlab or QEMU only reads must be under the user's home, `/tmp` or `$TMPDIR` (or a
   `readRoots` folder the owner lists in `config.json`) and is never, even with `allowAnyPath`, a
-  dotfile or dot-directory under the home, inside `~/Library` or inside `VMLAB_HOME`, unless a
-  `readRoots` folder holds it; a directory read (a pushed tree, a TFTP root) must hold nothing
-  refused, through its symlinks, so the home itself is refused. Hard links cannot be detected
-  from a path and are not; boot paths are checked again at start. A path it
+  dot entry at the top of the home, inside `~/Library` or inside `VMLAB_HOME`, nor a path with a
+  credential name in it (`.env`, `.env.*`, `.netrc`, `.npmrc`, `.pypirc`, `.git-credentials`,
+  `.dockercfg`, `.pgpass`, `.ssh`, `.gnupg`, `.aws`, `.kube`, `.docker`, `id_rsa`, `id_ecdsa`,
+  `id_ed25519`, `id_dsa`, `*.pem`, `*.key`, `*.p12`, `*.pfx`), unless a `readRoots` folder holds
+  it; other nested dot entries (`.git`) are read. A pushed directory is copied without its
+  refused entries (through its symlinks), which `vm_file` returns as `skipped`; a directory QEMU
+  reads whole (a TFTP root) must hold none, and the home itself is refused. Hard links cannot be
+  detected from a path and are not; boot paths are checked again at start. A path it
   writes (`vm_file pull`'s `local`, a share's host directory, which the guest writes, and the
   outputs and writable disks of `extra.qemuArgs`) only under `/tmp`, `$TMPDIR`, `~/vmlab-files`
   (created on demand) or, instead of that folder, the `writeRoots` the owner lists in
@@ -1188,7 +1192,7 @@ six 4 GB guests with the default reserve; macOS 26.6 → VZ save/restore APIs pr
 | Largest CPUs / memory / disk a request may ask for | 256 / 4096 GB / 65536 GB (`ResourceLimits.maxCPUs`, `maxMemoryGB`, `maxDiskGB`; more is `invalid_request`) |
 | Memory reserve kept free on the host | 4 GB (after every guest on the host, from any `VMLAB_HOME`; also against the host's available memory) |
 | Host memory pressure at which a start is refused | `warn` (`kern.memorystatus_vm_pressure_level` ≥ 2); off with `VMLAB_IGNORE_MEMORY_PRESSURE=1` or `ignoreMemoryPressure: true` in `config.json` (owner only) |
-| Host folders a tool may read (`vm_file push`, `images register`, `boot`, QEMU inputs) | the user's home, `/tmp`, `$TMPDIR` (anywhere with `allowAnyPath`); never a home dotfile or dot-directory, `~/Library` or `VMLAB_HOME`, unless inside a `readRoots` folder the owner lists in `config.json` |
+| Host folders a tool may read (`vm_file push`, `images register`, `boot`, QEMU inputs) | the user's home, `/tmp`, `$TMPDIR` (anywhere with `allowAnyPath`); never a dot entry at the top of the home, `~/Library`, `VMLAB_HOME` or a credential name (`.env`, `.ssh`, `id_ed25519`, `*.pem`, ...), unless inside a `readRoots` folder the owner lists in `config.json`; a pushed directory skips such entries |
 | Host folders a tool may write (`vm_file pull`, `share.host`, QEMU outputs) | `/tmp`, `$TMPDIR`, `~/vmlab-files` (or the owner's `writeRoots` in `config.json` instead of the last); never a home dotfile, `~/Library` or `VMLAB_HOME` |
 | Concurrent starts | 4 |
 | macOS guests running | 2 (Apple's limit) |

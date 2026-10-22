@@ -23,8 +23,9 @@ extension ToolSpec {
         "confirm": Schema.boolean(
           "Allow a pull or prune the server asks to confirm (it states the size)."),
         "path": Schema.string(
-          "register: host path (under your home or /tmp, never a home dotfile or dot-directory, "
-            + "~/Library or VMLAB_HOME; only read) of a raw or qcow2 disk, or an .ipsw."),
+          "register: host path (under your home or /tmp, never a dot entry at the top of the "
+            + "home, ~/Library, VMLAB_HOME or a credential name; only read) of a raw or qcow2 "
+            + "disk, or an .ipsw."),
         "kernel": Schema.string(
           "register: host path of a kernel image (read as path is)."),
         "initrd": Schema.string(

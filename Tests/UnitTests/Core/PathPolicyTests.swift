@@ -226,7 +226,7 @@ import VMLabCore
     ("H/.SSH/authorized_keys", false, false),
     ("H/vmlab-files/out.txt", true, true),
     ("H/VMLAB-FILES/out.txt", true, true),
-    ("H/vmlab-files/.hidden", false, false),
+    ("H/vmlab-files/.hidden", true, false),
     ("H/project/../.zshrc", false, false),
     ("/tmp/vmlab-write-x", true, true),
     ("/tmp/.vmlab-write-x", true, true),
@@ -388,9 +388,10 @@ import VMLabCore
 }
 
 /// Reads (the security fix to R-1102): a model-named path vmlab reads, and may hand to a guest,
-/// is never a home dotfile or dot-directory, `~/Library` or `VMLAB_HOME`, after every symlink is
-/// resolved and whatever its case; `allowAnyPath` does not lift that, the owner's `readRoots` do.
-/// A directory is read whole, so nothing in it (followed through symlinks) may be refused.
+/// is never a dot entry at the top of the home, `~/Library`, `VMLAB_HOME` or a credential name
+/// anywhere, after every symlink is resolved and whatever its case; nested dot entries (`.git`)
+/// are read. `allowAnyPath` does not lift that, the owner's `readRoots` do. A directory is read
+/// whole, so nothing in it (followed through symlinks) may be refused; `readTree` lists what.
 @Suite struct PathPolicyReadTests {
   typealias Fixture = PathPolicyWriteTests.Fixture
 
@@ -432,12 +433,22 @@ import VMLabCore
   /// `readRoots: ["~/.cache/kernel-builds"]`.
   static let rows: [(String, Bool, Bool, Bool)] = [
     ("H/project/a.txt", true, true, true),
-    ("H/project", false, false, false),  // holds .git
+    ("H/project", true, true, true),  // holds .git, which is read
+    ("H/project/.gitignore", true, true, true),
+    ("H/project/.clang-format", true, true, true),
+    ("H/project/.ENV.local", false, false, false),
+    ("H/src/x/.ssh/id_ed25519", false, false, false),
+    ("H/src/x/.Aws/credentials", false, false, false),
+    ("H/src/x/id_ed25519", false, false, false),
+    ("H/src/x/id_ed25519.pub", true, true, true),
+    ("T/server.KEY", false, false, false),
+    ("T/certs/client.p12", false, false, false),
+    ("T/notes.keynote", true, true, true),
     ("H/.ssh/id_ed25519", false, false, false),
     ("H/.SSH/ID_ED25519", false, false, false),
     ("H/.zshrc", false, false, false),
     ("H/.netrc", false, false, false),
-    ("H/project/.git/config", false, false, false),
+    ("H/project/.git/config", true, true, true),
     ("H/project/.env", false, false, false),
     ("H/.config/gh/hosts.yml", false, false, false),
     ("H/Library/Keychains/login.keychain-db", false, false, false),
@@ -536,6 +547,39 @@ import VMLabCore
     // Past the policy: refused only because the file does not exist.
     #expect(error?.message.contains("not a readable file") == true)
     #expect(error?.data["access"] == nil)
+  }
+
+  /// `readTree` refuses `.env`, a nested `.ssh` and a link into `~/.ssh` without descending, reads
+  /// `.git`, and marks a symlink loop as a repeat rather than a refusal of the tree.
+  @Test func readTreeListsWhatAPushSkips() throws {
+    let f = try Self.fixture()
+    defer { f.cleanUp() }
+    let tree = f.home.appending(path: "src/linux")
+    for dir in ["src/linux/.git", "src/linux/kernel/.ssh", "src/linux/kernel/sub"] {
+      try FileManager.default.createDirectory(
+        at: f.home.appending(path: dir), withIntermediateDirectories: true)
+    }
+    for file in [
+      "src/linux/.git/HEAD", "src/linux/.env", "src/linux/kernel/.ssh/id_rsa",
+      "src/linux/kernel/sub/main.c", "src/linux/.clang-format",
+    ] {
+      try Data("x".utf8).write(to: f.home.appending(path: file))
+    }
+    try FileManager.default.createSymbolicLink(
+      at: tree.appending(path: "keys"), withDestinationURL: f.home.appending(path: ".ssh"))
+    try FileManager.default.createSymbolicLink(
+      at: tree.appending(path: "kernel/sub/up"), withDestinationURL: tree.appending(path: "kernel"))
+    let policy = try f.policy()
+    let entries = policy.readTree(tree.path)
+    let refused = Set(entries.filter { $0.refusal != nil && !$0.isRepeat }.map(\.relative))
+    #expect(refused == [".env", "kernel/.ssh", "keys"])
+    #expect(!entries.contains { $0.relative.hasPrefix("kernel/.ssh/") })
+    let read = Set(entries.filter { $0.refusal == nil }.map(\.relative))
+    #expect(read.isSuperset(of: [".git", ".git/HEAD", ".clang-format", "kernel/sub/main.c"]))
+    #expect(entries.contains { $0.relative == "kernel/sub/up" && $0.isRepeat })
+    // Read whole (a TFTP root), the tree is refused; a push skips instead (wholeTree: false).
+    #expect(throws: VMLabError.self) { try policy.check(tree.path, field: "f") }
+    #expect(throws: Never.self) { try policy.check(tree.path, field: "f", wholeTree: false) }
   }
 
   /// A hard link is a second name for the same file: it cannot be told from a path, so one in

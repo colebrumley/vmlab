@@ -149,11 +149,13 @@ an `id` to pass as `diffFrom`, so the next one returns only the region that chan
 
 **Host paths.** vmlab reads host files you name (`vm_file push`, `images register`, `boot`, disk
 images, ROMs and TFTP roots in `extra.qemuArgs`) under your home, `/tmp` or `$TMPDIR`, never a
-dotfile or dot-directory in the home (`~/.ssh`, `~/.aws`, `~/.config`, a project's `.git`),
-`~/Library` or `VMLAB_HOME`, whatever the case or the symlinks on the way; a directory you push or
-serve is read whole, so the home itself and a folder holding a dot-directory are refused too. A
-read refusal is `invalid_request` naming the path and why: ask the owner to copy the file to
-`/tmp` or to list its folder in `readRoots` in `config.json`; no argument lifts it. It writes them
+dot entry at the top of the home (`~/.ssh`, `~/.aws`, `~/.config`), `~/Library`, `VMLAB_HOME` or
+a credential name anywhere (`.env`, `.netrc`, a nested `.ssh`, `id_ed25519`, `*.pem`, `*.key`),
+whatever the case or the symlinks on the way; a project's `.git` or `.clang-format` is fine. A
+directory you push is copied without such entries, listed in the result's `skipped` with a
+warning; a TFTP root must hold none, and the home itself is never read. A read refusal is
+`invalid_request` naming the path and why: ask the owner to copy the file to `/tmp` or to list its
+folder in `readRoots` in `config.json`; no argument lifts it. It writes them
 (`vm_file pull`'s `local`, a `share.host` directory, which the guest writes too, and QEMU's logs,
 traces, chardev files and writable disks) only under `/tmp`, `$TMPDIR` or `~/vmlab-files` (made
 when first used), or folders the owner lists. A dotfile or dot-directory in the home (`~/.zshrc`,

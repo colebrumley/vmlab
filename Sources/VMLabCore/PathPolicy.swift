@@ -60,12 +60,14 @@ public struct VMLabConfig: Codable, Sendable, Hashable {
 ///
 /// - **read** (`vm_file push`, `images register`, `boot`, the inputs of `extra.qemuArgs`): under
 ///   `roots`, the user's home, `/tmp` and `$TMPDIR`, or the owner's `readRoots`. What is read may
-///   end up in a guest, and from there anywhere, so never, even with `allowAnyPath`: a dotfile or
-///   dot-directory under the user's home (`~/.ssh`, `~/.aws`, `~/.config`, `~/.netrc`, a
-///   project's `.git` or `.env`), `~/Library` (keychains, browser profiles) or `VMLAB_HOME`
-///   (other VMs' disks and keys), unless the owner lists the folder in `readRoots`. A directory
-///   is read whole (`scp -r`, a TFTP root), so everything in it, through its symlinks, must pass
-///   too, and the home itself never does. Two limits: a hard link is a second name for its file
+///   end up in a guest, and from there anywhere, so never, even with `allowAnyPath`: a dot entry
+///   at the top of the user's home (`~/.ssh`, `~/.aws`, `~/.config`, `~/.netrc`), `~/Library`
+///   (keychains, browser profiles), `VMLAB_HOME` (other VMs' disks and keys), or a credential
+///   name anywhere in the path (`credentialNames`: `.env`, `.ssh`, `id_ed25519`, `*.pem`, ...),
+///   unless the owner lists the folder in `readRoots`. A nested dot entry (a project's `.git`,
+///   `.clang-format`) is read. A directory is read whole (a TFTP root), so everything in it,
+///   through its symlinks, must pass too, and the home itself never does; `vm_file push` instead
+///   skips the entries refused (`readTree`) and reports them. Two limits: a hard link is a second name for its file
 ///   that no path reveals, so one made outside these folders is not caught (only the host's user
 ///   can make one); and the check precedes the read, so a guest swapping a symlink into its own
 ///   shared folder while that folder is being pushed is not caught either.
@@ -143,11 +145,12 @@ public struct PathPolicy: Sendable, Hashable {
   }
 
   /// The canonical URL of `path`, or `invalid_request` naming `field` when it is relative, lies
-  /// outside the roots of `access`, or is never read or written (`neverRead`, `neverWritten`);
-  /// a directory read must hold nothing that is never read.
-  public func check(_ path: String, field: String, access: Access = .read) throws(VMLabError)
-    -> URL
-  {
+  /// outside the roots of `access`, or is never read or written (`neverRead`, `neverWritten`).
+  /// A directory read must hold nothing that is never read (`readTree`), unless `wholeTree` is
+  /// false: `vm_file push` skips those entries instead.
+  public func check(
+    _ path: String, field: String, access: Access = .read, wholeTree: Bool = true
+  ) throws(VMLabError) -> URL {
     guard path.hasPrefix("/") else {
       throw .invalidRequest(
         field: field, reason: "\(path) is not an absolute path",
@@ -163,12 +166,13 @@ public struct PathPolicy: Sendable, Hashable {
     case .read:
       data["allowedRoots"] = .array((roots + readRoots).map { .string($0) })
       let config = configPath ?? "VMLAB_HOME/config.json"
-      if let why = neverRead(resolved) ?? unreadableEntry(resolved) {
+      if let why = neverRead(resolved) ?? (wholeTree ? unreadableEntry(resolved) : nil) {
         throw VMLabError(
           code: .invalidRequest,
           message: "Invalid request: \(field): \(shown) is never read: \(why)",
           hint:
-            "What vmlab reads may reach the guest, so dotfiles and dot-directories in your home, "
+            "What vmlab reads may reach the guest, so dot entries at the top of your home "
+            + "(~/.ssh, ~/.aws, ~/.config), credential files anywhere (.env, id_ed25519, *.pem), "
             + "~/Library and VMLAB_HOME are refused even with allowAnyPath. Ask the owner to copy "
             + "what the guest needs to /tmp, or to list its folder in \"readRoots\": [...] in "
             + "\(config).",
@@ -219,44 +223,108 @@ public struct PathPolicy: Sendable, Hashable {
     }
   }
 
-  /// Why the canonical `path` is never read, or nil: what `neverWritten` refuses, unless a
-  /// `readRoots` folder holds it (one around `VMLAB_HOME` opens nothing inside it), or it is a
-  /// directory holding the user's home or `VMLAB_HOME`.
+  /// Why the canonical `path` is never read, or nil. Inside `VMLAB_HOME` (unless a `readRoots`
+  /// folder inside it holds it); otherwise nothing a `readRoots` folder holds; otherwise a dot
+  /// entry at the top of the home (`~/.ssh`, `~/.aws`, `~/.config`, `~/.netrc`), `~/Library`,
+  /// a credential name anywhere in the path (`credentialNames`: `.env`, `.ssh`, `id_ed25519`,
+  /// `*.pem`, ...), or a directory holding the home or `VMLAB_HOME`. A nested dot entry such as
+  /// a project's `.git` or `.clang-format` is read.
   public func neverRead(_ path: String) -> String? {
     let listed = readRoots.filter { Self.contains($0, path) }
     if let vmlabHome, Self.contains(vmlabHome, path) {
       return listed.contains { Self.contains(vmlabHome, $0) } ? nil : neverWritten(path)
     }
     if !listed.isEmpty { return nil }
-    if let why = neverWritten(path) { return why }
+    if Self.contains(userHome, path),
+      let first = path.dropFirst(userHome.count).split(separator: "/").first
+    {
+      if Self.fold(String(first)) == "library" {
+        return "it is inside ~/Library (keychains, browser profiles, application settings)"
+      }
+      if first.hasPrefix(".") {
+        return "~/\(first) is a dot entry at the top of your home, where credentials and "
+          + "settings live (~/.ssh, ~/.aws, ~/.config, ~/.netrc)"
+      }
+    }
+    if let name = path.split(separator: "/").first(where: { Self.isCredentialName(String($0)) }) {
+      return "\(name) is named like a credential (keys, tokens, .env files)"
+    }
     for (inner, what) in [(userHome, "your home"), (vmlabHome, "VMLAB_HOME")] {
       if let inner, Self.contains(path, inner), Self.isDirectory(path) {
-        return "it is a directory holding \(what) (\(inner)), whose dotfiles are never read"
+        return "it is a directory holding \(what) (\(inner))"
       }
     }
     return nil
   }
 
-  /// Why something inside the canonical directory `path` is never read, or nil (also for a file
-  /// or a path that does not exist): every entry, through symlinks to directories, once each.
-  func unreadableEntry(_ path: String) -> String? {
-    var seen: Set<String> = []
-    var pending = [path]
-    while let directory = pending.popLast() {
-      guard Self.isDirectory(directory), seen.insert(Self.fold(directory)).inserted,
-        let names = try? FileManager.default.contentsOfDirectory(atPath: directory)
-      else { continue }
-      for name in names {
-        let entry = Self.canonical(directory + "/" + name)
-        if let why = neverRead(entry) {
-          return "\(directory)/\(name)" + (entry == directory + "/" + name ? "" : " (\(entry))")
-            + " inside it: " + why
+  /// Names refused wherever they appear in a read path, compared case-insensitively: files and
+  /// folders that hold credentials. `.env.*` and `*.pem`, `*.key`, `*.p12`, `*.pfx` match too.
+  public static let credentialNames: Set<String> = [
+    ".env", ".netrc", ".npmrc", ".pypirc", ".git-credentials", ".dockercfg", ".pgpass", ".ssh",
+    ".gnupg", ".aws", ".kube", ".docker", "id_rsa", "id_ecdsa", "id_ed25519", "id_dsa",
+  ]
+
+  public static func isCredentialName(_ name: String) -> Bool {
+    let name = fold(name)
+    return credentialNames.contains(name) || name.hasPrefix(".env.")
+      || [".pem", ".key", ".p12", ".pfx"].contains { name.hasSuffix($0) }
+  }
+
+  /// One entry below a directory being read, depth first (`readTree`).
+  public struct TreeEntry: Sendable, Hashable {
+    /// The path below the directory, as its names spell it (`src/.env`).
+    public var relative: String
+    /// The canonical path the entry resolves to.
+    public var canonical: String
+    public var isDirectory: Bool
+    /// Why it is not read, or nil; a refused directory is not descended into.
+    public var refusal: String?
+    /// A directory already read through another path: refused only so a copy does not loop.
+    public var isRepeat = false
+  }
+
+  /// Every entry below the canonical directory `root`, through symlinked directories (a
+  /// directory reached a second time, by a loop or a second link, is refused as such): what
+  /// `scp -r` or a TFTP server would read. An entry is refused as `neverRead` refuses it, or when
+  /// it leads outside the readable folders.
+  public func readTree(_ root: String) -> [TreeEntry] {
+    var result: [TreeEntry] = []
+    var seen: Set<String> = [Self.fold(root)]
+    var pending: [(directory: String, relative: String)] = [(root, "")]
+    while let (directory, prefix) = pending.popLast() {
+      let names = (try? FileManager.default.contentsOfDirectory(atPath: directory)) ?? []
+      for name in names.sorted() {
+        let relative = prefix.isEmpty ? name : prefix + "/" + name
+        let canonical = Self.canonical(directory + "/" + name)
+        let isDirectory = Self.isDirectory(canonical)
+        var refusal = neverRead(canonical)
+        if refusal == nil, !allowAnyPath,
+          !(roots + readRoots).contains(where: { Self.contains($0, canonical) })
+        {
+          refusal = "it leads to \(canonical), outside the readable folders"
         }
-        if !allowAnyPath, !(roots + readRoots).contains(where: { Self.contains($0, entry) }) {
-          return "\(directory)/\(name) inside it leads to \(entry), outside the readable folders"
+        var isRepeat = false
+        if refusal == nil, isDirectory, !seen.insert(Self.fold(canonical)).inserted {
+          refusal = "it leads to \(canonical), a directory already read (a symlink loop)"
+          isRepeat = true
         }
-        pending.append(entry)
+        result.append(
+          TreeEntry(
+            relative: relative, canonical: canonical, isDirectory: isDirectory, refusal: refusal,
+            isRepeat: isRepeat))
+        if refusal == nil, isDirectory { pending.append((canonical, relative)) }
       }
+    }
+    return result
+  }
+
+  /// Why something below the canonical directory `path` is never read, or nil (also for a file
+  /// or a path that does not exist). A directory reached twice is no refusal here.
+  func unreadableEntry(_ path: String) -> String? {
+    guard Self.isDirectory(path) else { return nil }
+    for entry in readTree(path) {
+      guard let why = entry.refusal, !entry.isRepeat else { continue }
+      return "\(entry.relative) inside it: " + why
     }
     return nil
   }

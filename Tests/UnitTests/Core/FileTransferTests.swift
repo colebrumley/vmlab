@@ -62,6 +62,46 @@ import Testing
     #expect(FileManager.default.fileExists(atPath: f.dir.appending(path: "tree/sub/more.bin").path))
   }
 
+  /// A kernel tree with `.git`, a stray `.env`, a nested `.ssh` and a link into the home's
+  /// `~/.ssh`: the push copies the tree and `.git` but skips the other three, reporting each, and
+  /// leaves no staging folder behind.
+  @Test func aPushSkipsCredentialEntriesOfATree() async throws {
+    let f = try Fixture()
+    defer { try? FileManager.default.removeItem(at: f.dir) }
+    let home = f.dir.appending(path: "home")
+    _ = try f.write("home/.ssh/id_ed25519", bytes: 7)
+    _ = try f.write("home/src/linux/.git/HEAD", bytes: 10)
+    _ = try f.write("home/src/linux/.clang-format", bytes: 20)
+    _ = try f.write("home/src/linux/.env", bytes: 30)
+    _ = try f.write("home/src/linux/kernel/.ssh/id_rsa", bytes: 40)
+    _ = try f.write("home/src/linux/kernel/fork.c", bytes: 50)
+    try FileManager.default.createSymbolicLink(
+      at: home.appending(path: "src/linux/keys"), withDestinationURL: home.appending(path: ".ssh"))
+    let policy = PathPolicy(roots: [f.dir.path], userHome: home.path)
+    let tree = home.appending(path: "src/linux")
+    let guest = f.dir.appending(path: "guest-linux")
+    let result = try await f.transfer.push(local: tree, remote: guest.path, policy: policy)
+    #expect(result.bytes == 80)
+    #expect(
+      Set(result.skipped.map(\.path))
+        == Set(
+          [".env", "kernel/.ssh", "keys"].map { tree.path + "/" + $0 }))
+    let files = FileManager.default
+    for kept in [".git/HEAD", ".clang-format", "kernel/fork.c"] {
+      #expect(files.fileExists(atPath: guest.appending(path: kept).path), "\(kept)")
+    }
+    for gone in [".env", "kernel/.ssh", "keys"] {
+      #expect(!files.fileExists(atPath: guest.appending(path: gone).path), "\(gone)")
+    }
+    let left = try files.contentsOfDirectory(atPath: f.dir.path)
+    #expect(!left.contains { $0.hasPrefix(".push-staging") })
+    // Nothing to skip: pushed as it is.
+    let clean = try await f.transfer.push(
+      local: tree.appending(path: "kernel/fork.c"), remote: f.dir.appending(path: "c").path,
+      policy: policy)
+    #expect(clean.skipped.isEmpty && clean.bytes == 50)
+  }
+
   @Test func pullDefaultsToThePulledDirectory() async throws {
     let f = try Fixture()
     let file = try f.write("guest/data.txt", bytes: 42)

@@ -4,10 +4,24 @@ import Foundation
 public struct FileTransferResult: Sendable, Hashable {
   public var bytes: Int64
   public var path: String
+  /// What a directory push left out, each with why (`PathPolicy.readTree`).
+  public var skipped: [Skipped]
 
-  public init(bytes: Int64, path: String) {
+  public struct Skipped: Sendable, Hashable {
+    /// The host path as the pushed directory spells it.
+    public var path: String
+    public var reason: String
+
+    public init(path: String, reason: String) {
+      self.path = path
+      self.reason = reason
+    }
+  }
+
+  public init(bytes: Int64, path: String, skipped: [Skipped] = []) {
     self.bytes = bytes
     self.path = path
+    self.skipped = skipped
   }
 }
 
@@ -44,19 +58,92 @@ public struct SSHFileTransfer: Sendable {
   }
 
   /// Copies the host file or directory `local` to `remote` in the guest.
-  public func push(local: URL, remote: String, timeout: Duration = defaultTimeout)
-    async throws(VMLabError) -> FileTransferResult
-  {
+  ///
+  /// With `policy`, a directory's entries pass its read side (`PathPolicy.readTree`, through
+  /// symlinks): when any is refused (a `.env`, a key, a link into `~/.ssh`), the rest is copied
+  /// into a staging folder in the VM directory, each file opened with `O_NOFOLLOW_ANY` and cloned
+  /// where the volume allows, and that is pushed instead; the refused entries are `skipped`.
+  public func push(
+    local: URL, remote: String, policy: PathPolicy? = nil, timeout: Duration = defaultTimeout
+  ) async throws(VMLabError) -> FileTransferResult {
     try Self.checkRemote(remote)
     guard FileManager.default.fileExists(atPath: local.path) else {
       throw VMLabError.invalidRequest(
         field: "local", reason: "\(local.path) does not exist",
         hint: "Give the absolute path of a host file or directory to push.")
     }
-    try await copy(source: local.path, destination: remoteSpec(remote), timeout: timeout) {
-      ["bytesTotal": .number(Double(Self.bytes(at: local))), "path": .string(remote)]
+    var source = local
+    var skipped: [FileTransferResult.Skipped] = []
+    var staging: URL?
+    defer { if let staging { try? FileManager.default.removeItem(at: staging) } }
+    if let policy, PathPolicy.isDirectory(local.path) {
+      let entries = policy.readTree(local.path)
+      skipped = entries.compactMap { entry in
+        entry.refusal.map {
+          FileTransferResult.Skipped(path: local.path + "/" + entry.relative, reason: $0)
+        }
+      }
+      if !skipped.isEmpty {
+        let folder = target.vmDirectory.appending(path: ".push-staging-\(UUID().uuidString)")
+        staging = folder
+        source = folder.appending(path: local.lastPathComponent)
+        try Self.stage(entries, into: source, shown: local.path, skipped: &skipped)
+      }
     }
-    return FileTransferResult(bytes: Self.bytes(at: local), path: remote)
+    let copied = source
+    try await copy(source: copied.path, destination: remoteSpec(remote), timeout: timeout) {
+      ["bytesTotal": .number(Double(Self.bytes(at: copied))), "path": .string(remote)]
+    }
+    return FileTransferResult(bytes: Self.bytes(at: copied), path: remote, skipped: skipped)
+  }
+
+  /// Rebuilds the readable `entries` of a directory under `root`: directories made, files
+  /// cloned (or copied) from their canonical path opened with `O_NOFOLLOW_ANY`, so nothing is
+  /// read through a symlink swapped in since the check. A file that cannot be opened so, or
+  /// is no regular file, joins `skipped`.
+  static func stage(
+    _ entries: [PathPolicy.TreeEntry], into root: URL, shown: String,
+    skipped: inout [FileTransferResult.Skipped]
+  ) throws(VMLabError) {
+    try createDirectory(root)
+    // `readTree` lists a directory before its entries, so parents exist when needed.
+    for entry in entries where entry.refusal == nil {
+      let destination = root.appending(path: entry.relative)
+      if entry.isDirectory {
+        try createDirectory(destination)
+        continue
+      }
+      let input = open(entry.canonical, O_RDONLY | O_NOFOLLOW_ANY | O_CLOEXEC)
+      var info = stat()
+      guard input >= 0, fstat(input, &info) == 0, info.st_mode & S_IFMT == S_IFREG else {
+        if input >= 0 { close(input) }
+        skipped.append(
+          .init(
+            path: shown + "/" + entry.relative,
+            reason: "it is not a regular file reached without a symlink"))
+        continue
+      }
+      defer { close(input) }
+      let parent = open(
+        destination.deletingLastPathComponent().path, O_RDONLY | O_DIRECTORY | O_CLOEXEC)
+      guard parent >= 0 else { throw stagingFailure(destination, errno) }
+      defer { close(parent) }
+      let name = destination.lastPathComponent
+      if fclonefileat(input, parent, name, 0) == 0 { continue }
+      let output = openat(parent, name, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o644)
+      guard output >= 0 else { throw stagingFailure(destination, errno) }
+      let failed = fcopyfile(input, output, nil, copyfile_flags_t(COPYFILE_DATA)) != 0
+      let code = errno
+      close(output)
+      if failed { throw stagingFailure(destination, code) }
+    }
+  }
+
+  static func stagingFailure(_ url: URL, _ code: Int32) -> VMLabError {
+    VMLabError(
+      code: .internal, message: "Cannot stage \(url.path) for the push",
+      hint: "Check free space in the VM directory's volume.",
+      data: ["error": .string(String(cString: strerror(code)))])
   }
 
   /// Copies `remote` from the guest to `local`, or into `<vm>/pulled/` when `local` is nil. A

@@ -232,8 +232,9 @@ enum Schema {
           ],
           description:
             "How the guest boots; omitted means from its disk. Its host paths are absolute and "
-            + "read: under your home, /tmp or $TMPDIR (or VMLAB_HOME's images), never a home "
-            + "dotfile or dot-directory such as ~/.ssh, ~/Library or the rest of VMLAB_HOME."),
+            + "read: under your home, /tmp or $TMPDIR (or VMLAB_HOME's images), never a dot "
+            + "entry at the top of the home such as ~/.ssh, ~/Library, the rest of VMLAB_HOME "
+            + "or a credential name such as .env or *.pem."),
         "extra": object(
           [
             "qemuArgs": array(
@@ -248,7 +249,8 @@ enum Schema {
                 + "-plugin, -semihosting and passthrough devices need the owner's allowHostCode. "
                 + "Host paths must be absolute and outside VMLAB_HOME; paths QEMU only reads "
                 + "(-cdrom, romfile=, readonly=on disks, tftp= roots) may be under the home or "
-                + "/tmp but never a home dotfile or dot-directory (~/.ssh) or ~/Library, paths it "
+                + "/tmp but never a top-level home dot entry (~/.ssh), ~/Library or a credential "
+                + "name (.env, *.pem), and a directory must hold none, paths it "
                 + "writes (-D, -trace file=, chardev path=, writable disks, shared dirs) only "
                 + "under /tmp, $TMPDIR or ~/vmlab-files (never a home dotfile or ~/Library)."
             )

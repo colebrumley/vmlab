@@ -76,9 +76,10 @@ import VMLabCore
     }
   }
 
-  /// A push reads `local` and hands it to the guest: a home dotfile or dot-directory, anything
-  /// in `~/Library` or `VMLAB_HOME`, the home itself, a symlink to any of them and a directory
-  /// reaching one through a link are refused before any copy, whatever the case.
+  /// A push reads `local` and hands it to the guest: a dot entry at the top of the home, anything
+  /// in `~/Library` or `VMLAB_HOME`, a credential name anywhere (`.env`, a nested `.ssh`, a
+  /// `.pem`), the home itself and a symlink to any of them are refused before any copy, whatever
+  /// the case. (A directory holding such entries is pushed without them: `FileTransferTests`.)
   @Test func pushSourcesFollowTheReadPolicy() async throws {
     let f = try Fixture()
     defer { f.cleanUp() }
@@ -97,8 +98,9 @@ import VMLabCore
       home + "/.ssh/id_ed25519", home + "/.SSH/id_rsa", home + "/.aws/credentials",
       home + "/.config/gh/hosts.yml", home + "/.netrc",
       home + "/Library/Keychains/login.keychain-db",
-      home + "/library/Cookies", home, scratch.path + "/ssh/id_ed25519", scratch.path + "/tree",
-      f.context.home.path + "/vms",
+      home + "/library/Cookies", home, scratch.path + "/ssh/id_ed25519",
+      home + "/src/vmlab-nope/.env", home + "/src/vmlab-nope/.ssh/id_ed25519",
+      scratch.path + "/tree/server.pem", f.context.home.path + "/vms",
     ] {
       let error = await #expect(throws: VMLabError.self) {
         try await Self.file(
