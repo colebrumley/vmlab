@@ -160,7 +160,9 @@ import VMLabQEMU
     let lab = try await QEMUBootIntegrationTests.BareServer(tag: "so")
     defer { lab.shutdown() }
     let message = "w2 kernel says goodbye"
-    let kernel = lab.home.appending(path: "bare-off.img")
+    // Beside VMLAB_HOME: nothing inside it is read.
+    let kernel = URL(filePath: lab.home.path + "-bare-off.img")
+    defer { try? FileManager.default.removeItem(at: kernel) }
     try BareKernel.write(to: kernel, message: message, then: .powerOff)
     let requirements: JSONValue = [
       "guest": ["os": "linux", "arch": "arm64"],

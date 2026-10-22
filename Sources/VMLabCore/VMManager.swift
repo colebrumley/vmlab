@@ -468,11 +468,13 @@ public actor VMManager {
 }
 
 extension VMManager {
-  /// `boot` with every host path through `PathPolicy` (the user's home, /tmp, `$TMPDIR`, and
-  /// `home`'s images directory), each made canonical.
+  /// `boot` with every host path through `PathPolicy` as a read (the user's home, /tmp,
+  /// `$TMPDIR`, never a home dotfile, `~/Library` or the rest of `VMLAB_HOME`), plus `home`'s
+  /// images directory, where `extract_kernel` and `images register` put kernels (a read root:
+  /// the default `VMLAB_HOME` is `~/.vmlab`); each made canonical.
   static func checkedBoot(_ boot: BootSpec, home: URL) throws(VMLabError) -> BootSpec {
     var policy = PathPolicy.load(home: home)
-    policy.roots.append(PathPolicy.canonical(home.appending(path: "images").path))
+    policy.readRoots.append(PathPolicy.canonical(home.appending(path: "images").path))
     var checked = boot
     func check(_ path: String?, _ field: String) throws(VMLabError) -> String? {
       try path.map { (p) throws(VMLabError) in try policy.check(p, field: field).path }

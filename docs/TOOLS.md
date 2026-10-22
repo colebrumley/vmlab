@@ -89,10 +89,10 @@ Manage the guest image cache in ~/.vmlab/images. list shows pulled and available
 | `confirm` | boolean, default `false` |  | Allow a pull or prune the server asks to confirm (it states the size). |
 | `format` | `raw` \| `qcow2` |  | register: disk format. |
 | `guest` | `macos` \| `linux` |  | register: the image's guest OS. |
-| `initrd` | string |  | register: host path of an initrd for that kernel. |
-| `kernel` | string |  | register: host path of a kernel image. |
+| `initrd` | string |  | register: host path of an initrd for that kernel (read as path is). |
+| `kernel` | string |  | register: host path of a kernel image (read as path is). |
 | `name` | string |  | Image name (pull, remove, register, template_create, extract_kernel). |
-| `path` | string |  | register: host path (under your home or /tmp; only read) of a raw or qcow2 disk, or an .ipsw. |
+| `path` | string |  | register: host path (under your home or /tmp, never a home dotfile or dot-directory, ~/Library or VMLAB_HOME; only read) of a raw or qcow2 disk, or an .ipsw. |
 | `vm` | string |  | template_create: the stopped VM to turn into a template. |
 
 **Result**
@@ -283,7 +283,7 @@ Copy files between the host and the guest over SSH. push copies the host path lo
 | `vm` | string, ≤ 64 characters | yes | The VM's id (vm-xxxxxx) or name, as vm_list or vm_create returned it. |
 | `action` | `push` \| `pull` | yes | Direction of the copy. |
 | `remote` | string | yes | Path in the guest. |
-| `local` | string |  | Absolute path on the host (push: required, under your home or /tmp; pull: optional, under /tmp, $TMPDIR or ~/vmlab-files, never a home dotfile or ~/Library). |
+| `local` | string |  | Absolute path on the host (push: required, under your home or /tmp, never a home dotfile or dot-directory such as ~/.ssh, ~/Library or VMLAB_HOME, nor a directory holding one; pull: optional, under /tmp, $TMPDIR or ~/vmlab-files, never a home dotfile or ~/Library). |
 
 **Result**
 
@@ -557,7 +557,7 @@ The `requirements` object of `vm_plan`, `vm_create` and `fleet` (`Requirements` 
 | `guest` | object | yes | The guest to run. |
 | `guest.os` | `macos` \| `linux` | yes | Guest operating system. |
 | `guest.arch` | string | yes | Guest CPU architecture: arm64, x86_64, riscv64, or another QEMU architecture name. Anything but arm64 runs under emulation (qemu-tcg). |
-| `boot` | object |  | How the guest boots; omitted means from its disk. |
+| `boot` | object |  | How the guest boots; omitted means from its disk. Its host paths are absolute and read: under your home, /tmp or $TMPDIR (or VMLAB_HOME's images), never a home dotfile or dot-directory such as ~/.ssh, ~/Library or the rest of VMLAB_HOME. |
 | `boot.binary` | string |  | Host path of a raw image to load (mode binary). |
 | `boot.cmdline` | string |  | Kernel command line (mode kernel), e.g. console=ttyAMA0 root=/dev/vda1. |
 | `boot.dtb` | string |  | Host path of a device tree blob (mode kernel); default QEMU's own. |
@@ -569,7 +569,7 @@ The `requirements` object of `vm_plan`, `vm_create` and `fleet` (`Requirements` 
 | `boot.loadAddress` | string |  | Guest physical address for binary, hex such as 0x40080000 (mode binary). |
 | `boot.mode` | `disk` \| `kernel` \| `firmware` \| `binary`, default `disk` |  | disk boots the image; kernel boots kernel/initrd directly; firmware boots a supplied firmware image; binary loads a raw image at loadAddress and starts the CPU there. |
 | `extra` | object |  | Engine-specific additions. |
-| `extra.qemuArgs` | array of string |  | QEMU arguments after vmlab's own (implies custom_devices, so QEMU), e.g. ["-device", "virtio-rng-pci"]. Devices, drives, objects, chardevs, user-mode netdevs, -cpu (replaces vmlab's; host or max under qemu-hvf), -machine properties (merged into vmlab's; no accel=), -icount, -d, -D, -trace, -numa, -overcommit and more are allowed. Refused: monitors, -serial (vmlab's console; add -chardev plus -device pci-serial), -incoming, -add-fd, -set, -readconfig, exec:/mon:/cmd:, fd/script/helper keys, tap/bridge/vmnet; -plugin, -semihosting and passthrough devices need the owner's allowHostCode. Host paths must be absolute and outside VMLAB_HOME; paths QEMU only reads (-cdrom, romfile=, readonly=on disks) may be under the home or /tmp, paths it writes (-D, -trace file=, chardev path=, writable disks, shared dirs) only under /tmp, $TMPDIR or ~/vmlab-files (never a home dotfile or ~/Library). |
+| `extra.qemuArgs` | array of string |  | QEMU arguments after vmlab's own (implies custom_devices, so QEMU), e.g. ["-device", "virtio-rng-pci"]. Devices, drives, objects, chardevs, user-mode netdevs, -cpu (replaces vmlab's; host or max under qemu-hvf), -machine properties (merged into vmlab's; no accel=), -icount, -d, -D, -trace, -numa, -overcommit and more are allowed. Refused: monitors, -serial (vmlab's console; add -chardev plus -device pci-serial), -incoming, -add-fd, -set, -readconfig, exec:/mon:/cmd:, fd/script/helper keys, tap/bridge/vmnet; -plugin, -semihosting and passthrough devices need the owner's allowHostCode. Host paths must be absolute and outside VMLAB_HOME; paths QEMU only reads (-cdrom, romfile=, readonly=on disks, tftp= roots) may be under the home or /tmp but never a home dotfile or dot-directory (~/.ssh) or ~/Library, paths it writes (-D, -trace file=, chardev path=, writable disks, shared dirs) only under /tmp, $TMPDIR or ~/vmlab-files (never a home dotfile or ~/Library). |
 | `image` | string |  | Image or template name (images list). Omitted: the default image for the guest. "none": a bare machine for boot.mode kernel, binary or firmware (give the file in boot): no disk, no seed, no SSH, and no feature that needs a guest OS or a disk (exec_ssh, exec_agent, cloud_init, gui_desktop, shared_dir, net_port_forward, rosetta, checkpoint_disk, checkpoint_live). |
 | `network` | object |  | Networking; omitted means NAT. |
 | `network.forwards` | array of object |  | Guest ports to make reachable from the host. |

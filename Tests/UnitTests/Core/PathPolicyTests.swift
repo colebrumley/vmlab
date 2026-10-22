@@ -517,6 +517,27 @@ import VMLabCore
     #expect(throws: VMLabError.self) { try images.check(f.vmlab.path + "/vms/x/disk", field: "f") }
   }
 
+  /// A test `VMLAB_HOME` links `~/.vmlab/images`: a kernel there resolves into a home
+  /// dot-directory and still boots, since the images folder is a read root for boot paths.
+  @Test func bootPathsUnderALinkedImagesFolderPass() async throws {
+    let vmlab = FileManager.default.temporaryDirectory.appending(
+      path: "vmlab-linked-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: vmlab, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: vmlab) }
+    let target =
+      FileManager.default.homeDirectoryForCurrentUser.path
+      + "/.vmlab-no-such-\(UUID().uuidString)/images"
+    try FileManager.default.createSymbolicLink(
+      atPath: vmlab.appending(path: "images").path, withDestinationPath: target)
+    let error = await #expect(throws: VMLabError.self) {
+      try await ImageStore(home: vmlab).resolvingBoot(
+        BootSpec(mode: .kernel, kernel: vmlab.path + "/images/k/kernel/vmlinuz"), image: nil)
+    }
+    // Past the policy: refused only because the file does not exist.
+    #expect(error?.message.contains("not a readable file") == true)
+    #expect(error?.data["access"] == nil)
+  }
+
   /// A hard link is a second name for the same file: it cannot be told from a path, so one in
   /// /tmp to a file in ~/.ssh reads (docs/AGENT.md says so). Only the owner can make one there.
   @Test func aHardLinkIsNotDetectable() throws {

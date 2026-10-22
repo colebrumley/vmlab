@@ -148,7 +148,12 @@ only `write` needs the guest running. `vm_computer screenshot` returns
 an `id` to pass as `diffFrom`, so the next one returns only the region that changed.
 
 **Host paths.** vmlab reads host files you name (`vm_file push`, `images register`, `boot`, disk
-images and ROMs in `extra.qemuArgs`) under your home, `/tmp` or `$TMPDIR`. It writes them
+images, ROMs and TFTP roots in `extra.qemuArgs`) under your home, `/tmp` or `$TMPDIR`, never a
+dotfile or dot-directory in the home (`~/.ssh`, `~/.aws`, `~/.config`, a project's `.git`),
+`~/Library` or `VMLAB_HOME`, whatever the case or the symlinks on the way; a directory you push or
+serve is read whole, so the home itself and a folder holding a dot-directory are refused too. A
+read refusal is `invalid_request` naming the path and why: ask the owner to copy the file to
+`/tmp` or to list its folder in `readRoots` in `config.json`; no argument lifts it. It writes them
 (`vm_file pull`'s `local`, a `share.host` directory, which the guest writes too, and QEMU's logs,
 traces, chardev files and writable disks) only under `/tmp`, `$TMPDIR` or `~/vmlab-files` (made
 when first used), or folders the owner lists. A dotfile or dot-directory in the home (`~/.zshrc`,

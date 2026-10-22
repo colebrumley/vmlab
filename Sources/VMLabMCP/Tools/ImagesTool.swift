@@ -23,10 +23,12 @@ extension ToolSpec {
         "confirm": Schema.boolean(
           "Allow a pull or prune the server asks to confirm (it states the size)."),
         "path": Schema.string(
-          "register: host path (under your home or /tmp; only read) of a raw or qcow2 disk, or an "
-            + ".ipsw."),
-        "kernel": Schema.string("register: host path of a kernel image."),
-        "initrd": Schema.string("register: host path of an initrd for that kernel."),
+          "register: host path (under your home or /tmp, never a home dotfile or dot-directory, "
+            + "~/Library or VMLAB_HOME; only read) of a raw or qcow2 disk, or an .ipsw."),
+        "kernel": Schema.string(
+          "register: host path of a kernel image (read as path is)."),
+        "initrd": Schema.string(
+          "register: host path of an initrd for that kernel (read as path is)."),
         "guest": Schema.string(
           "register: the image's guest OS.", enum: GuestSpec.OS.allCases.map(\.rawValue)),
         "arch": Schema.string("register: the image's architecture, e.g. arm64 or x86_64."),

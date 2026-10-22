@@ -4,7 +4,8 @@ import VMLabCore
 /// `vm_file`: copies between the host and a running guest over the VM's SSH channel (R-404),
 /// recursively, with `scp` in SFTP mode. `push` needs `local`; `pull` without `local` lands in
 /// `<vm>/pulled/`. Host paths must be absolute and pass the `PathPolicy` (R-1102): `push` reads
-/// under the user's home, `/tmp` or `$TMPDIR`; `pull` writes only under `/tmp`, `$TMPDIR`,
+/// under the user's home, `/tmp` or `$TMPDIR`, never a home dotfile, `~/Library` or `VMLAB_HOME`
+/// nor a directory holding one (through its symlinks); `pull` writes only under `/tmp`, `$TMPDIR`,
 /// `~/vmlab-files` or the owner's `writeRoots`, never a dotfile in the home, `~/Library` or
 /// `VMLAB_HOME`. A heartbeat is reported while the copy runs.
 struct VMFileHandler: ToolHandler {

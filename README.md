@@ -203,6 +203,7 @@ defaults. No tool can change it.
 ```json
 {
   "writeRoots": ["~/vmlab-files", "~/scratch"],
+  "readRoots": ["~/.cache/kernel-builds"],
   "allowAnyPath": false,
   "allowHostCode": false,
   "ignoreMemoryPressure": false
@@ -211,8 +212,11 @@ defaults. No tool can change it.
 
 - `writeRoots`: folders a tool may write host files in, besides `/tmp` and `$TMPDIR`. Default
   `~/vmlab-files`, created when first used.
+- `readRoots`: folders a tool may read host files in although they are home dot-directories or
+  under `~/Library` (a kernel build tree in `~/.cache`, say). Default none. Everything in a listed
+  folder can end up in a guest; list only what a model may have.
 - `allowAnyPath`: lift the read and write roots. Home dotfiles, `~/Library` and `VMLAB_HOME` are
-  still never written.
+  still never read or written; only `readRoots` opens a folder among them to reads.
 - `allowHostCode`: let `extra.qemuArgs` use options that run host code or pass host hardware
   through (`-plugin`, `-semihosting`, `usb-host`, `vfio-*`).
 - `ignoreMemoryPressure`: as `VMLAB_IGNORE_MEMORY_PRESSURE=1`.
@@ -225,9 +229,16 @@ says.
 vmlab gives a model real machines on your Mac. Know what that means.
 
 - **Host files the model can read.** Tools that take a host path to read (`vm_file push`,
-  `images register`, `boot` files, disk images and ROMs in `extra.qemuArgs`) accept any absolute
-  path under your home, `/tmp` or `$TMPDIR`, dotfiles included. A model can copy `~/.ssh` into a
-  guest. Run vmlab only for a model you would let read your home directory.
+  `images register`, `boot` files, disk images, ROMs and TFTP roots in `extra.qemuArgs`) accept an
+  absolute path under your home, `/tmp` or `$TMPDIR`, and what they read can reach a guest and,
+  through its network, anywhere. So a dotfile or dot-directory anywhere in your home (`~/.ssh`,
+  `~/.aws`, `~/.config`, `~/.netrc`, a project's `.git` or `.env`), `~/Library` (keychains,
+  browser profiles) and `VMLAB_HOME` (other VMs' disks and keys) are refused, even with
+  `allowAnyPath`, unless you list the folder in `readRoots`. The check runs after every symlink is
+  resolved and ignores case; a directory is read whole, so the home itself, or a folder holding a
+  dot-directory or a symlink to one, is refused too. Everything else in your home is readable:
+  run vmlab only for a model you would let read your documents. A hard link to a secret, made
+  outside these folders, cannot be told from the path; vmlab never makes one, and a guest cannot.
 - **Host files the model can write.** `vm_file pull`'s `local`, `vm_memory_dump`'s `local`, a
   shared directory (`share.host`, which the guest writes) and files QEMU writes go only under
   `/tmp`, `$TMPDIR` and `~/vmlab-files` (or your `writeRoots`). A dotfile or dot-directory in your

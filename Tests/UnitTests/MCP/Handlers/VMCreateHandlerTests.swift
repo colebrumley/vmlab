@@ -59,7 +59,14 @@ import VMLabCore
         .filter { !$0.hasPrefix(".") } ?? []
     }
 
-    func cleanUp() { try? FileManager.default.removeItem(at: context.home) }
+    /// A folder beside `VMLAB_HOME` for files a test hands a tool to read: nothing inside
+    /// `VMLAB_HOME` is ever read.
+    var inputs: URL { URL(filePath: context.home.path + "-inputs") }
+
+    func cleanUp() {
+      try? FileManager.default.removeItem(at: context.home)
+      try? FileManager.default.removeItem(at: inputs)
+    }
   }
 
   final class ProgressLog: Sendable {

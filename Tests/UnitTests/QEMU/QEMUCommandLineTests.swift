@@ -433,7 +433,9 @@ extension QEMUCommandLineTests {
     let home = URL(filePath: "/tmp/vqb-\(UInt32.random(in: 0...UInt32.max))")
     try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: home) }
-    let kernel = home.appending(path: "kernel.bin")
+    // Beside VMLAB_HOME: nothing inside it is read.
+    let kernel = URL(filePath: home.path + "-kernel.bin")
+    defer { try? FileManager.default.removeItem(at: kernel) }
     try Data([0]).write(to: kernel)
     let requirements = try Requirements(
       guest: GuestSpec(os: .linux, arch: .arm64), require: [.serial, .gdb],
@@ -461,6 +463,7 @@ extension QEMUCommandLineTests {
     #expect(
       !args.contains { $0.contains("qga0") || $0.contains("disk.qcow2") || $0.contains("seed") })
     #expect(args.contains("ramfb") && args.contains("usb-tablet"))
-    #expect(args.firstIndex(of: "-kernel").map { args[$0 + 1] } == kernel.path)
+    #expect(
+      args.firstIndex(of: "-kernel").map { args[$0 + 1] } == PathPolicy.canonical(kernel.path))
   }
 }

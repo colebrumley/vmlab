@@ -229,7 +229,11 @@ enum Schema {
             "haltAtStart": boolean(
               "Start with the CPU halted so vm_debug sees the first "
                 + "instruction."),
-          ], description: "How the guest boots; omitted means from its disk."),
+          ],
+          description:
+            "How the guest boots; omitted means from its disk. Its host paths are absolute and "
+            + "read: under your home, /tmp or $TMPDIR (or VMLAB_HOME's images), never a home "
+            + "dotfile or dot-directory such as ~/.ssh, ~/Library or the rest of VMLAB_HOME."),
         "extra": object(
           [
             "qemuArgs": array(
@@ -243,7 +247,8 @@ enum Schema {
                 + "-readconfig, exec:/mon:/cmd:, fd/script/helper keys, tap/bridge/vmnet; "
                 + "-plugin, -semihosting and passthrough devices need the owner's allowHostCode. "
                 + "Host paths must be absolute and outside VMLAB_HOME; paths QEMU only reads "
-                + "(-cdrom, romfile=, readonly=on disks) may be under the home or /tmp, paths it "
+                + "(-cdrom, romfile=, readonly=on disks, tftp= roots) may be under the home or "
+                + "/tmp but never a home dotfile or dot-directory (~/.ssh) or ~/Library, paths it "
                 + "writes (-D, -trace file=, chardev path=, writable disks, shared dirs) only "
                 + "under /tmp, $TMPDIR or ~/vmlab-files (never a home dotfile or ~/Library)."
             )

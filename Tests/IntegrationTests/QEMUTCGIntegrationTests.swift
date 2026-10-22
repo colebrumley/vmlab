@@ -33,7 +33,9 @@ import VMLabQEMU
     let lab = try await QEMUBootIntegrationTests.BareServer(tag: "e")
     defer { lab.shutdown() }
     let message = "bare kernel under emulation"
-    let kernel = lab.home.appending(path: "bare-tcg.img")
+    // Beside VMLAB_HOME: nothing inside it is read.
+    let kernel = URL(filePath: lab.home.path + "-bare-tcg.img")
+    defer { try? FileManager.default.removeItem(at: kernel) }
     try BareKernel.write(to: kernel, message: message, then: .halt)
     // W3 has not landed: the kernel boot still names the Debian image, which it ignores, and
     // net_none keeps start from waiting for an SSH server the bare kernel never runs.

@@ -4,7 +4,7 @@ import Foundation
 /// are ignored, and a missing or malformed file means the defaults (the safe ones).
 public struct VMLabConfig: Codable, Sendable, Hashable {
   /// Lets host paths given to tools lie anywhere, not only under the user's home or `/tmp`
-  /// (R-1102).
+  /// (R-1102). It never opens a home dotfile, `~/Library` or `VMLAB_HOME` to a read or a write.
   public var allowAnyPath: Bool
   /// Lets a guest start although the host is under memory pressure or short of available memory
   /// (the owner's escape hatch; `VMLAB_IGNORE_MEMORY_PRESSURE=1` does the same).
@@ -17,15 +17,20 @@ public struct VMLabConfig: Codable, Sendable, Hashable {
   /// (`PathPolicy`); nil means vmlab's own `~/vmlab-files`. A leading `~` is the user's home.
   /// Only the owner sets it; no tool argument can.
   public var writeRoots: [String]?
+  /// Folders a model-named host path may be read in although they are, or lie inside, a home
+  /// dot-directory or `~/Library` (`"~/.cache/kernel-builds"`); one inside `VMLAB_HOME` opens
+  /// itself, nothing around it. A leading `~` is the user's home. Only the owner sets it.
+  public var readRoots: [String]?
 
   public init(
     allowAnyPath: Bool = false, ignoreMemoryPressure: Bool = false, allowHostCode: Bool = false,
-    writeRoots: [String]? = nil
+    writeRoots: [String]? = nil, readRoots: [String]? = nil
   ) {
     self.allowAnyPath = allowAnyPath
     self.ignoreMemoryPressure = ignoreMemoryPressure
     self.allowHostCode = allowHostCode
     self.writeRoots = writeRoots
+    self.readRoots = readRoots
   }
 
   public init(from decoder: any Decoder) throws {
@@ -35,6 +40,7 @@ public struct VMLabConfig: Codable, Sendable, Hashable {
       (try? c.decodeIfPresent(Bool.self, forKey: .ignoreMemoryPressure)) ?? false
     allowHostCode = (try? c.decodeIfPresent(Bool.self, forKey: .allowHostCode)) ?? false
     writeRoots = try? c.decodeIfPresent([String].self, forKey: .writeRoots)
+    readRoots = try? c.decodeIfPresent([String].self, forKey: .readRoots)
   }
 
   public static func url(home: URL) -> URL { home.appending(path: "config.json") }
@@ -53,7 +59,16 @@ public struct VMLabConfig: Codable, Sendable, Hashable {
 /// link's target counted), and is then held to the roots of its access:
 ///
 /// - **read** (`vm_file push`, `images register`, `boot`, the inputs of `extra.qemuArgs`): under
-///   `roots`, the user's home, `/tmp` and `$TMPDIR`.
+///   `roots`, the user's home, `/tmp` and `$TMPDIR`, or the owner's `readRoots`. What is read may
+///   end up in a guest, and from there anywhere, so never, even with `allowAnyPath`: a dotfile or
+///   dot-directory under the user's home (`~/.ssh`, `~/.aws`, `~/.config`, `~/.netrc`, a
+///   project's `.git` or `.env`), `~/Library` (keychains, browser profiles) or `VMLAB_HOME`
+///   (other VMs' disks and keys), unless the owner lists the folder in `readRoots`. A directory
+///   is read whole (`scp -r`, a TFTP root), so everything in it, through its symlinks, must pass
+///   too, and the home itself never does. Two limits: a hard link is a second name for its file
+///   that no path reveals, so one made outside these folders is not caught (only the host's user
+///   can make one); and the check precedes the read, so a guest swapping a symlink into its own
+///   shared folder while that folder is being pushed is not caught either.
 /// - **write** (`vm_file pull`'s and `vm_memory_dump`'s `local`, a share's `host` directory, which the guest writes, and
 ///   the outputs of `extra.qemuArgs`): under `writeRoots`, `/tmp`, `$TMPDIR` and vmlab's own
 ///   `~/vmlab-files` (created on demand), or instead of that folder the `writeRoots` the owner
@@ -62,7 +77,7 @@ public struct VMLabConfig: Codable, Sendable, Hashable {
 ///   `~/Library` (launch agents), or `VMLAB_HOME` (other VMs' sockets and disks). vmlab's own
 ///   writes into its VM directories do not come through here.
 ///
-/// `allowAnyPath` in `config.json` lifts the roots for both, not the write refusals. Paths are
+/// `allowAnyPath` in `config.json` lifts the roots for both, not the refusals. Paths are
 /// compared case-insensitively (APFS is). Without `local`, `vm_memory_dump` writes under the
 /// VM's own `dumps/`, which does not come through here.
 public struct PathPolicy: Sendable, Hashable {
@@ -75,9 +90,9 @@ public struct PathPolicy: Sendable, Hashable {
   public var readRoots: [String] = []
   /// Canonical directories a write path must be under.
   public var writeRoots: [String]
-  /// The canonical user home whose dotfiles and `Library` are never written.
+  /// The canonical user home whose dotfiles and `Library` are never read or written.
   public var userHome: String
-  /// The canonical `VMLAB_HOME`, never written; nil when the policy has none.
+  /// The canonical `VMLAB_HOME`, never read or written; nil when the policy has none.
   public var vmlabHome: String?
   /// vmlab's own write folder (`~/vmlab-files`), created when a write first names it; nil when
   /// the owner listed `writeRoots`.
@@ -110,20 +125,26 @@ public struct PathPolicy: Sendable, Hashable {
   ) -> PathPolicy {
     let config = VMLabConfig.load(home: home)
     let files = userHome.appending(path: filesDirectoryName).path
-    let listed = config.writeRoots?.compactMap { (entry) -> String? in
-      if entry == "~" { return userHome.path }
-      if entry.hasPrefix("~/") { return userHome.path + entry.dropFirst() }
-      return entry.hasPrefix("/") ? entry : nil
+    func expanded(_ entries: [String]?) -> [String]? {
+      entries?.compactMap { (entry) -> String? in
+        if entry == "~" { return userHome.path }
+        if entry.hasPrefix("~/") { return userHome.path + entry.dropFirst() }
+        return entry.hasPrefix("/") ? entry : nil
+      }
     }
-    return PathPolicy(
+    let listed = expanded(config.writeRoots)
+    var policy = PathPolicy(
       allowAnyPath: config.allowAnyPath, roots: [userHome.path, "/tmp", temporaryDirectory.path],
       writeRoots: ["/tmp", temporaryDirectory.path] + (listed ?? [files]),
       userHome: userHome.path, vmlabHome: home.path, filesDirectory: listed == nil ? files : nil,
       configPath: VMLabConfig.url(home: home).path)
+    policy.readRoots = (expanded(config.readRoots) ?? []).map { canonical($0) }
+    return policy
   }
 
   /// The canonical URL of `path`, or `invalid_request` naming `field` when it is relative, lies
-  /// outside the roots of `access`, or is a write to a path that is never written.
+  /// outside the roots of `access`, or is never read or written (`neverRead`, `neverWritten`);
+  /// a directory read must hold nothing that is never read.
   public func check(_ path: String, field: String, access: Access = .read) throws(VMLabError)
     -> URL
   {
@@ -140,16 +161,28 @@ public struct PathPolicy: Sendable, Hashable {
     ]
     switch access {
     case .read:
-      if allowAnyPath || roots.contains(where: { Self.contains($0, resolved) }) {
+      data["allowedRoots"] = .array((roots + readRoots).map { .string($0) })
+      let config = configPath ?? "VMLAB_HOME/config.json"
+      if let why = neverRead(resolved) ?? unreadableEntry(resolved) {
+        throw VMLabError(
+          code: .invalidRequest,
+          message: "Invalid request: \(field): \(shown) is never read: \(why)",
+          hint:
+            "What vmlab reads may reach the guest, so dotfiles and dot-directories in your home, "
+            + "~/Library and VMLAB_HOME are refused even with allowAnyPath. Ask the owner to copy "
+            + "what the guest needs to /tmp, or to list its folder in \"readRoots\": [...] in "
+            + "\(config).",
+          data: data.merging(["reason": .string(why)], uniquingKeysWith: { $1 }))
+      }
+      if allowAnyPath || (roots + readRoots).contains(where: { Self.contains($0, resolved) }) {
         return URL(filePath: resolved)
       }
-      data["allowedRoots"] = .array(roots.map { .string($0) })
       throw VMLabError(
         code: .invalidRequest,
         message: "Invalid request: \(field): \(shown) is outside the user's home and /tmp",
         hint:
           "Use a path under your home directory or /tmp, or set \"allowAnyPath\": true in "
-          + "VMLAB_HOME/config.json to lift the restriction.",
+          + "\(config) to lift the restriction.",
         data: data)
     case .write:
       data["allowedRoots"] = .array(writeRoots.map { .string($0) })
@@ -184,6 +217,54 @@ public struct PathPolicy: Sendable, Hashable {
       }
       return URL(filePath: resolved)
     }
+  }
+
+  /// Why the canonical `path` is never read, or nil: what `neverWritten` refuses, unless a
+  /// `readRoots` folder holds it (one around `VMLAB_HOME` opens nothing inside it), or it is a
+  /// directory holding the user's home or `VMLAB_HOME`.
+  public func neverRead(_ path: String) -> String? {
+    let listed = readRoots.filter { Self.contains($0, path) }
+    if let vmlabHome, Self.contains(vmlabHome, path) {
+      return listed.contains { Self.contains(vmlabHome, $0) } ? nil : neverWritten(path)
+    }
+    if !listed.isEmpty { return nil }
+    if let why = neverWritten(path) { return why }
+    for (inner, what) in [(userHome, "your home"), (vmlabHome, "VMLAB_HOME")] {
+      if let inner, Self.contains(path, inner), Self.isDirectory(path) {
+        return "it is a directory holding \(what) (\(inner)), whose dotfiles are never read"
+      }
+    }
+    return nil
+  }
+
+  /// Why something inside the canonical directory `path` is never read, or nil (also for a file
+  /// or a path that does not exist): every entry, through symlinks to directories, once each.
+  func unreadableEntry(_ path: String) -> String? {
+    var seen: Set<String> = []
+    var pending = [path]
+    while let directory = pending.popLast() {
+      guard Self.isDirectory(directory), seen.insert(Self.fold(directory)).inserted,
+        let names = try? FileManager.default.contentsOfDirectory(atPath: directory)
+      else { continue }
+      for name in names {
+        let entry = Self.canonical(directory + "/" + name)
+        if let why = neverRead(entry) {
+          return "\(directory)/\(name)" + (entry == directory + "/" + name ? "" : " (\(entry))")
+            + " inside it: " + why
+        }
+        if !allowAnyPath, !(roots + readRoots).contains(where: { Self.contains($0, entry) }) {
+          return "\(directory)/\(name) inside it leads to \(entry), outside the readable folders"
+        }
+        pending.append(entry)
+      }
+    }
+    return nil
+  }
+
+  static func isDirectory(_ path: String) -> Bool {
+    var isDirectory: ObjCBool = false
+    return FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory)
+      && isDirectory.boolValue
   }
 
   /// Why the canonical `path` is never written, or nil: it is inside `VMLAB_HOME`, inside

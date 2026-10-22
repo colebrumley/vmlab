@@ -885,7 +885,12 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
 
 - [x] **R-1102 Security review of the tool surface**
   Paths in `vm_file`, `vm_memory_dump`, `images register` and `shared_dir` are canonicalised.
-  A path vmlab or QEMU only reads must be under the user's home, `/tmp` or `$TMPDIR`; a path it
+  A path vmlab or QEMU only reads must be under the user's home, `/tmp` or `$TMPDIR` (or a
+  `readRoots` folder the owner lists in `config.json`) and is never, even with `allowAnyPath`, a
+  dotfile or dot-directory under the home, inside `~/Library` or inside `VMLAB_HOME`, unless a
+  `readRoots` folder holds it; a directory read (a pushed tree, a TFTP root) must hold nothing
+  refused, through its symlinks, so the home itself is refused. Hard links cannot be detected
+  from a path and are not; boot paths are checked again at start. A path it
   writes (`vm_file pull`'s `local`, a share's host directory, which the guest writes, and the
   outputs and writable disks of `extra.qemuArgs`) only under `/tmp`, `$TMPDIR`, `~/vmlab-files`
   (created on demand) or, instead of that folder, the `writeRoots` the owner lists in
@@ -1153,7 +1158,7 @@ six 4 GB guests with the default reserve; macOS 26.6 → VZ save/restore APIs pr
 
 ```
 ~/.vmlab/                      (VMLAB_HOME)
-  config.json                  allowAnyPath, ignoreMemoryPressure, allowHostCode, writeRoots (the only keys read)
+  config.json                  allowAnyPath, ignoreMemoryPressure, allowHostCode, writeRoots, readRoots (the only keys read)
   host-facts.json              slow probe results
   images/<name>/               image.json, disk.(raw|qcow2), kernel/, checksums
   vms/<id>/
@@ -1183,6 +1188,7 @@ six 4 GB guests with the default reserve; macOS 26.6 → VZ save/restore APIs pr
 | Largest CPUs / memory / disk a request may ask for | 256 / 4096 GB / 65536 GB (`ResourceLimits.maxCPUs`, `maxMemoryGB`, `maxDiskGB`; more is `invalid_request`) |
 | Memory reserve kept free on the host | 4 GB (after every guest on the host, from any `VMLAB_HOME`; also against the host's available memory) |
 | Host memory pressure at which a start is refused | `warn` (`kern.memorystatus_vm_pressure_level` ≥ 2); off with `VMLAB_IGNORE_MEMORY_PRESSURE=1` or `ignoreMemoryPressure: true` in `config.json` (owner only) |
+| Host folders a tool may read (`vm_file push`, `images register`, `boot`, QEMU inputs) | the user's home, `/tmp`, `$TMPDIR` (anywhere with `allowAnyPath`); never a home dotfile or dot-directory, `~/Library` or `VMLAB_HOME`, unless inside a `readRoots` folder the owner lists in `config.json` |
 | Host folders a tool may write (`vm_file pull`, `share.host`, QEMU outputs) | `/tmp`, `$TMPDIR`, `~/vmlab-files` (or the owner's `writeRoots` in `config.json` instead of the last); never a home dotfile, `~/Library` or `VMLAB_HOME` |
 | Concurrent starts | 4 |
 | macOS guests running | 2 (Apple's limit) |

@@ -8,6 +8,12 @@ import VMLabCore
 @Suite struct ImagesHandlerTests {
   typealias Fixture = VMCreateHandlerTests.Fixture
 
+  /// `name` in the fixture's inputs folder, outside `VMLAB_HOME`, which is never read.
+  static func outside(_ f: Fixture, _ name: String) -> URL {
+    try? FileManager.default.createDirectory(at: f.inputs, withIntermediateDirectories: true)
+    return f.inputs.appending(path: name)
+  }
+
   static func images(_ arguments: [String: JSONValue], in f: Fixture) async throws(VMLabError)
     -> ToolResult
   {
@@ -67,7 +73,7 @@ import VMLabCore
     let f = try Fixture()
     defer { f.cleanUp() }
     _ = try await Self.images(["action": .string("pull"), "name": .string("tiny-arm64")], in: f)
-    let kernel = f.context.home.appending(path: "Image")
+    let kernel = Self.outside(f, "Image")
     try Data("kernel".utf8).write(to: kernel)
     _ = try await Self.images(
       ["action": .string("register"), "name": .string("spare"), "kernel": .string(kernel.path)],
@@ -111,7 +117,7 @@ import VMLabCore
   @Test func registerADisk() async throws {
     let f = try Fixture()
     defer { f.cleanUp() }
-    let disk = f.context.home.appending(path: "local.raw")
+    let disk = Self.outside(f, "local.raw")
     try Data(repeating: 1, count: 512).write(to: disk)
     let registered = try await Self.images(
       [
@@ -153,7 +159,7 @@ import VMLabCore
   @Test func registerAndExtractKernel() async throws {
     let f = try Fixture()
     defer { f.cleanUp() }
-    let kernel = f.context.home.appending(path: "Image")
+    let kernel = Self.outside(f, "Image")
     try Data("kernel".utf8).write(to: kernel)
     let registered = try await Self.images(
       [

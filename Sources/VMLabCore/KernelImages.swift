@@ -149,7 +149,12 @@ extension ImageStore {
   /// initrd, unless one was given), extracting them from the pulled image the first time; every
   /// host path the mode uses must be a readable file. Both engines start from this (R-305, R-604).
   public func resolvingBoot(_ boot: BootSpec?, image: String?) throws(VMLabError) -> BootSpec {
-    var boot = boot ?? BootSpec()
+    // The model named these paths at create, where they passed the read policy; a symlink may
+    // have moved since, so they pass it again (the image's own kernel below does not).
+    var boot =
+      try boot.map { (given) throws(VMLabError) in
+        try VMManager.checkedBoot(given, home: directory.deletingLastPathComponent())
+      } ?? BootSpec()
     if boot.mode == .kernel, boot.kernel == nil {
       guard let image else {
         throw VMLabError.invalidRequest(

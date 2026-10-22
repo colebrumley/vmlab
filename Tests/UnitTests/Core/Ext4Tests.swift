@@ -397,5 +397,17 @@ struct Ext4Fixture {
       try await store.resolvingBoot(BootSpec(mode: .kernel, kernel: "/no/such/Image"), image: nil)
     }
     #expect(missing?.code == .invalidRequest)
+    // A path checked at create passes the read policy again at start: a folder swapped for a
+    // link into ~/.ssh since is refused before the engine reads it.
+    let swapped = home.appending(path: "swapped")
+    try FileManager.default.createSymbolicLink(
+      atPath: swapped.path,
+      withDestinationPath: FileManager.default.homeDirectoryForCurrentUser.path + "/.ssh")
+    let secret = await #expect(throws: VMLabError.self) {
+      try await store.resolvingBoot(
+        BootSpec(mode: .kernel, kernel: swapped.path + "/id_ed25519"), image: nil)
+    }
+    #expect(secret?.data["field"] == .string("boot.kernel"))
+    #expect(secret?.data["reason"]?.stringValue?.contains(".ssh") == true)
   }
 }

@@ -62,7 +62,12 @@ import VMLabCore
       #expect(error?.data["access"] == .string("write"))
     }
     // Passes the policy and reaches the channel (the fake backend has no SSH).
-    for (action, local) in [("pull", "/tmp/vmlab-pulled"), ("push", "/etc/../tmp")] {
+    let tree = FileManager.default.temporaryDirectory.appending(
+      path: "vmlab-push-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(
+      at: tree.appending(path: "a"), withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: tree) }
+    for (action, local) in [("pull", "/tmp/vmlab-pulled"), ("push", tree.path + "/a/..")] {
       let error = await #expect(throws: VMLabError.self) {
         try await Self.file(
           ["action": .string(action), "remote": .string("/x"), "local": .string(local)], in: f)

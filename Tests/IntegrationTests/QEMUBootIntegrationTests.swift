@@ -67,6 +67,8 @@ import VMLabQEMU
   struct BareServer {
     let home: URL
     let server: StdioMCPClient
+    /// Where the written kernels go: beside the home, since nothing inside it is read.
+    var kernels: URL { URL(filePath: home.path + "-kernels") }
 
     init(tag: String) async throws {
       home = URL(filePath: "/tmp/vmlab-test-\(getpid())-bk\(tag)")
@@ -86,7 +88,9 @@ import VMLabQEMU
       _ name: String, message: String, then: BareKernel.Then, image: String = "debian-13-arm64",
       require: JSONValue = ["serial", "net_none"]
     ) async throws {
-      let kernel = home.appending(path: "\(name).img")
+      // Beside VMLAB_HOME: nothing inside it is read.
+      try FileManager.default.createDirectory(at: kernels, withIntermediateDirectories: true)
+      let kernel = kernels.appending(path: "\(name).img")
       try BareKernel.write(to: kernel, message: message, then: then)
       // With an image the kernel boot ignores it; "none" makes a bare machine (R-1202). Serial
       // and net_none alone land on vz-linux; preferring introspection, which qemu-hvf grants
@@ -117,6 +121,7 @@ import VMLabQEMU
       server.terminate()
       for pid in TwoServersIntegrationTests.qemuPIDs(in: home) { kill(pid, SIGKILL) }
       try? FileManager.default.removeItem(at: home)
+      try? FileManager.default.removeItem(at: kernels)
     }
   }
 

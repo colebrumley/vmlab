@@ -14,8 +14,10 @@ extension ToolSpec {
         "action": Schema.action(["push", "pull"], "Direction of the copy."),
         "remote": Schema.string("Path in the guest."),
         "local": Schema.string(
-          "Absolute path on the host (push: required, under your home or /tmp; pull: optional, "
-            + "under /tmp, $TMPDIR or ~/vmlab-files, never a home dotfile or ~/Library)."),
+          "Absolute path on the host (push: required, under your home or /tmp, never a home "
+            + "dotfile or dot-directory such as ~/.ssh, ~/Library or VMLAB_HOME, nor a directory "
+            + "holding one; pull: optional, under /tmp, $TMPDIR or ~/vmlab-files, never a home "
+            + "dotfile or ~/Library)."),
       ], required: ["vm", "action", "remote"]),
     outputShape: "{ bytes, path }",
     errors: [
