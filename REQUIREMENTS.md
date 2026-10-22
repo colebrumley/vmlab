@@ -126,11 +126,10 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   that imports the backends to register them, which only `vmlab` imports. Test passes on the tree.
 
 - [x] **R-002 Process scripts and skills**
-  Adapt `scripts/board.mjs`, `scripts/tidy.mjs` and `scripts/review.mjs` from the owner's repository
-  at `~/Documents/lib/new-world/scripts/` (same owner, same process), replacing the `npm run` names
-  with `scripts/*.sh` and dropping the public-repo word guard. Copy and adapt the `plan`, `build`,
-  `bughunt` and `retro` skills from `~/Documents/lib/new-world/.claude/skills/` to
-  `.claude/skills/`, replacing `npm run check` with `scripts/check.sh` and the game vocabulary with
+  Adapt `scripts/board.mjs`, `scripts/tidy.mjs` and `scripts/review.mjs` from an earlier project
+  of the owner's that uses the same process, replacing its `npm run` names with `scripts/*.sh`.
+  Copy and adapt the `plan`, `build`, `bughunt` and `retro` skills from the same project to
+  `.claude/skills/`, replacing `npm run check` with `scripts/check.sh` and its vocabulary with
   this project's. `.claude/settings.json` with the `SessionStart` board hook and a `PreToolUse`
   hook that refuses `git commit`, `git switch`, `git stash` and `swift test` in the main checkout
   when `.claude/worktrees/` exists (the worktree rule in CLAUDE.md). `docs/specs/TEMPLATE.md`

@@ -362,4 +362,4 @@ own and merged as one commit. The owner decides what goes in.
 
 ## License
 
-License: see LICENSE.
+vmlab is licensed under the [Apache License, Version 2.0](LICENSE).

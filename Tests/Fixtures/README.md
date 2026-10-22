@@ -12,7 +12,10 @@ Read by unit tests through `#filePath`; never written at test time.
 - `codesign/` — `codesign -d --entitlements -` output
 - `features/` — the feature catalogue snapshot (Appendix A)
 - `gdb/` — GDB target descriptions (`target.xml` and the annexes it includes) and recorded
-  remote-protocol sessions (`->` client packet, `<-` stub reply)
+  remote-protocol sessions (`->` client packet, `<-` stub reply). The `aarch64-*.xml` and other
+  feature files are as served by QEMU's GDB stub, which takes them from GDB's feature
+  descriptions (Free Software Foundation; copying and distribution are permitted with or without
+  modification)
 - `images/` — a two-entry image catalogue, a tiny disk file and the `SHA512SUMS`/`SHA256SUMS`
   that list it
 - `tart/` — `config.json` of a Tart 2.32.1 macOS VM (`macos-tahoe-base`)
