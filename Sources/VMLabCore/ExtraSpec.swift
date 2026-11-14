@@ -404,6 +404,65 @@ public struct ExtraSpec: Codable, Sendable, Hashable {
     }
   }
 
+  /// One argument that opens a way from the guest to the host's network.
+  public struct NetworkUse: Sendable, Hashable {
+    public var index: Int
+    public var what: String
+  }
+
+  /// Block drivers that open a connection from the host.
+  static let networkBlockDrivers: Set<String> = [
+    "nbd", "iscsi", "ssh", "http", "https", "ftp", "ftps", "tftp", "nfs", "gluster", "rbd",
+    "curl", "nvme-io_uring", "vxhs", "sheepdog",
+  ]
+
+  /// The arguments that give the guest a network backend of its own, or a device backed by a
+  /// connection the host makes (they have passed `validate()`): a `-netdev`, `-nic` or `-net`
+  /// other than `none`, `nic`, `hubport` and `user` with `restrict=on` and no `guestfwd`; a
+  /// `-chardev` on an inet
+  /// or UDP socket; a block driver that dials out; any `host=`, `url=` or `://`. An isolated
+  /// network refuses them (`Requirements`), as does the owner's `"allowNAT": false`.
+  public var networkUses: [NetworkUse] {
+    options.compactMap { option -> NetworkUse? in
+      guard let value = option.value, option.rule.value == .options else { return nil }
+      let pairs = Self.pairs(option: option.name, value: value, rule: option.rule)
+      let type = Self.type(of: pairs, rule: option.rule)
+      func use(_ what: String) -> NetworkUse {
+        NetworkUse(index: option.valueIndex, what: "-\(option.name) \(what)")
+      }
+      // QEMU reads the last of a repeated key.
+      func last(_ key: String) -> String? {
+        pairs.last { $0.key.map(Self.lastComponent) == key }?.value
+      }
+      switch option.name {
+      case "netdev", "nic", "net":
+        switch type {
+        case "none", "nic", "hubport": return nil
+        case "user":
+          // A guestfwd reaches a host address whatever `restrict` says.
+          if last("guestfwd") != nil { return use("user with a guestfwd") }
+          return last("restrict") == "on" ? nil : use("user without restrict=on")
+        default: return use(type ?? "with no type")
+        }
+      case "chardev":
+        if type == "udp" { return use("udp") }
+        if type == "socket", last("path") == nil { return use("socket on an inet address") }
+      case "blockdev", "drive":
+        if let driver = last("driver"), Self.networkBlockDrivers.contains(driver) {
+          return use(driver)
+        }
+      default: break
+      }
+      for pair in pairs {
+        guard let key = pair.key.map(Self.lastComponent) else { continue }
+        if ["host", "url", "portal"].contains(key) || pair.value.contains("://") {
+          return use("\(key)=\(pair.value)")
+        }
+      }
+      return nil
+    }
+  }
+
   /// The request's `-cpu` value and its index; it replaces vmlab's own.
   public var cpu: (index: Int, value: String)? {
     options.last { $0.name == "cpu" }.flatMap { o in o.value.map { (o.valueIndex, $0) } }

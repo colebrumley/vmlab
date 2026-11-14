@@ -257,6 +257,25 @@ import VMLabCore
         options: QEMULaunchOptions(firmware: Self.firmware, gdbPort: 1))
     }
 
+    // An isolated guest: the same forwards on a restricted netdev, so nothing of the guest's is
+    // routed to the host (10.0.2.2 is the Mac's loopback) or past it.
+    var isolated = record
+    isolated.network.mode = .isolated
+    let closed = try QEMUCommandLine.arguments(
+      record: isolated, plan: Self.plan(for: isolated), layout: Self.layout(isolated),
+      options: QEMULaunchOptions(
+        firmware: Self.firmware, gdbPort: 41234, sshHostPort: 52222, forwards: forwards))
+    #expect(
+      closed.firstIndex(of: "-netdev").map { closed[$0 + 1] }
+        == "user,id=net0,restrict=on,hostfwd=tcp:127.0.0.1:52222-:22,"
+        + "hostfwd=tcp:127.0.0.1:8080-:80,hostfwd=tcp:127.0.0.1:49152-:443")
+    #expect(throws: VMLabError.self) {
+      try QEMUCommandLine.arguments(
+        record: isolated, plan: Self.plan(for: isolated), layout: Self.layout(isolated),
+        options: QEMULaunchOptions(
+          firmware: Self.firmware, gdbPort: 41234, sshHostPort: 52222, vmnet: true))
+    }
+
     var none = try Self.record("tcg-arm64")
     none.network = NetworkSpec(mode: .disabled)
     let offline = try QEMUCommandLine.arguments(

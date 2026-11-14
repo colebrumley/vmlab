@@ -77,4 +77,62 @@ import VMLabQEMU
     }
     await guest.shutdown()
   }
+
+  /// A TCP listener on the Mac's loopback, as a dev server or a database would be; the kernel
+  /// completes connections from its backlog, so nothing needs to accept.
+  static func loopbackListener() throws -> (fd: Int32, port: Int) {
+    let fd = socket(AF_INET, SOCK_STREAM, 0)
+    try #require(fd >= 0)
+    var addr = sockaddr_in()
+    addr.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+    addr.sin_family = sa_family_t(AF_INET)
+    addr.sin_addr.s_addr = inet_addr("127.0.0.1")
+    var length = socklen_t(MemoryLayout<sockaddr_in>.size)
+    let bound = withUnsafeMutablePointer(to: &addr) {
+      $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+        bind(fd, $0, length) == 0 && listen(fd, 8) == 0 && getsockname(fd, $0, &length) == 0
+      }
+    }
+    try #require(bound)
+    return (fd, Int(UInt16(bigEndian: addr.sin_port)))
+  }
+
+  /// Boots a guest on `mode` and has it connect to `port` on 10.0.2.2, which user-mode
+  /// networking maps to the Mac's loopback; `reached` or `blocked`.
+  static func reachHostLoopback(_ mode: NetworkSpec.Mode, port: Int) async throws -> String {
+    let guest = try await QEMUGuest.boot(
+      features: [.serial, mode == .isolated ? .netIsolated : .netNAT], prepare: Self.ensureKey,
+      network: NetworkSpec(mode: mode))
+    do {
+      #expect(guest.record.network.mode == mode)
+      let sshPort = try #require(guest.record.runtime?.sshPort)
+      let key = guest.machine.layout.directory.appending(path: "id_ed25519")
+      let probe =
+        "timeout 5 bash -c 'exec 3<>/dev/tcp/10.0.2.2/\(port)' 2>/dev/null "
+        + "&& echo reached || echo blocked"
+      let deadline = ContinuousClock.now + .seconds(150)
+      var result: (Int32, String) = (-1, "")
+      while ContinuousClock.now < deadline {
+        result = try await Self.ssh(key, port: sshPort, probe)
+        if result.0 == 0 { break }
+        try await Task.sleep(for: .seconds(3))
+      }
+      #expect(result.0 == 0, "ssh to the \(mode.rawValue) guest: \(result)")
+      await guest.shutdown()
+      return result.1.trimmingCharacters(in: .whitespacesAndNewlines)
+    } catch {
+      await guest.shutdown()
+      throw error
+    }
+  }
+
+  /// Verify (integration): an isolated guest answers SSH on its forward and cannot connect to a
+  /// listener on the Mac's loopback; a NAT guest, the control, can.
+  @Test(.enabled(if: integrationEnabled), .timeLimit(.minutes(8)))
+  func anIsolatedGuestCannotReachTheHostsLoopback() async throws {
+    let listener = try Self.loopbackListener()
+    defer { close(listener.fd) }
+    #expect(try await Self.reachHostLoopback(.isolated, port: listener.port) == "blocked")
+    #expect(try await Self.reachHostLoopback(.nat, port: listener.port) == "reached")
+  }
 }

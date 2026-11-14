@@ -21,11 +21,17 @@ public struct VMLabConfig: Codable, Sendable, Hashable {
   /// dot-directory or `~/Library` (`"~/.cache/kernel-builds"`); one inside `VMLAB_HOME` opens
   /// itself, nothing around it. A leading `~` is the user's home. Only the owner sets it.
   public var readRoots: [String]?
+  /// Whether a guest may have a network that routes out through the host (`network.mode: nat`,
+  /// `net_fast`, a network backend in `extra.qemuArgs`), which also reaches the Mac's loopback
+  /// services and the LAN. False leaves `isolated` and `none`, so no VZ guest gets a NIC. Only
+  /// the owner sets it; no tool argument can.
+  public var allowNAT: Bool
 
   public init(
     allowAnyPath: Bool = false, ignoreMemoryPressure: Bool = false, allowHostCode: Bool = false,
-    writeRoots: [String]? = nil, readRoots: [String]? = nil
+    writeRoots: [String]? = nil, readRoots: [String]? = nil, allowNAT: Bool = true
   ) {
+    self.allowNAT = allowNAT
     self.allowAnyPath = allowAnyPath
     self.ignoreMemoryPressure = ignoreMemoryPressure
     self.allowHostCode = allowHostCode
@@ -41,6 +47,33 @@ public struct VMLabConfig: Codable, Sendable, Hashable {
     allowHostCode = (try? c.decodeIfPresent(Bool.self, forKey: .allowHostCode)) ?? false
     writeRoots = try? c.decodeIfPresent([String].self, forKey: .writeRoots)
     readRoots = try? c.decodeIfPresent([String].self, forKey: .readRoots)
+    allowNAT = (try? c.decodeIfPresent(Bool.self, forKey: .allowNAT)) ?? true
+  }
+
+  /// Throws `invalid_request` when `allowNAT` is false and the guest's network would route out:
+  /// `mode` is neither `isolated` nor `none` (a record without a mode is one made when NAT was
+  /// the default), or `extra` names a network backend of its own.
+  public func checkNetwork(mode: NetworkSpec.Mode?, extra: ExtraSpec?, home: URL)
+    throws(VMLabError)
+  {
+    guard !allowNAT else { return }
+    let hint =
+      "Use network.mode isolated or none, or have the owner set \"allowNAT\": true in "
+      + Self.url(home: home).path + "."
+    if mode != .isolated, mode != .disabled {
+      throw .invalidRequest(
+        field: "network.mode",
+        reason: "the owner of this host allows no guest network that routes out (allowNAT is "
+          + "false)",
+        hint: hint)
+    }
+    if let use = extra?.networkUses.first {
+      throw .invalidRequest(
+        field: "extra.qemuArgs[\(use.index)]",
+        reason: "\(use.what) gives the guest a way to the host's network, which the owner of "
+          + "this host does not allow (allowNAT is false)",
+        hint: hint)
+    }
   }
 
   public static func url(home: URL) -> URL { home.appending(path: "config.json") }

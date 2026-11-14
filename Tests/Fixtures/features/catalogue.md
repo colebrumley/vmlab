@@ -28,3 +28,4 @@
 | `cloud_init` | boot | First-boot provisioning for Linux guests |
 | `many_guests` | compute | More than two instances may run at once |
 | `cpu_emulation` | compute | The guest CPU is emulated in software: deterministic `-icount`, instruction tracing, any CPU model; many times slower than hardware virtualization |
+| `net_isolated` | net | A NIC the host reaches (SSH, port forwards) with no route out: the guest cannot reach the internet, the LAN or the Mac; the default network |

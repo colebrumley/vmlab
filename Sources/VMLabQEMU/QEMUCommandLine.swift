@@ -184,6 +184,11 @@ public enum QEMUCommandLine {
     if record.network.mode == .disabled {
       args += ["-nic", "none"]
     } else if options.vmnet {
+      if record.network.mode == .isolated {
+        throw VMLabError.invalidRequest(
+          field: "network.mode", reason: "net_fast (vmnet) routes the guest out through the host",
+          hint: "Set network.mode to nat for vmnet, or drop net_fast.")
+      }
       if !(options.forwards ?? record.network.forwards).isEmpty {
         throw VMLabError.invalidRequest(
           field: "network.forwards",
@@ -196,6 +201,9 @@ public enum QEMUCommandLine {
       ]
     } else {
       var netdev = "user,id=net0"
+      // An isolated guest: slirp routes nothing of the guest's to the host (10.0.2.2 is the
+      // Mac's loopback otherwise) or beyond it; DHCP and the forwards below still work.
+      if record.network.mode == .isolated { netdev += ",restrict=on" }
       if let ssh = options.sshHostPort { netdev += ",hostfwd=tcp:127.0.0.1:\(ssh)-:22" }
       for forward in options.forwards ?? record.network.forwards {
         guard let host = forward.host else {

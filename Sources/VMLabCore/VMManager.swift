@@ -79,6 +79,17 @@ public actor VMManager {
     // (`require` or `prefer` without a mode) must mean no network device. Requirements already
     // refuse net_none beside mode nat, forwards or a segment.
     if plan.requests(.netNone) { new.network.mode = .disabled }
+    // The default network, or `require: [net_isolated]` without a mode: recorded, since a
+    // record without a mode is NAT (what the default was when older records were made).
+    if plan.requests(.netIsolated) { new.network.mode = .isolated }
+    if new.network.mode == .isolated, plan.profile.isVZ {
+      throw .invalidRequest(
+        field: "network.mode",
+        reason: "\(plan.profile.rawValue) has no isolated network",
+        hint: "Set network.mode to nat or none, or plan the request again for a QEMU profile.")
+    }
+    try VMLabConfig.load(home: store.home).checkNetwork(
+      mode: new.network.mode, extra: new.extra, home: store.home)
     // R-1102: a share's host directory is model-supplied and the guest writes it; it must pass
     // the path policy as a write path and is recorded canonical, so a symlink swapped in later
     // does not move it (backends check it again at start).
@@ -239,6 +250,9 @@ public actor VMManager {
         warnings.append(warning)
         await log(record.id, warning, level: .warning)
       }
+      // The owner may have closed NAT since the VM was made.
+      try VMLabConfig.load(home: store.home).checkNetwork(
+        mode: record.network.mode, extra: record.extra, home: store.home)
       runtime = try await backend.start(record, warnings: &warnings)
       if record.state == .suspended, let started = runtime {
         try await resumeSuspended(record, runtime: started, with: backend)

@@ -43,6 +43,7 @@ column is what the development host recorded (`docs/dev-host-facts.json`, refres
 | `cloud_init` | N | Y | Y | Y |  |
 | `many_guests` | N (limit 2) | Y | Y | Y |  |
 | `cpu_emulation` | N | N | N | Y |  |
+| `net_isolated` | N | N | Y (user-mode networking with restrict=on) | Y (user-mode networking with restrict=on) |  |
 | Guest OS | macOS | Linux | Linux | Linux |  |
 | Arch | arm64 | arm64 | arm64 | x86_64, arm64, riscv64, other |  |
 | Performance tier (1 best) | 1 | 1 | 2 | 4 |  |
@@ -79,6 +80,7 @@ column is what the development host recorded (`docs/dev-host-facts.json`, refres
 - `cloud_init` (boot): First-boot provisioning for Linux guests.
 - `many_guests` (compute): More than two instances may run at once.
 - `cpu_emulation` (compute): The guest CPU is emulated in software: deterministic `-icount`, instruction tracing, any CPU model; many times slower than hardware virtualization.
+- `net_isolated` (net): A NIC the host reaches (SSH, port forwards) with no route out: the guest cannot reach the internet, the LAN or the Mac; the default network.
 
 ## Reasons
 
@@ -112,6 +114,8 @@ column is what the development host recorded (`docs/dev-host-facts.json`, refres
 - `cpu_emulation` on `vz-macos`: the engine runs the guest CPU natively.
 - `cpu_emulation` on `vz-linux`: the engine runs the guest CPU natively.
 - `cpu_emulation` on `qemu-hvf`: the engine runs the guest CPU natively.
+- `net_isolated` on `vz-macos`: Virtualization.framework's NAT cannot be closed to outbound traffic; set network.mode to nat (the guest then reaches the internet, the LAN and the Mac) or to none.
+- `net_isolated` on `vz-linux`: Virtualization.framework's NAT cannot be closed to outbound traffic; set network.mode to nat (the guest then reaches the internet, the LAN and the Mac) or to none.
 
 ## Engine notes
 
