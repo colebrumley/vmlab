@@ -46,6 +46,23 @@ extension ImageStore {
         reason: "\(source.lastPathComponent) is \(detected.rawValue), not \(format.rawValue)",
         hint: "Leave format out to take the format the file's header says.")
     }
+    // The image is copied, converted and booted: nothing its header names may come along (a
+    // backing file is read as part of the disk, whatever the path policy says of it).
+    switch ImageReferences.scan(source) {
+    case .plain: break
+    case .qcow2(let names):
+      if let name = names.all.first {
+        throw VMLabError.invalidRequest(
+          field: "path",
+          reason: "\(source.lastPathComponent) is a qcow2 that depends on another file or "
+            + "address (\(name)), and a registered image must stand alone",
+          hint: "Flatten it first: qemu-img convert -O qcow2 <image> <new image>.")
+      }
+    case .opaque(let what):
+      throw VMLabError.invalidRequest(
+        field: "path", reason: "\(source.lastPathComponent) is \(what), not a raw or qcow2 disk",
+        hint: "Convert it first: qemu-img convert -O qcow2 <image> <new image>.")
+    }
     let needsRaw = guest.arch == .arm64
     let qemuImg =
       detected == .raw || needsRaw ? try locate("qemu-img", fix: "brew install qemu") : nil

@@ -256,6 +256,10 @@ vmlab gives a model real machines on your Mac. Know what that means.
   home, `~/Library` and `VMLAB_HOME` are refused even with `allowAnyPath`. Paths are resolved
   through symlinks before the check, and a pulled file is renamed into place without following a
   symlink planted after it.
+- **Disk images.** A qcow2 can name another file or a network address as its backing store, and
+  QEMU reads it as part of the disk. vmlab reads the header of every image a model names before
+  QEMU or `qemu-img` opens it: `images register` refuses an image that depends on anything else,
+  and an image in `extra.qemuArgs` may only chain to files the read policy allows.
 - **QEMU arguments.** `extra.qemuArgs` is checked against an allowlist of options and keys.
   Monitors, `-serial`, `-incoming`, `-readconfig`, `exec:` and similar are refused; options that run
   host code or reach host hardware need `allowHostCode`.

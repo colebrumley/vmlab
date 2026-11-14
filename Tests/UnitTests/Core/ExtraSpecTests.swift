@@ -211,6 +211,8 @@ import Testing
       ["-chardev", "udp,id=c,host=10.0.0.1,port=53"],
       ["-blockdev", "driver=nbd,node-name=d,server.type=inet,server.host=10.0.0.1,server.port=1"],
       ["-blockdev", "driver=raw,node-name=d,file.driver=iscsi,file.portal=10.0.0.1"],
+      ["-blockdev", "driver=qcow2,node-name=d,file.driver=nbd,file.export=x,read-only=on"],
+      ["-drive", "if=none,id=d,file.driver=https,file.sslverify=off,driver=raw"],
     ] {
       #expect(try uses(reaching) == [1], "\(reaching)")
     }

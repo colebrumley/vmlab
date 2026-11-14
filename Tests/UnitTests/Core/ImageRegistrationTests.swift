@@ -23,7 +23,8 @@ final class RecordingRunner: CommandRunning {
 }
 
 @Suite struct ImageRegistrationTests {
-  static let qcow2Magic = Data([0x51, 0x46, 0x49, 0xFB, 0, 0, 0, 3])
+  /// A qcow2 header that names no other file.
+  static let qcow2Magic = ImageReferencesTests.qcow2()
 
   struct Sandbox {
     let root: URL
@@ -109,6 +110,28 @@ final class RecordingRunner: CommandRunning {
       "x86", disk: disk, guest: GuestSpec(os: .linux, arch: .x86_64))
     #expect(x86.files == ["qcow2": "disk.qcow2"] && x86.format == .qcow2)
     #expect(s.calls.count == 1)
+  }
+
+  /// A registered image is copied, converted and booted, so what its header names would be read
+  /// as part of the disk: a host file outside every read root, or an address.
+  @Test func aQcow2ThatNamesAnotherFileIsRefused() async throws {
+    let s = try Sandbox()
+    defer { s.cleanUp() }
+    let linux = GuestSpec(os: .linux, arch: .arm64)
+    for (name, image) in [
+      ("backed", ImageReferencesTests.qcow2(backing: "/Users/me/.ssh/id_ed25519")),
+      ("remote", ImageReferencesTests.qcow2(backing: "nbd://127.0.0.1:5432/x")),
+      ("split", ImageReferencesTests.qcow2(dataFile: "/tmp/data.raw")),
+      ("broken", Data([0x51, 0x46, 0x49, 0xFB, 0, 0, 0, 3])),
+      ("vmdk", Data("KDMV".utf8) + Data(count: 512)),
+    ] {
+      let disk = try s.file("\(name).img", image)
+      await #expect {
+        _ = try await s.store.registerDisk(name, disk: disk, guest: linux)
+      } throws: { ($0 as? VMLabError)?.data["field"] == .string("path") }
+      #expect(s.store.pulled(name) == nil)
+    }
+    #expect(s.calls.isEmpty)
   }
 
   @Test func refusals() async throws {

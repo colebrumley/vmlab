@@ -410,6 +410,24 @@ public struct ExtraSpec: Codable, Sendable, Hashable {
     public var what: String
   }
 
+  /// Image formats whose files name other files in ways vmlab does not read (`ImageReferences`).
+  public static let opaqueImageFormats: Set<String> = ["vmdk", "qed", "vhdx", "parallels", "vpc"]
+
+  /// The arguments that name such a format (`format=vmdk`, `driver=qed`), with what they name.
+  public var opaqueImageFormatUses: [NetworkUse] {
+    options.compactMap { option -> NetworkUse? in
+      guard let value = option.value, option.rule.value == .options else { return nil }
+      let pairs = Self.pairs(option: option.name, value: value, rule: option.rule)
+      guard
+        let format = pairs.first(where: {
+          ["format", "driver"].contains($0.key.map(Self.lastComponent) ?? "")
+            && Self.opaqueImageFormats.contains($0.value)
+        })?.value
+      else { return nil }
+      return NetworkUse(index: option.valueIndex, what: "-\(option.name) \(format)")
+    }
+  }
+
   /// Block drivers that open a connection from the host.
   static let networkBlockDrivers: Set<String> = [
     "nbd", "iscsi", "ssh", "http", "https", "ftp", "ftps", "tftp", "nfs", "gluster", "rbd",
@@ -448,7 +466,11 @@ public struct ExtraSpec: Codable, Sendable, Hashable {
         if type == "udp" { return use("udp") }
         if type == "socket", last("path") == nil { return use("socket on an inet address") }
       case "blockdev", "drive":
-        if let driver = last("driver"), Self.networkBlockDrivers.contains(driver) {
+        // Every layer's driver: `driver=qcow2,file.driver=nbd`, `backing.file.driver=https`.
+        if let driver = pairs.first(where: {
+          $0.key.map(Self.lastComponent) == "driver"
+            && Self.networkBlockDrivers.contains($0.value)
+        })?.value {
           return use(driver)
         }
       default: break
