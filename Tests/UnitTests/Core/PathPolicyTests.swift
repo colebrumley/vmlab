@@ -535,6 +535,12 @@ import VMLabCore
     #expect(throws: Never.self) {
       try whole.check(f.home.path + "/project", field: "f", wholeTree: false)
     }
+    // A listed folder that holds VMLAB_HOME is pushed without it, not refused whole.
+    let around = try f.policy(config: #"{"readRoots": ["\#(f.tmpdir.path)"]}"#)
+    #expect(throws: Never.self) { try around.check(f.tmpdir.path, field: "f", wholeTree: false) }
+    #expect(throws: VMLabError.self) { try around.check(f.tmpdir.path, field: "f") }
+    #expect(
+      around.readTree(f.tmpdir.path).contains { $0.relative == "vmlab" && $0.refusal != nil })
     let project = try f.policy(config: #"{"readRoots": ["~/project"]}"#)
     #expect(throws: Never.self) { try project.check(f.home.path + "/project/a.txt", field: "f") }
     #expect(throws: VMLabError.self) {

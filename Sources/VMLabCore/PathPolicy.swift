@@ -265,8 +265,10 @@ public struct PathPolicy: Sendable, Hashable {
     }) {
       return "\(name) is named like a credential (keys, tokens, .env files)"
     }
-    // Also under a listed root: listing `~` opens what lies in the home, not the home whole.
+    // The home, also under a listed root: listing `~` opens what lies in it, not the home
+    // whole. A listed folder that holds VMLAB_HOME is read without it (a push skips it).
     for (inner, what) in [(userHome, "your home"), (vmlabHome, "VMLAB_HOME")] {
+      if inner == vmlabHome, inner != userHome, !listed.isEmpty { continue }
       if let inner, Self.contains(path, inner), Self.isDirectory(path) {
         return "it is a directory holding \(what) (\(inner))"
       }
