@@ -530,6 +530,11 @@ import VMLabCore
     #expect(throws: VMLabError.self) {
       try whole.check(f.home.path + "/.ssh/id_ed25519", field: "f")
     }
+    // The home itself is never read, also by a push, which skips entries (wholeTree: false).
+    #expect(throws: VMLabError.self) { try whole.check(f.home.path, field: "f", wholeTree: false) }
+    #expect(throws: Never.self) {
+      try whole.check(f.home.path + "/project", field: "f", wholeTree: false)
+    }
     let project = try f.policy(config: #"{"readRoots": ["~/project"]}"#)
     #expect(throws: Never.self) { try project.check(f.home.path + "/project/a.txt", field: "f") }
     #expect(throws: VMLabError.self) {
