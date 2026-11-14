@@ -212,12 +212,15 @@ defaults. No tool can change it.
 
 - `writeRoots`: folders a tool may write host files in, besides `/tmp` and `$TMPDIR`. Default
   `~/vmlab-files`, created when first used.
-- `readRoots`: folders a tool may read host files in although they are refused otherwise (a
-  kernel build tree in `~/.cache`, a folder whose `.env` the guest needs). Default none. Everything in a listed
-  folder can end up in a guest; list only what a model may have.
+- `readRoots`: the folders (or single files) a tool may read host files in, besides `/tmp`,
+  `$TMPDIR` and the write roots. Default none, so nothing else in your home is read until you
+  list it (`"~/src/my-project"`, a kernel build tree in `~/.cache`). Everything in a listed
+  folder can end up in a guest, except entries named like credentials (`.env`, `id_ed25519`,
+  `*.pem`), which stay refused unless you list that very file; listing `~` does not open the
+  home's dot entries or `~/Library`.
 - `allowAnyPath`: lift the read and write roots. Home dotfiles, `~/Library` and `VMLAB_HOME` are
-  still never written, and they and credential files are never read; only `readRoots` opens a
-  folder among them to reads.
+  still never written, and they and credential files are never read; only a `readRoots` entry
+  naming one of them opens it to reads.
 - `allowHostCode`: let `extra.qemuArgs` use options that run host code or pass host hardware
   through (`-plugin`, `-semihosting`, `usb-host`, `vfio-*`).
 - `ignoreMemoryPressure`: as `VMLAB_IGNORE_MEMORY_PRESSURE=1`.
@@ -231,9 +234,11 @@ vmlab gives a model real machines on your Mac. Know what that means.
 
 - **Host files the model can read.** Tools that take a host path to read (`vm_file push`,
   `images register`, `boot` files, disk images, ROMs and TFTP roots in `extra.qemuArgs`) accept an
-  absolute path under your home, `/tmp` or `$TMPDIR`, and what they read can reach a guest and,
-  through its network, anywhere. So these are refused, even with `allowAnyPath`, unless you list
-  the folder in `readRoots`: a dot entry at the top of your home (`~/.ssh`, `~/.aws`, `~/.config`,
+  absolute path only under `/tmp`, `$TMPDIR`, `~/vmlab-files` (or your `writeRoots`) and the
+  folders you list in `readRoots`. Nothing else in your home is read: what a tool reads can
+  reach a guest and, through its network, anywhere, so you say which folders a model may take
+  from. Within those folders these are still refused, even with `allowAnyPath`, unless a
+  `readRoots` entry names that very file or folder: a dot entry at the top of your home (`~/.ssh`, `~/.aws`, `~/.config`,
   `~/.gnupg`, `~/.netrc`, `~/.zsh_history`), `~/Library` (keychains, browser profiles),
   `VMLAB_HOME` (other VMs' disks and keys), and credential names wherever they appear (`.env`,
   `.env.*`, `.netrc`, `.npmrc`, `.pypirc`, `.git-credentials`, `.dockercfg`, `.pgpass`, `.ssh`,
@@ -242,8 +247,8 @@ vmlab gives a model real machines on your Mac. Know what that means.
   `.clang-format`, `.github`) are read. The check runs after every symlink is resolved and ignores
   case. A pushed directory is copied without its refused entries, which the result lists under
   `skipped`; a directory QEMU reads whole (a TFTP root) must hold none, and the home itself is
-  never read. Everything else in your home is readable: run vmlab only for a model you would let
-  read your documents. A hard link to a secret, made outside these folders, cannot be told from
+  never read. `/tmp` and `$TMPDIR` are readable whole, and other programs keep files there. A
+  hard link to a secret, made outside these folders, cannot be told from
   the path; vmlab never makes one, and a guest cannot. A guest swapping a symlink into its own
   shared folder while that folder is being pushed is not caught either.
 - **Host files the model can write.** `vm_file pull`'s `local`, `vm_memory_dump`'s `local`, a

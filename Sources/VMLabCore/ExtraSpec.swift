@@ -591,7 +591,7 @@ public struct ExtraSpec: Codable, Sendable, Hashable {
       guard value.hasPrefix("/") else {
         throw refuse(
           "\(value) after \(option) is not an absolute host path",
-          "Give an absolute path under your home directory or /tmp.")
+          "Give an absolute path under /tmp, ~/vmlab-files or a folder the owner lists.")
       }
       return
     case .options: break
@@ -651,7 +651,7 @@ public struct ExtraSpec: Codable, Sendable, Hashable {
       for path in paths(option: name, key: key, value: pair.value) where !path.hasPrefix("/") {
         throw refuse(
           "\(key)=\(pair.value) in \(option) is not an absolute host path",
-          "Give an absolute path under your home directory or /tmp.")
+          "Give an absolute path under /tmp, ~/vmlab-files or a folder the owner lists.")
       }
     }
   }

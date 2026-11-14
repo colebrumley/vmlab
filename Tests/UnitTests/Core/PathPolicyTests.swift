@@ -94,11 +94,14 @@ import VMLabCore
     #expect(!VMLabConfig.load(home: vmlabHome).allowAnyPath)
   }
 
-  @Test func defaultRootsAreTheUsersHomeTmpAndTemporaryDirectory() {
+  /// Reads are an allowlist: /tmp, `$TMPDIR` and vmlab's own folder, not the home around it.
+  @Test func defaultRootsAreTmpTheTemporaryDirectoryAndVmlabFiles() {
     let policy = PathPolicy.load(home: URL(filePath: "/nonexistent-vmlab-home"))
     #expect(!policy.allowAnyPath)
     let home = PathPolicy.canonical(FileManager.default.homeDirectoryForCurrentUser.path)
-    #expect(policy.roots.contains(home))
+    #expect(!policy.roots.contains(home))
+    #expect(policy.roots.contains(home + "/vmlab-files"))
+    #expect(policy.roots == policy.writeRoots && policy.readRoots.isEmpty)
     #expect(policy.roots.contains("/private/tmp"))
     #expect(
       policy.roots.contains(PathPolicy.canonical(FileManager.default.temporaryDirectory.path)))
@@ -214,7 +217,8 @@ import VMLabCore
   /// Each row: a path (`H` the home, `T` the temp dir, `V` VMLAB_HOME, `O` outside, `B` the
   /// base), whether a read passes, whether a write passes.
   static let rows: [(String, Bool, Bool)] = [
-    ("H/project/a.txt", true, false),
+    // The home is read only where the owner's readRoots say.
+    ("H/project/a.txt", false, false),
     // The home itself is a directory holding its dotfiles: a read of it is refused.
     ("H", false, false),
     ("H/.zshrc", false, false),
@@ -240,7 +244,7 @@ import VMLabCore
     // Symlinks: the target counts, also for a file that does not exist yet.
     ("T/to-ssh/authorized_keys", false, false),
     ("T/to-outside/x", false, false),
-    ("T/to-project/new/file", true, false),
+    ("T/to-project/new/file", false, false),
     ("T/dangling", false, false),
     // `..` after a link goes up from its target, as the kernel resolves it: H/.zshrc.
     ("T/deep/../../.zshrc", false, false),
@@ -429,56 +433,58 @@ import VMLabCore
   }
 
   /// Each row: a path (`H` home, `T` temp dir, `V` VMLAB_HOME, `O` outside) and whether a read
-  /// passes with the default config, with `allowAnyPath`, and with
-  /// `readRoots: ["~/.cache/kernel-builds"]`.
-  static let rows: [(String, Bool, Bool, Bool)] = [
-    ("H/project/a.txt", true, true, true),
-    ("H/project", true, true, true),  // holds .git, which is read
-    ("H/project/.gitignore", true, true, true),
-    ("H/project/.clang-format", true, true, true),
-    ("H/project/.ENV.local", false, false, false),
-    ("H/src/x/.ssh/id_ed25519", false, false, false),
-    ("H/src/x/.Aws/credentials", false, false, false),
-    ("H/src/x/id_ed25519", false, false, false),
-    ("H/src/x/id_ed25519.pub", true, true, true),
-    ("T/server.KEY", false, false, false),
-    ("T/certs/client.p12", false, false, false),
-    ("T/notes.keynote", true, true, true),
-    ("H/.ssh/id_ed25519", false, false, false),
-    ("H/.SSH/ID_ED25519", false, false, false),
-    ("H/.zshrc", false, false, false),
-    ("H/.netrc", false, false, false),
-    ("H/project/.git/config", true, true, true),
-    ("H/project/.env", false, false, false),
-    ("H/.config/gh/hosts.yml", false, false, false),
-    ("H/Library/Keychains/login.keychain-db", false, false, false),
-    ("H/library/Application Support/Google/Chrome/Default/Cookies", false, false, false),
-    ("H/LIBRARY/x", false, false, false),
-    ("H", false, false, false),
-    ("H/.cache/kernel-builds/Image", false, false, true),
-    ("H/.CACHE/Kernel-Builds/Image", false, false, true),
-    ("H/.cache/other", false, false, false),
-    ("V/vms/x/id_ed25519", false, false, false),
-    ("V/config.json", false, false, false),
-    ("T/to-ssh/id_ed25519", false, false, false),
-    ("T/to-key", false, false, false),
-    ("T/to-builds/Image", false, false, true),
-    ("T/tree", true, true, true),
-    ("T/tree/a/b.txt", true, true, true),
-    ("T/leaky", false, false, false),
-    ("T/leaky/a/b.txt", true, true, true),
-    ("T/cycle", true, true, true),
-    ("O/x", false, true, false),
-    ("/etc/hosts", false, true, false),
+  /// passes with the default config (nothing in the home), with `allowAnyPath`, with
+  /// `readRoots: ["~/.cache/kernel-builds"]`, and with `readRoots: ["~"]` (the whole home, less
+  /// its dot entries, `Library` and credential names).
+  static let rows: [(String, Bool, Bool, Bool, Bool)] = [
+    ("H/project/a.txt", false, true, false, true),
+    ("H/project", false, true, false, true),  // holds .git, which is read
+    ("H/project/.gitignore", false, true, false, true),
+    ("H/project/.clang-format", false, true, false, true),
+    ("H/project/.ENV.local", false, false, false, false),
+    ("H/src/x/.ssh/id_ed25519", false, false, false, false),
+    ("H/src/x/.Aws/credentials", false, false, false, false),
+    ("H/src/x/id_ed25519", false, false, false, false),
+    ("H/src/x/id_ed25519.pub", false, true, false, true),
+    ("T/server.KEY", false, false, false, false),
+    ("T/certs/client.p12", false, false, false, false),
+    ("T/notes.keynote", true, true, true, true),
+    ("H/.ssh/id_ed25519", false, false, false, false),
+    ("H/.SSH/ID_ED25519", false, false, false, false),
+    ("H/.zshrc", false, false, false, false),
+    ("H/.netrc", false, false, false, false),
+    ("H/project/.git/config", false, true, false, true),
+    ("H/project/.env", false, false, false, false),
+    ("H/.config/gh/hosts.yml", false, false, false, false),
+    ("H/Library/Keychains/login.keychain-db", false, false, false, false),
+    ("H/library/Application Support/Google/Chrome/Default/Cookies", false, false, false, false),
+    ("H/LIBRARY/x", false, false, false, false),
+    ("H", false, false, false, false),
+    ("H/.cache/kernel-builds/Image", false, false, true, false),
+    ("H/.CACHE/Kernel-Builds/Image", false, false, true, false),
+    ("H/.cache/other", false, false, false, false),
+    ("V/vms/x/id_ed25519", false, false, false, false),
+    ("V/config.json", false, false, false, false),
+    ("T/to-ssh/id_ed25519", false, false, false, false),
+    ("T/to-key", false, false, false, false),
+    ("T/to-builds/Image", false, false, true, false),
+    ("T/tree", true, true, true, true),
+    ("T/tree/a/b.txt", true, true, true, true),
+    ("T/leaky", false, false, false, false),
+    ("T/leaky/a/b.txt", true, true, true, true),
+    ("T/cycle", true, true, true, true),
+    ("O/x", false, true, false, false),
+    ("/etc/hosts", false, true, false, false),
   ]
 
-  @Test(arguments: rows) func reads(row: (String, Bool, Bool, Bool)) throws {
+  @Test(arguments: rows) func reads(row: (String, Bool, Bool, Bool, Bool)) throws {
     let f = try Self.fixture()
     defer { f.cleanUp() }
     let path = PathPolicyWriteTests().expand(row.0, f)
     for (config, expected) in [
       (#"{}"#, row.1), (#"{"allowAnyPath": true}"#, row.2),
       (#"{"readRoots": ["~/.cache/kernel-builds"]}"#, row.3),
+      (#"{"readRoots": ["~"]}"#, row.4),
     ] {
       let policy = try f.policy(config: config)
       let read = Result { () throws(VMLabError) in try policy.check(path, field: "f") }
@@ -518,8 +524,35 @@ import VMLabCore
   @Test func readRootsOpenOnlyWhatTheyList() throws {
     let f = try Self.fixture()
     defer { f.cleanUp() }
+    // A root vouches for its own name and place, not for the credentials below it.
     let whole = try f.policy(config: #"{"readRoots": ["~"]}"#)
-    #expect(throws: Never.self) { try whole.check(f.home.path + "/.ssh/id_ed25519", field: "f") }
+    #expect(throws: Never.self) { try whole.check(f.home.path + "/project/a.txt", field: "f") }
+    #expect(throws: VMLabError.self) {
+      try whole.check(f.home.path + "/.ssh/id_ed25519", field: "f")
+    }
+    // The home itself is never read, also by a push, which skips entries (wholeTree: false).
+    #expect(throws: VMLabError.self) { try whole.check(f.home.path, field: "f", wholeTree: false) }
+    #expect(throws: Never.self) {
+      try whole.check(f.home.path + "/project", field: "f", wholeTree: false)
+    }
+    // A listed folder that holds VMLAB_HOME is pushed without it, not refused whole.
+    let around = try f.policy(config: #"{"readRoots": ["\#(f.tmpdir.path)"]}"#)
+    #expect(throws: Never.self) { try around.check(f.tmpdir.path, field: "f", wholeTree: false) }
+    #expect(throws: VMLabError.self) { try around.check(f.tmpdir.path, field: "f") }
+    #expect(
+      around.readTree(f.tmpdir.path).contains { $0.relative == "vmlab" && $0.refusal != nil })
+    let project = try f.policy(config: #"{"readRoots": ["~/project"]}"#)
+    #expect(throws: Never.self) { try project.check(f.home.path + "/project/a.txt", field: "f") }
+    #expect(throws: VMLabError.self) {
+      try project.check(f.home.path + "/project/.env", field: "f")
+    }
+    #expect(throws: VMLabError.self) { try project.check(f.home.path + "/other/a.txt", field: "f") }
+    let ssh = try f.policy(config: #"{"readRoots": ["~/.ssh"]}"#)
+    #expect(throws: Never.self) { try ssh.check(f.home.path + "/.ssh/config", field: "f") }
+    #expect(throws: VMLabError.self) { try ssh.check(f.home.path + "/.ssh/id_ed25519", field: "f") }
+    let key = try f.policy(config: #"{"readRoots": ["~/.ssh/id_ed25519"]}"#)
+    #expect(throws: Never.self) { try key.check(f.home.path + "/.ssh/id_ed25519", field: "f") }
+    #expect(throws: VMLabError.self) { try key.check(f.home.path + "/.ssh/config", field: "f") }
     let outer = try f.policy(config: #"{"readRoots": ["\#(f.tmpdir.path)"]}"#)
     #expect(throws: VMLabError.self) { try outer.check(f.vmlab.path + "/config.json", field: "f") }
     var images = try f.policy()
@@ -569,7 +602,8 @@ import VMLabCore
       at: tree.appending(path: "keys"), withDestinationURL: f.home.appending(path: ".ssh"))
     try FileManager.default.createSymbolicLink(
       at: tree.appending(path: "kernel/sub/up"), withDestinationURL: tree.appending(path: "kernel"))
-    let policy = try f.policy()
+    // The owner opened ~/src: its credentials and the link out of it are still not read.
+    let policy = try f.policy(config: #"{"readRoots": ["~/src"]}"#)
     let entries = policy.readTree(tree.path)
     let refused = Set(entries.filter { $0.refusal != nil && !$0.isRepeat }.map(\.relative))
     #expect(refused == [".env", "kernel/.ssh", "keys"])
