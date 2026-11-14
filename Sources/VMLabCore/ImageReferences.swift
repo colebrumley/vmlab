@@ -79,9 +79,10 @@ public enum ImageReferences {
       let backingOffset = u64(8), let backingSize = u32(16)
     else { return nil }
     var found = QCOW2()
+    // An offset past the first cluster is no header QEMU accepts (and no `Int`).
+    guard backingOffset < UInt64(window) else { return nil }
     if backingOffset != 0, backingSize != 0 {
-      guard backingOffset < UInt64(window), let name = string(Int(backingOffset), backingSize)
-      else { return nil }
+      guard let name = string(Int(backingOffset), backingSize) else { return nil }
       found.backing = name
     }
     var position = 72

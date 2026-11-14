@@ -56,6 +56,18 @@ import Testing
     var beyond = Self.qcow2(backing: "x")
     beyond.replaceSubrange(8..<16, with: [0, 0, 0, 0, 0x7F, 0, 0, 0])
     #expect(isOpaque(beyond))
+    // Offsets no file has, with and without a size: refused, not trapped on.
+    for version: UInt32 in [2, 3] {
+      for size: UInt8 in [0, 4] {
+        var huge = Self.qcow2(version: version)
+        huge.replaceSubrange(8..<16, with: [UInt8](repeating: 0xFF, count: 8))
+        huge[19] = size
+        #expect(isOpaque(huge))
+      }
+    }
+    var lengths = Self.qcow2(dataFile: "x")
+    lengths.replaceSubrange(116..<120, with: [0xFF, 0xFF, 0xFF, 0xFF])  // the extension's length
+    #expect(isOpaque(lengths))
     var claimed = Self.qcow2()
     claimed[79] = 0b100  // says it has an external data file, names none
     #expect(isOpaque(claimed))

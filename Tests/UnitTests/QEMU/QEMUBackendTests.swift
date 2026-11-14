@@ -194,7 +194,12 @@ import VMLabCore
     try FileManager.default.createDirectory(at: user, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: root) }
     let policy = PathPolicy(roots: [user.path])
-    let noQemuImg = root.appending(path: "no-qemu-img")
+    // A qemu-img that records being run: a refused header must be refused before it is.
+    let noQemuImg = root.appending(path: "recording-qemu-img")
+    let ran = root.appending(path: "qemu-img-ran")
+    try Data("#!/bin/sh\necho \"$@\" >> '\(ran.path)'\necho '{}'\n".utf8).write(to: noQemuImg)
+    try FileManager.default.setAttributes(
+      [.posixPermissions: 0o755], ofItemAtPath: noQemuImg.path)
     func check(_ name: String, _ image: Data, format: String? = nil, closed: Bool = false)
       throws(VMLabError)
     {
@@ -216,8 +221,12 @@ import VMLabCore
       ("up.qcow2", ImageReferencesTests.qcow2(backing: "../home/vms/x/disk.qcow2")),
       ("deep.qcow2", ImageReferencesTests.qcow2(backing: "nbd.qcow2")),
     ] {
+      try? FileManager.default.removeItem(at: ran)
       #expect(throws: VMLabError.self, "\(name)") { try check(name, image) }
+      #expect(!FileManager.default.fileExists(atPath: ran.path), "\(name): qemu-img ran")
     }
+    try check("plain.qcow2", ImageReferencesTests.qcow2())
+    #expect(FileManager.default.fileExists(atPath: ran.path))
     let vmdk = Data("KDMV".utf8) + Data(count: 512)
     try check("disk.vmdk", vmdk)
     #expect(throws: VMLabError.self) { try check("disk.vmdk", vmdk, closed: true) }
