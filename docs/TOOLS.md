@@ -92,7 +92,7 @@ Manage the guest image cache in ~/.vmlab/images. list shows pulled and available
 | `initrd` | string |  | register: host path of an initrd for that kernel (read as path is). |
 | `kernel` | string |  | register: host path of a kernel image (read as path is). |
 | `name` | string |  | Image name (pull, remove, register, template_create, extract_kernel). |
-| `path` | string |  | register: host path (under your home or /tmp, never a dot entry at the top of the home, ~/Library, VMLAB_HOME or a credential name; only read) of a raw or qcow2 disk, or an .ipsw. |
+| `path` | string |  | register: host path (under /tmp, $TMPDIR, ~/vmlab-files or a folder the owner lists in readRoots; never a dot entry at the top of the home, ~/Library, VMLAB_HOME or a credential name; only read) of a raw or qcow2 disk, or an .ipsw. |
 | `vm` | string |  | template_create: the stopped VM to turn into a template. |
 
 **Result**
@@ -283,7 +283,7 @@ Copy files between the host and the guest over SSH. push copies the host path lo
 | `vm` | string, ≤ 64 characters | yes | The VM's id (vm-xxxxxx) or name, as vm_list or vm_create returned it. |
 | `action` | `push` \| `pull` | yes | Direction of the copy. |
 | `remote` | string | yes | Path in the guest. |
-| `local` | string |  | Absolute path on the host (push: required, under your home or /tmp, never a dot entry at the top of the home such as ~/.ssh, ~/Library, VMLAB_HOME or a credential name such as .env, id_ed25519 or *.pem; a directory is copied without those, listed in skipped; pull: optional, under /tmp, $TMPDIR or ~/vmlab-files, never a home dotfile or ~/Library). |
+| `local` | string |  | Absolute path on the host (push: required, under /tmp, $TMPDIR, ~/vmlab-files or a folder the owner lists in readRoots, the rest of the home is not read; never a dot entry at the top of the home such as ~/.ssh, ~/Library, VMLAB_HOME or a credential name such as .env, id_ed25519 or *.pem; a directory is copied without those, listed in skipped; pull: optional, under /tmp, $TMPDIR or ~/vmlab-files, never a home dotfile or ~/Library). |
 
 **Result**
 
@@ -557,7 +557,7 @@ The `requirements` object of `vm_plan`, `vm_create` and `fleet` (`Requirements` 
 | `guest` | object | yes | The guest to run. |
 | `guest.os` | `macos` \| `linux` | yes | Guest operating system. |
 | `guest.arch` | string | yes | Guest CPU architecture: arm64, x86_64, riscv64, or another QEMU architecture name. Anything but arm64 runs under emulation (qemu-tcg). |
-| `boot` | object |  | How the guest boots; omitted means from its disk. Its host paths are absolute and read: under your home, /tmp or $TMPDIR (or VMLAB_HOME's images), never a dot entry at the top of the home such as ~/.ssh, ~/Library, the rest of VMLAB_HOME or a credential name such as .env or *.pem. |
+| `boot` | object |  | How the guest boots; omitted means from its disk. Its host paths are absolute and read: under /tmp, $TMPDIR, ~/vmlab-files or a folder the owner lists in readRoots (or VMLAB_HOME's images), never a dot entry at the top of the home such as ~/.ssh, ~/Library, the rest of VMLAB_HOME or a credential name such as .env or *.pem. |
 | `boot.binary` | string |  | Host path of a raw image to load (mode binary). |
 | `boot.cmdline` | string |  | Kernel command line (mode kernel), e.g. console=ttyAMA0 root=/dev/vda1. |
 | `boot.dtb` | string |  | Host path of a device tree blob (mode kernel); default QEMU's own. |

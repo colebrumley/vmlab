@@ -14,8 +14,9 @@ extension ToolSpec {
         "action": Schema.action(["push", "pull"], "Direction of the copy."),
         "remote": Schema.string("Path in the guest."),
         "local": Schema.string(
-          "Absolute path on the host (push: required, under your home or /tmp, never a dot "
-            + "entry at the top of the home such as ~/.ssh, ~/Library, VMLAB_HOME or a "
+          "Absolute path on the host (push: required, under /tmp, $TMPDIR, ~/vmlab-files or a "
+            + "folder the owner lists in readRoots, the rest of the home is not read; never a "
+            + "dot entry at the top of the home such as ~/.ssh, ~/Library, VMLAB_HOME or a "
             + "credential name such as .env, id_ed25519 or *.pem; a directory is copied without "
             + "those, listed in skipped; pull: optional, under /tmp, $TMPDIR or ~/vmlab-files, "
             + "never a home dotfile or ~/Library)."),

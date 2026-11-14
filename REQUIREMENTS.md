@@ -885,13 +885,14 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
 
 - [x] **R-1102 Security review of the tool surface**
   Paths in `vm_file`, `vm_memory_dump`, `images register` and `shared_dir` are canonicalised.
-  A path vmlab or QEMU only reads must be under the user's home, `/tmp` or `$TMPDIR` (or a
-  `readRoots` folder the owner lists in `config.json`) and is never, even with `allowAnyPath`, a
+  A path vmlab or QEMU only reads must be under `/tmp`, `$TMPDIR`, a write root (`~/vmlab-files`)
+  or a `readRoots` folder the owner lists in `config.json` (the rest of the user's home is not
+  read) and is never, even with `allowAnyPath`, a
   dot entry at the top of the home, inside `~/Library` or inside `VMLAB_HOME`, nor a path with a
   credential name in it (`.env`, `.env.*`, `.netrc`, `.npmrc`, `.pypirc`, `.git-credentials`,
   `.dockercfg`, `.pgpass`, `.ssh`, `.gnupg`, `.aws`, `.kube`, `.docker`, `id_rsa`, `id_ecdsa`,
-  `id_ed25519`, `id_dsa`, `*.pem`, `*.key`, `*.p12`, `*.pfx`), unless a `readRoots` folder holds
-  it; other nested dot entries (`.git`) are read. A pushed directory is copied without its
+  `id_ed25519`, `id_dsa`, `*.pem`, `*.key`, `*.p12`, `*.pfx`), unless a `readRoots` entry names
+  it (an entry vouches for its own path, not for what lies below it); other nested dot entries (`.git`) are read. A pushed directory is copied without its
   refused entries (through its symlinks), which `vm_file` returns as `skipped`; a directory QEMU
   reads whole (a TFTP root) must hold none, and the home itself is refused. Hard links cannot be
   detected from a path and are not; boot paths are checked again at start. A path it

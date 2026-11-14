@@ -3,8 +3,8 @@ import Foundation
 /// `VMLAB_HOME/config.json` (Appendix F). Only the keys a build reads are decoded; unknown keys
 /// are ignored, and a missing or malformed file means the defaults (the safe ones).
 public struct VMLabConfig: Codable, Sendable, Hashable {
-  /// Lets host paths given to tools lie anywhere, not only under the user's home or `/tmp`
-  /// (R-1102). It never opens a home dotfile, `~/Library` or `VMLAB_HOME` to a read or a write.
+  /// Lets host paths given to tools lie anywhere, not only under `/tmp`, `$TMPDIR` and the
+  /// read and write roots (R-1102). It never opens a home dotfile, `~/Library` or `VMLAB_HOME` to a read or a write.
   public var allowAnyPath: Bool
   /// Lets a guest start although the host is under memory pressure or short of available memory
   /// (the owner's escape hatch; `VMLAB_IGNORE_MEMORY_PRESSURE=1` does the same).
@@ -17,9 +17,12 @@ public struct VMLabConfig: Codable, Sendable, Hashable {
   /// (`PathPolicy`); nil means vmlab's own `~/vmlab-files`. A leading `~` is the user's home.
   /// Only the owner sets it; no tool argument can.
   public var writeRoots: [String]?
-  /// Folders a model-named host path may be read in although they are, or lie inside, a home
-  /// dot-directory or `~/Library` (`"~/.cache/kernel-builds"`); one inside `VMLAB_HOME` opens
-  /// itself, nothing around it. A leading `~` is the user's home. Only the owner sets it.
+  /// The folders (or files) a model-named host path may be read in besides `/tmp`, `$TMPDIR`
+  /// and the write roots: nothing else in the user's home is read. Listing one vouches for its
+  /// own name and place (`"~/.cache/kernel-builds"`, a home dot-directory, is opened), not for
+  /// what is named like a credential below it, nor, when it is the home itself, for the home's
+  /// dot entries and `Library`; one inside `VMLAB_HOME` opens itself, nothing around it. A
+  /// leading `~` is the user's home. Only the owner sets it.
   public var readRoots: [String]?
 
   public init(
@@ -59,13 +62,15 @@ public struct VMLabConfig: Codable, Sendable, Hashable {
 /// link's target counted), and is then held to the roots of its access:
 ///
 /// - **read** (`vm_file push`, `images register`, `boot`, the inputs of `extra.qemuArgs`): under
-///   `roots`, the user's home, `/tmp` and `$TMPDIR`, or the owner's `readRoots`. What is read may
-///   end up in a guest, and from there anywhere, so never, even with `allowAnyPath`: a dot entry
-///   at the top of the user's home (`~/.ssh`, `~/.aws`, `~/.config`, `~/.netrc`), `~/Library`
-///   (keychains, browser profiles), `VMLAB_HOME` (other VMs' disks and keys), or a credential
-///   name anywhere in the path (`credentialNames`: `.env`, `.ssh`, `id_ed25519`, `*.pem`, ...),
-///   unless the owner lists the folder in `readRoots`. A nested dot entry (a project's `.git`,
-///   `.clang-format`) is read. A directory is read whole (a TFTP root), so everything in it,
+///   `roots` (`/tmp`, `$TMPDIR` and the write roots, so vmlab's own `~/vmlab-files`) or the
+///   owner's `readRoots`. The rest of the user's home is not read: what is read may end up in a
+///   guest, and from there anywhere, so the owner says which folders a model may take from.
+///   Never, even with `allowAnyPath` and under a root: a dot entry at the top of the user's home
+///   (`~/.ssh`, `~/.aws`, `~/.config`, `~/.netrc`), `~/Library` (keychains, browser profiles),
+///   `VMLAB_HOME` (other VMs' disks and keys), or a credential name anywhere in the path
+///   (`credentialNames`: `.env`, `.ssh`, `id_ed25519`, `*.pem`, ...). A `readRoots` entry lifts
+///   those for its own path (its name and where it lies), not for what lies below it. A nested
+///   dot entry (a project's `.git`, `.clang-format`) is read. A directory is read whole (a TFTP root), so everything in it,
 ///   through its symlinks, must pass too, and the home itself never does; `vm_file push` instead
 ///   skips the entries refused (`readTree`) and reports them. Two limits: a hard link is a second name for its file
 ///   that no path reveals, so one made outside these folders is not caught (only the host's user
@@ -135,9 +140,10 @@ public struct PathPolicy: Sendable, Hashable {
       }
     }
     let listed = expanded(config.writeRoots)
+    // What vmlab may write it may read back; the rest of the home only where `readRoots` say.
+    let writable = ["/tmp", temporaryDirectory.path] + (listed ?? [files])
     var policy = PathPolicy(
-      allowAnyPath: config.allowAnyPath, roots: [userHome.path, "/tmp", temporaryDirectory.path],
-      writeRoots: ["/tmp", temporaryDirectory.path] + (listed ?? [files]),
+      allowAnyPath: config.allowAnyPath, roots: writable, writeRoots: writable,
       userHome: userHome.path, vmlabHome: home.path, filesDirectory: listed == nil ? files : nil,
       configPath: VMLabConfig.url(home: home).path)
     policy.readRoots = (expanded(config.readRoots) ?? []).map { canonical($0) }
@@ -174,8 +180,8 @@ public struct PathPolicy: Sendable, Hashable {
             "What vmlab reads may reach the guest, so dot entries at the top of your home "
             + "(~/.ssh, ~/.aws, ~/.config), credential files anywhere (.env, id_ed25519, *.pem), "
             + "~/Library and VMLAB_HOME are refused even with allowAnyPath. Ask the owner to copy "
-            + "what the guest needs to /tmp, or to list its folder in \"readRoots\": [...] in "
-            + "\(config).",
+            + "what the guest needs to /tmp, or to list that very file or folder in "
+            + "\"readRoots\": [...] in \(config).",
           data: data.merging(["reason": .string(why)], uniquingKeysWith: { $1 }))
       }
       if allowAnyPath || (roots + readRoots).contains(where: { Self.contains($0, resolved) }) {
@@ -183,10 +189,13 @@ public struct PathPolicy: Sendable, Hashable {
       }
       throw VMLabError(
         code: .invalidRequest,
-        message: "Invalid request: \(field): \(shown) is outside the user's home and /tmp",
+        message:
+          "Invalid request: \(field): \(shown) is outside the folders vmlab may read "
+          + "(\((roots + readRoots).joined(separator: ", ")))",
         hint:
-          "Use a path under your home directory or /tmp, or set \"allowAnyPath\": true in "
-          + "\(config) to lift the restriction.",
+          "Read from one of those folders (copy the file there first), or have the owner add "
+          + "its folder to \"readRoots\": [...] in \(config); \"allowAnyPath\": true there "
+          + "lifts the restriction altogether.",
         data: data)
     case .write:
       data["allowedRoots"] = .array(writeRoots.map { .string($0) })
@@ -224,20 +233,25 @@ public struct PathPolicy: Sendable, Hashable {
   }
 
   /// Why the canonical `path` is never read, or nil. Inside `VMLAB_HOME` (unless a `readRoots`
-  /// folder inside it holds it); otherwise nothing a `readRoots` folder holds; otherwise a dot
-  /// entry at the top of the home (`~/.ssh`, `~/.aws`, `~/.config`, `~/.netrc`), `~/Library`,
-  /// a credential name anywhere in the path (`credentialNames`: `.env`, `.ssh`, `id_ed25519`,
-  /// `*.pem`, ...), or a directory holding the home or `VMLAB_HOME`. A nested dot entry such as
-  /// a project's `.git` or `.clang-format` is read.
+  /// folder inside it holds it); a dot entry at the top of the home (`~/.ssh`, `~/.aws`,
+  /// `~/.config`, `~/.netrc`), `~/Library`, a credential name anywhere in the path
+  /// (`credentialNames`: `.env`, `.ssh`, `id_ed25519`, `*.pem`, ...), or a directory holding the
+  /// home or `VMLAB_HOME`. A nested dot entry such as a project's `.git` or `.clang-format` is
+  /// read. The deepest `readRoots` entry holding the path vouches for its own components: only
+  /// the ones below it are held to the dot-entry, `Library` and credential rules, so
+  /// `"~/.cache/builds"` opens that folder and `"~/project"` still does not open `.env` in it.
   public func neverRead(_ path: String) -> String? {
     let listed = readRoots.filter { Self.contains($0, path) }
-    if let vmlabHome, Self.contains(vmlabHome, path) {
-      return listed.contains { Self.contains(vmlabHome, $0) } ? nil : neverWritten(path)
-    }
-    if !listed.isEmpty { return nil }
-    if Self.contains(userHome, path),
-      let first = path.dropFirst(userHome.count).split(separator: "/").first
+    if let vmlabHome, Self.contains(vmlabHome, path),
+      !listed.contains(where: { Self.contains(vmlabHome, $0) })
     {
+      return neverWritten(path)
+    }
+    let components = path.split(separator: "/")
+    let vouched = listed.map { $0.split(separator: "/").count }.max() ?? 0
+    let homeDepth = userHome.split(separator: "/").count
+    if Self.contains(userHome, path), components.count > homeDepth, homeDepth >= vouched {
+      let first = components[homeDepth]
       if Self.fold(String(first)) == "library" {
         return "it is inside ~/Library (keychains, browser profiles, application settings)"
       }
@@ -246,9 +260,12 @@ public struct PathPolicy: Sendable, Hashable {
           + "settings live (~/.ssh, ~/.aws, ~/.config, ~/.netrc)"
       }
     }
-    if let name = path.split(separator: "/").first(where: { Self.isCredentialName(String($0)) }) {
+    if let name = components.dropFirst(vouched).first(where: {
+      Self.isCredentialName(String($0))
+    }) {
       return "\(name) is named like a credential (keys, tokens, .env files)"
     }
+    if !listed.isEmpty { return nil }
     for (inner, what) in [(userHome, "your home"), (vmlabHome, "VMLAB_HOME")] {
       if let inner, Self.contains(path, inner), Self.isDirectory(path) {
         return "it is a directory holding \(what) (\(inner))"

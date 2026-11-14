@@ -232,7 +232,8 @@ enum Schema {
           ],
           description:
             "How the guest boots; omitted means from its disk. Its host paths are absolute and "
-            + "read: under your home, /tmp or $TMPDIR (or VMLAB_HOME's images), never a dot "
+            + "read: under /tmp, $TMPDIR, ~/vmlab-files or a folder the owner lists in "
+            + "readRoots (or VMLAB_HOME's images), never a dot "
             + "entry at the top of the home such as ~/.ssh, ~/Library, the rest of VMLAB_HOME "
             + "or a credential name such as .env or *.pem."),
         "extra": object(
