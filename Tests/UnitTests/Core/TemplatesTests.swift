@@ -57,7 +57,8 @@ import VMLabCore
     let held = try #require(FileLock.tryLock(f.store.operationLockPath(of: f.record.id)))
     let id = f.record.id
     let images = f.images
-    let attempt = Task { () async throws(VMLabError) -> PulledImage in
+    // Untyped: Swift 6.4's IRGen crashes on a Task closure with typed throws.
+    let attempt = Task { () async throws -> PulledImage in
       try await manager.createTemplate("web", from: id, images: images)
     }
     try await Task.sleep(for: .milliseconds(150))

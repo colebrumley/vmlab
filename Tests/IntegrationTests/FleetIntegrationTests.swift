@@ -86,7 +86,10 @@ extension FleetIntegrationTests {
         (profile == .qemuHVF ? ["serial", "exec_ssh", "introspection"] : ["serial", "exec_ssh"])
           .map(JSONValue.string)),
       "resources": .object(["cpus": .number(2), "memoryGB": .number(2), "diskGB": .number(8)]),
-      "network": .object(["forwards": .array([.object(["guest": .number(8000)])])]),
+      // NAT: the default network is isolated, which no VZ profile has.
+      "network": .object([
+        "mode": .string("nat"), "forwards": .array([.object(["guest": .number(8000)])]),
+      ]),
       "image": .string("debian-13-arm64"),
     ])
   }

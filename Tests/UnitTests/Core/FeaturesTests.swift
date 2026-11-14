@@ -16,7 +16,7 @@ import Testing
   }
 
   @Test func everyFeatureHasASummary() {
-    #expect(Feature.allCases.count == 28)
+    #expect(Feature.allCases.count == 29)
     for feature in Feature.allCases {
       #expect(!feature.summary.isEmpty)
     }
@@ -73,6 +73,27 @@ import Testing
       json: #"{"guest":{"os":"linux","arch":"arm64"},"require":["net_none"],"#
         + #""network":{"mode":"nat"}}"#,
       field: "network.mode"),
+    // An isolated network (the default) beside one that routes out, or a NIC of the request's.
+    .init(
+      json: #"{"guest":{"os":"linux","arch":"arm64"},"require":["net_nat"],"#
+        + #""network":{"mode":"isolated"}}"#,
+      field: "require[0]"),
+    .init(
+      json: #"{"guest":{"os":"linux","arch":"arm64"},"prefer":["net_fast"],"#
+        + #""network":{"mode":"isolated"}}"#,
+      field: "prefer[0]"),
+    .init(
+      json: #"{"guest":{"os":"linux","arch":"arm64"},"require":["net_none"],"#
+        + #""network":{"mode":"isolated"}}"#,
+      field: "network.mode"),
+    .init(
+      json: #"{"guest":{"os":"linux","arch":"arm64"},"#
+        + #""extra":{"qemuArgs":["-netdev","user,id=n1"]}}"#,
+      field: "extra.qemuArgs[1]"),
+    .init(
+      json: #"{"guest":{"os":"linux","arch":"arm64"},"network":{"mode":"isolated"},"#
+        + #""extra":{"qemuArgs":["-chardev","socket,id=c,host=127.0.0.1,port=5432"]}}"#,
+      field: "extra.qemuArgs[1]"),
     .init(
       json: #"{"guest":{"os":"linux","arch":"arm64"},"#
         + #""network":{"mode":"none","forwards":[{"guest":22}]}}"#,
@@ -203,6 +224,33 @@ import Testing
     #expect(try Self.decode(Self.valid[7]).guest.arch == .other("loongarch64"))
   }
 
+  /// A request that does not say which network it wants gets the isolated one; a mode or a
+  /// network feature in `require` or `prefer` says.
+  @Test func theDefaultNetworkIsIsolated() throws {
+    func implied(_ rest: String) throws -> [Feature] {
+      try Self.decode(#"{"guest":{"os":"linux","arch":"arm64"}"# + rest + "}")
+        .impliedFeatures.map(\.feature)
+    }
+    #expect(try implied("") == [.netIsolated])
+    #expect(
+      try implied(#","network":{"forwards":[{"guest":80}],"segment":"lab"}"#)
+        == [.netIsolated, .netPortForward, .netSegment])
+    #expect(try implied(#","network":{"mode":"isolated"}"#) == [.netIsolated])
+    #expect(try implied(#","network":{"mode":"nat"}"#) == [.netNAT])
+    #expect(try implied(#","network":{"mode":"none"}"#) == [.netNone])
+    for feature in ["net_nat", "net_fast", "net_none", "net_isolated"] {
+      #expect(try implied(#","require":["\#(feature)"]"#).isEmpty)
+      #expect(try implied(#","prefer":["\#(feature)"]"#).isEmpty)
+    }
+    // With NAT asked for, a NIC of the request's own is the request's business.
+    _ = try Self.decode(
+      #"{"guest":{"os":"linux","arch":"arm64"},"network":{"mode":"nat"},"#
+        + #""extra":{"qemuArgs":["-netdev","user,id=n1"]}}"#)
+    _ = try Self.decode(
+      #"{"guest":{"os":"linux","arch":"arm64"},"#
+        + #""extra":{"qemuArgs":["-netdev","user,id=n1,restrict=on"]}}"#)
+  }
+
   @Test func bootImpliesItsFeatures() throws {
     let binary = try Self.decode(
       #"{"guest":{"os":"linux","arch":"arm64"},"boot":{"mode":"binary","binary":"/b","loadAddress":"0x1000"}}"#
@@ -220,9 +268,10 @@ import Testing
     let ok = try Self.decode(
       #"{"guest":{"os":"linux","arch":"arm64"},"extra":{"qemuArgs":["-device","virtio-rng-pci"]}}"#)
     #expect(ok.extra?.qemuArgs == ["-device", "virtio-rng-pci"])
-    #expect(ok.impliedFeatures.map(\.feature) == [.customDevices])
+    #expect(ok.impliedFeatures.map(\.feature) == [.netIsolated, .customDevices])
     let empty = try Self.decode(#"{"guest":{"os":"linux","arch":"arm64"},"extra":{}}"#)
-    #expect(empty.extra?.qemuArgs == [] && empty.impliedFeatures.isEmpty)
+    #expect(empty.extra?.qemuArgs == [])
+    #expect(empty.impliedFeatures.map(\.feature) == [.netIsolated])
     for denied in [
       "-qmp", "-serial", "-vnc", "-gdb", "-pidfile", "-daemonize", "-monitor", "--monitor",
       "-gdb=tcp::1", "-s", "-mon", "-qmp-pretty", "-readconfig", "-set", "--run-with",
@@ -256,7 +305,7 @@ import Testing
     let ok = try Self.decode(
       #"{"guest":{"os":"linux","arch":"arm64"},"share":{"host":"/tmp/x","guest":"/srv/x"}}"#)
     #expect(ok.share == SharedDirSpec(host: "/tmp/x", guest: "/srv/x"))
-    #expect(ok.impliedFeatures.map(\.feature) == [.sharedDir])
+    #expect(ok.impliedFeatures.map(\.feature) == [.netIsolated, .sharedDir])
     #expect(
       try Self.decode(#"{"guest":{"os":"linux","arch":"arm64"},"share":{}}"#).share?
         .guestPath == "/mnt/host")

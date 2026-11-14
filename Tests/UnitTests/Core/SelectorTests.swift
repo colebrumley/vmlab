@@ -23,13 +23,20 @@ import Testing
   static let x86 = GuestSpec(os: .linux, arch: .x86_64)
   static let mac = GuestSpec(os: .macos, arch: .arm64)
 
+  /// A request with NAT, so that every profile is in the running: the default network is
+  /// isolated, which no VZ profile has (`theDefaultNetworkKeepsARequestOffVZ`).
+  static let nat = NetworkSpec(mode: .nat)
+
   static func plan(
     _ guest: GuestSpec, require: [Feature] = [], prefer: [Feature] = [],
     host: HostFacts = devHost(), running: Inventory = .empty
   ) throws -> Result<Plan, Unsatisfiable> {
-    select(
-      try Requirements(guest: guest, require: require, prefer: prefer), host: host,
-      running: running)
+    // A request that names its network (net_none, net_fast) keeps its own.
+    let named = (require + prefer).contains(where: NetworkSpec.modeFeatures.contains)
+    return select(
+      try Requirements(
+        guest: guest, require: require, prefer: prefer, network: named ? NetworkSpec() : nat),
+      host: host, running: running)
   }
 
   static func profile(_ result: Result<Plan, Unsatisfiable>) -> Profile? {
@@ -39,6 +46,33 @@ import Testing
   static func failure(_ result: Result<Plan, Unsatisfiable>) -> Unsatisfiable? {
     if case .failure(let u) = result { return u }
     return nil
+  }
+
+  /// The default network is isolated, which only QEMU's user-mode networking can be: a request
+  /// that says nothing lands on qemu-hvf, one that asks for NAT on vz-linux as before, and a
+  /// macOS guest (VZ only) is told to ask for NAT.
+  @Test func theDefaultNetworkKeepsARequestOffVZ() throws {
+    let plain = try select(
+      try Requirements(guest: Self.arm), host: Self.devHost(), running: .empty
+    ).get()
+    #expect(plain.profile == .qemuHVF && plain.requests(.netIsolated))
+    #expect(plain.notes.contains { $0.contains("isolated") && $0.contains("network.mode") })
+    let nat = try select(
+      try Requirements(guest: Self.arm, network: NetworkSpec(mode: .nat)), host: Self.devHost(),
+      running: .empty
+    ).get()
+    #expect(nat.profile == .vzLinux && !nat.requests(.netIsolated))
+    #expect(Self.profile(try Self.plan(Self.arm, require: [.netNAT])) == .vzLinux)
+    let mac = try #require(
+      Self.failure(
+        select(try Requirements(guest: Self.mac), host: Self.devHost(), running: .empty)))
+    #expect(mac.eliminated[.netIsolated] == [.vzMacOS])
+    #expect(mac.reasons[.netIsolated]?[.vzMacOS]?.contains("network.mode") == true)
+    let packages = try select(
+      try Requirements(guest: Self.arm, provision: ProvisionSpec(packages: ["jq"])),
+      host: Self.devHost(), running: .empty
+    ).get()
+    #expect(packages.notes.contains { $0.contains("no mirror") })
   }
 
   /// R-310: qemu-tcg caps the CPUs at 8 and says so; other architectures get a defaults warning.
@@ -394,6 +428,9 @@ import Testing
           resources: ResourceSpec(memoryGB: memory))
       else { continue }
       checked += 1
+      // What the selector requires: `require` and what the request implies (the default
+      // network).
+      let needed = require + request.impliedFeatures.map(\.feature)
       var overrides: [SlowProbe: ProbeResult] = [:]
       for probe in SlowProbe.allCases {
         overrides[probe] = [.yes, .no, .unknown].randomElement(using: &rng)!
@@ -411,7 +448,7 @@ import Testing
         plans += 1
         let caps = Capabilities.capabilities(of: plan.profile, host: host, allowUnverified: allow)
         #expect(Capabilities.supports(guest, on: plan.profile))
-        for feature in require {
+        for feature in needed {
           #expect(caps[feature] == .yes, "\(feature) on \(plan.profile)")
           #expect(plan.grants(feature))
         }
@@ -426,13 +463,13 @@ import Testing
           let candidates = Profile.allCases.filter { Capabilities.supports(guest, on: $0) }
           for profile in candidates {
             let caps = Capabilities.capabilities(of: profile, host: host, allowUnverified: allow)
-            #expect(!require.allSatisfy { caps[$0] == .yes })
+            #expect(!needed.allSatisfy { caps[$0] == .yes })
           }
           #expect(u.suggestions.count <= 5)
           for s in u.suggestions {
             #expect(s.drop.count <= 3)
             let caps = Capabilities.capabilities(of: s.profile, host: host, allowUnverified: allow)
-            #expect(require.filter { !s.drop.contains($0) }.allSatisfy { caps[$0] == .yes })
+            #expect(needed.filter { !s.drop.contains($0) }.allSatisfy { caps[$0] == .yes })
           }
         }
       }
@@ -521,6 +558,7 @@ import Testing
     #expect(plan.profile == .qemuHVF && plan.grants(.gui))
     var plain = bare
     plain.require = []
+    plain.network = Self.nat
     #expect(!(try select(plain, host: Self.devHost(), running: .empty).get().grants(.gui)))
   }
 }

@@ -30,6 +30,7 @@ public enum Feature: String, CaseIterable, Codable, Sendable {
   case cloudInit = "cloud_init"
   case manyGuests = "many_guests"
   case cpuEmulation = "cpu_emulation"
+  case netIsolated = "net_isolated"
 
   /// How the model uses a feature.
   public enum Kind: String, CaseIterable, Codable, Sendable {
@@ -43,7 +44,7 @@ public enum Feature: String, CaseIterable, Codable, Sendable {
       .channel
     case .directKernelBoot, .customFirmware, .customDevices, .haltAtStart, .cloudInit: .boot
     case .checkpointDisk, .checkpointLive, .pause: .state
-    case .netNAT, .netFast, .netSegment, .netPortForward, .netNone: .net
+    case .netNAT, .netFast, .netSegment, .netPortForward, .netNone, .netIsolated: .net
     case .guiAccel, .rosetta, .nestedVirt, .sharedDir, .manyGuests, .cpuEmulation: .compute
     }
   }
@@ -80,6 +81,9 @@ public enum Feature: String, CaseIterable, Codable, Sendable {
     case .cpuEmulation:
       "The guest CPU is emulated in software: deterministic `-icount`, instruction tracing, any "
         + "CPU model; many times slower than hardware virtualization"
+    case .netIsolated:
+      "A NIC the host reaches (SSH, port forwards) with no route out: the guest cannot reach "
+        + "the internet, the LAN or the Mac; the default network"
     }
   }
 
@@ -168,10 +172,17 @@ public struct PortForward: Codable, Sendable, Hashable {
 }
 
 public struct NetworkSpec: Codable, Sendable, Hashable {
+  /// `isolated` is what a request without a mode (and without a network feature that says
+  /// otherwise) gets: a NIC only the host's forwards reach. `nat` routes the guest out through
+  /// the host, which also puts the Mac's own loopback services and the LAN in its reach.
   public enum Mode: String, CaseIterable, Codable, Sendable {
+    case isolated
     case nat
     case disabled = "none"
   }
+
+  /// The features that say which network a request without a `mode` wants.
+  public static let modeFeatures: [Feature] = [.netIsolated, .netNAT, .netFast, .netNone]
 
   public var mode: Mode?
   public var segment: String?
@@ -507,9 +518,14 @@ public struct Requirements: Codable, Sendable, Hashable {
   var impliedFeatures: [(feature: Feature, field: String)] {
     var named: [(feature: Feature, field: String)] = []
     switch network.mode {
+    case .isolated: named.append((.netIsolated, "network.mode"))
     case .nat: named.append((.netNAT, "network.mode"))
     case .disabled: named.append((.netNone, "network.mode"))
-    case nil: break
+    case nil:
+      // The default: isolated, unless `require` or `prefer` names the network itself.
+      if !(require + prefer).contains(where: NetworkSpec.modeFeatures.contains) {
+        named.append((.netIsolated, "network.mode"))
+      }
     }
     if !network.forwards.isEmpty { named.append((.netPortForward, "network.forwards")) }
     if network.segment != nil { named.append((.netSegment, "network.segment")) }
@@ -640,13 +656,31 @@ public struct Requirements: Codable, Sendable, Hashable {
     }
     if let none = named.first(where: { $0.feature == .netNone }),
       let hit = named.first(where: {
-        [.netNAT, .netFast, .netPortForward, .netSegment].contains($0.feature)
+        [.netNAT, .netFast, .netPortForward, .netSegment, .netIsolated].contains($0.feature)
       })
     {
       throw .invalidRequest(
         field: hit.field,
         reason: "\(hit.feature.rawValue) contradicts net_none (\(none.field))",
         hint: "Drop net_none or drop every other network feature.")
+    }
+    if let isolated = named.first(where: { $0.feature == .netIsolated }) {
+      if let hit = named.first(where: { [.netNAT, .netFast].contains($0.feature) }) {
+        throw .invalidRequest(
+          field: hit.field,
+          reason: "\(hit.feature.rawValue) routes the guest out through the host, which "
+            + "contradicts net_isolated (\(isolated.field))",
+          hint: "Set network.mode to nat for outbound network, or drop \(hit.feature.rawValue).")
+      }
+      // A network backend of the request's own would be a way round the isolation.
+      if let use = extra?.networkUses.first {
+        throw .invalidRequest(
+          field: "extra.qemuArgs[\(use.index)]",
+          reason: "\(use.what) gives the guest a way to the host's network, which contradicts "
+            + "the isolated network (\(isolated.field), the default)",
+          hint: "Set network.mode to nat, or for a NIC of your own use -netdev user with "
+            + "restrict=on.")
+      }
     }
   }
 }

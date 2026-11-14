@@ -30,6 +30,8 @@ struct PanicIntegrationTests {
       "require": .array(
         ["serial", "exec_ssh"] + (introspection ? ["introspection"] : []).map(JSONValue.string)),
       "resources": ["cpus": 1, "memoryGB": 1, "diskGB": 8],
+      // NAT: the default network is isolated, which no VZ profile has.
+      "network": ["mode": "nat"],
       "image": "debian-13-arm64",
     ]
     let made = try await server.call(

@@ -173,7 +173,9 @@ M3 or newer, so the `nested_virt` feature is absent on this host and its tests a
   image: String?, boot: BootSpec? }` (Appendix C `vm_create` input). Contradictions inside a request
   are rejected at decode time with `invalid_request` (Appendix D): macOS with `direct_kernel_boot`
   or `custom_firmware` or `serial`; `rosetta` with a non-Linux guest or non-arm64 arch;
-  `net_none` with `net_nat`, `net_fast`, `net_port_forward` or `net_segment`.
+  `net_none` with `net_nat`, `net_fast`, `net_port_forward` or `net_segment`; `net_isolated`
+  (implied by `network.mode: isolated` and by a request that names no network at all) with
+  `net_nat`, `net_fast`, `net_none` or a network backend in `extra.qemuArgs`.
   **Verify:** snapshot test of the catalogue; a table-driven test of every contradiction above and
   of ten valid requests that decode.
 
@@ -997,6 +999,7 @@ starts), state (saving and restoring), net, compute.
 | `cloud_init` | boot | First-boot provisioning for Linux guests |
 | `many_guests` | compute | More than two instances may run at once |
 | `cpu_emulation` | compute | The guest CPU is emulated in software: deterministic `-icount`, instruction tracing, any CPU model; many times slower than hardware virtualization |
+| `net_isolated` | net | A NIC the host reaches (SSH, port forwards) with no route out: the guest cannot reach the internet, the LAN or the Mac; the default network |
 
 ## Appendix B — Capability matrix
 
@@ -1036,6 +1039,7 @@ answered is listed under the table. `Capabilities.swift` is the authority (C7) a
 | `cloud_init` | N | Y | Y | Y |
 | `many_guests` | N (limit 2) | Y | Y | Y |
 | `cpu_emulation` | N | N | N | Y |
+| `net_isolated` | N | N | Y (user-mode networking with restrict=on) | Y (same) |
 | Guest OS | macOS | Linux | Linux | Linux |
 | Arch | arm64 | arm64 | arm64 | x86_64, arm64, riscv64, other |
 | Performance tier (1 best) | 1 | 1 | 2 | 4 |
@@ -1100,6 +1104,13 @@ result also carries `vm` (id and name) where a VM is involved and `warnings: [St
 }
 ```
 
+`network.mode` is `isolated`, `nat` or `none`. Without one, and without `net_nat`, `net_fast`,
+`net_none` or `net_isolated` in `require` or `prefer`, the request implies `net_isolated`: a
+user-mode NIC with `restrict=on`, which the host's forwards reach and which routes nothing of the
+guest's to the host, the LAN or the internet. `nat` (and `net_fast`, and a network backend in
+`extra.qemuArgs`) routes out, and is refused when the owner's `config.json` says
+`"allowNAT": false`.
+
 `extra.qemuArgs` takes the QEMU options R-306 lists (`-cpu` replaces vmlab's, `-machine`
 properties merge into vmlab's) and refuses the rest with `invalid_request` naming the argument;
 `-plugin`, `-semihosting` and passthrough devices need the owner's `allowHostCode`.
@@ -1162,7 +1173,7 @@ six 4 GB guests with the default reserve; macOS 26.6 → VZ save/restore APIs pr
 
 ```
 ~/.vmlab/                      (VMLAB_HOME)
-  config.json                  allowAnyPath, ignoreMemoryPressure, allowHostCode, writeRoots, readRoots (the only keys read)
+  config.json                  allowAnyPath, ignoreMemoryPressure, allowHostCode, writeRoots, readRoots, allowNAT (the only keys read)
   host-facts.json              slow probe results
   images/<name>/               image.json, disk.(raw|qcow2), kernel/, checksums
   vms/<id>/
@@ -1247,11 +1258,15 @@ driver to mount the partition, so `VMLabCore/Ext4.swift` reads GPT and ext4 read
    the model learns what else it has), `preferredDenied`, `unverified`, `notes` (TCG speed warning,
    GUI install time, host-reachable address instead of a forwarded port on VZ).
 
-Worked examples (each is a unit test in R-103; host = dev host, all probes `yes`, no root):
+Worked examples (each is a unit test in R-103; host = dev host, all probes `yes`, no root; each
+request has `network.mode: nat` unless it names its network or the row says "default network",
+since the default is `isolated`, which only the QEMU profiles have):
 
 | Request | Result |
 |---|---|
 | linux arm64, require [] | `vz-linux` |
+| linux arm64, require [], default network | `qemu-hvf` (`net_isolated` is implied, and no VZ profile has it) |
+| macos, require [], default network | unsatisfiable; eliminated: net_isolated → vz-macos (set network.mode to nat or none) |
 | linux arm64, require [serial, gdb] | `qemu-hvf` |
 | linux arm64, require [gdb, checkpoint_live], probe `qemu_hvf_live_snapshot` = no | `qemu-tcg` (notes: slow) |
 | linux arm64, require [serial, rosetta] | `vz-linux` |

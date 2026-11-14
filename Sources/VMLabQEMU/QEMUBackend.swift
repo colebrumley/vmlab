@@ -387,7 +387,9 @@ public final class QEMUBackend: Backend {
       // qemu-img per named image: off the cooperative pool.
       let (home, qemuImg) = (store.home, try locate().qemuImg)
       try await OffPool.run("vmlab.qemu-img") { () throws(VMLabError) in
-        try Self.checkImageChains(extra, policy: policy, vmlabHome: home, qemuImg: qemuImg)
+        try Self.checkImageChains(
+          extra, policy: policy, vmlabHome: home, qemuImg: qemuImg,
+          closed: record.network.mode == .isolated || !VMLabConfig.load(home: home).allowNAT)
       }
     }
     if seed, base != nil, let image = record.image,
@@ -422,14 +424,59 @@ public final class QEMUBackend: Backend {
   /// (a backing file, an external data file), which QEMU opens too: every file in its chain
   /// (`qemu-img info --backing-chain`) passes the same path policy. A file qemu-img cannot read
   /// is left to QEMU to refuse.
+  ///
+  /// qemu-img opens what a header names in order to describe it, and a name may be an address
+  /// (`nbd://`, `http://`, `json:`): so each image's header is first read here
+  /// (`ImageReferences`), link by link, and a name that is not a file path is refused before
+  /// anything opens it. `closed` (an isolated network, or the owner's `allowNAT` off) also
+  /// refuses the formats whose references vmlab does not read.
   static func checkImageChains(
-    _ extra: ExtraSpec, policy: PathPolicy, vmlabHome: URL, qemuImg: URL
+    _ extra: ExtraSpec, policy: PathPolicy, vmlabHome: URL, qemuImg: URL, closed: Bool = false
   ) throws(VMLabError) {
+    if closed, let use = extra.opaqueImageFormatUses.first {
+      throw .invalidRequest(
+        field: "extra.qemuArgs[\(use.index)]",
+        reason: "\(use.what) is an image format that can name other files and addresses, which "
+          + "vmlab cannot check for a guest without outbound network",
+        hint: "Convert the image to qcow2 or raw (qemu-img convert), or set network.mode to nat.")
+    }
     for hostPath in extra.hostPaths
     where ["file", "filename"].contains(hostPath.key.split(separator: ".").last ?? "") {
       var isDirectory: ObjCBool = false
       guard FileManager.default.fileExists(atPath: hostPath.path, isDirectory: &isDirectory),
-        !isDirectory.boolValue,
+        !isDirectory.boolValue
+      else { continue }
+      let field = "extra.qemuArgs[\(hostPath.index)]"
+      var pending = [(hostPath.path, 0)]
+      while let (path, depth) = pending.popLast() {
+        switch ImageReferences.scan(URL(filePath: path)) {
+        case .plain: break
+        case .opaque(let what):
+          if closed {
+            throw .invalidRequest(
+              field: field,
+              reason: "\(path) is \(what), which can name other files and addresses that vmlab "
+                + "cannot check for a guest without outbound network",
+              hint: "Convert it to qcow2 or raw (qemu-img convert), or set network.mode to nat.")
+          }
+        case .qcow2(let names):
+          for name in names.all {
+            guard ImageReferences.isLocalPath(name), depth < 16 else {
+              throw .invalidRequest(
+                field: field,
+                reason: "\(path) names \(name) in its header, which is not a file path "
+                  + "(or its chain is longer than 16 images)",
+                hint: "Flatten the image (qemu-img convert), or name a network disk in the "
+                  + "arguments themselves with network.mode nat.")
+            }
+            let resolved = try ExtraSpec.checkHostPath(
+              ImageReferences.resolve(name, from: URL(filePath: path)), field: field,
+              policy: policy, vmlabHome: vmlabHome, access: .read)
+            pending.append((resolved, depth + 1))
+          }
+        }
+      }
+      guard
         let output = try? info(URL(filePath: hostPath.path), qemuImg: qemuImg, ["--backing-chain"]),
         let value = try? JSONDecoder().decode(JSONValue.self, from: Data(output.utf8))
       else { continue }

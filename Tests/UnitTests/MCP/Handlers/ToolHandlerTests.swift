@@ -127,6 +127,29 @@ import VMLabMCP
     #expect(plan.grants(.serial) && plan.grants(.gdb))
   }
 
+  /// The owner's `"allowNAT": false` is a result too (R-204), with vm_create's refusal.
+  @Test func aPlanTheOwnerRefusesIsAResult() async throws {
+    let context = try Self.context()
+    defer { try? FileManager.default.removeItem(at: context.home) }
+    try Data(#"{"allowNAT": false}"#.utf8).write(to: VMLabConfig.url(home: context.home))
+    func plan(_ mode: String) async throws -> JSONValue {
+      try await Self.call(
+        "vm_plan",
+        .object([
+          "requirements": .object([
+            "guest": .object(["os": .string("linux"), "arch": .string("arm64")]),
+            "network": .object(["mode": .string(mode)]),
+          ]), "allowUnverified": .bool(true),
+        ]), in: context
+      ).value
+    }
+    let nat = try await plan("nat")
+    #expect(nat["satisfiable"] == .bool(false) && nat["code"] == .string("invalid_request"))
+    #expect(nat["field"] == .string("network.mode"))
+    #expect(nat["hint"]?.stringValue?.contains("allowNAT") == true)
+    #expect(try await plan("isolated")["satisfiable"] == .bool(true))
+  }
+
   @Test func impossiblePlanIsAResultWithSuggestions() async throws {
     let context = try Self.context()
     defer { try? FileManager.default.removeItem(at: context.home) }

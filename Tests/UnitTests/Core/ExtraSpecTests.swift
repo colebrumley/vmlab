@@ -190,6 +190,74 @@ import Testing
     }
   }
 
+  /// What an isolated network refuses: every way `extra.qemuArgs` has to the host's network.
+  @Test func networkUsesAreFound() throws {
+    func uses(_ args: [String]) throws -> [Int] {
+      let extra = ExtraSpec(qemuArgs: args)
+      try extra.validate()
+      return extra.networkUses.map(\.index)
+    }
+    for reaching in [
+      ["-netdev", "user,id=n1"],
+      ["-netdev", "user,id=n1,restrict=off"],
+      ["-netdev", "user,id=n1,restrict=on,restrict=off"],
+      ["-netdev", "user,id=n1,restrict=on,guestfwd=tcp:10.0.2.100:80-tcp:127.0.0.1:5432"],
+      ["-nic", "user,model=virtio-net-pci"],
+      ["-net", "user"],
+      ["-netdev", "socket,id=n1,connect=127.0.0.1:5432"],
+      ["-netdev", "stream,id=n1,addr.type=inet,addr.host=127.0.0.1,addr.port=5432"],
+      ["-netdev", "dgram,id=n1,remote.type=inet,remote.host=10.0.0.1,remote.port=53"],
+      ["-chardev", "socket,id=c,host=127.0.0.1,port=5432"],
+      ["-chardev", "udp,id=c,host=10.0.0.1,port=53"],
+      ["-blockdev", "driver=nbd,node-name=d,server.type=inet,server.host=10.0.0.1,server.port=1"],
+      ["-blockdev", "driver=raw,node-name=d,file.driver=iscsi,file.portal=10.0.0.1"],
+      ["-blockdev", "driver=qcow2,node-name=d,file.driver=nbd,file.export=x,read-only=on"],
+      ["-drive", "if=none,id=d,file.driver=https,file.sslverify=off,driver=raw"],
+    ] {
+      #expect(try uses(reaching) == [1], "\(reaching)")
+    }
+    for closed in [
+      ["-netdev", "user,id=n1,restrict=on"],
+      ["-nic", "none"],
+      ["-net", "nic,model=e1000"],
+      ["-netdev", "hubport,id=h,hubid=0"],
+      ["-chardev", "socket,id=c,path=/tmp/c.sock,server=on,wait=off"],
+      ["-chardev", "null,id=c"],
+      ["-device", "virtio-net-pci,netdev=n1"],
+      ["-cpu", "host"],
+    ] {
+      #expect(try uses(closed).isEmpty, "\(closed)")
+    }
+  }
+
+  /// The owner's `allowNAT` (on unless the config turns it off) closes every network that
+  /// routes out: a mode other than isolated and none, and a network backend in the arguments.
+  @Test func allowNATIsTheOwnersSwitch() throws {
+    let sandbox = try Sandbox()
+    defer { sandbox.remove() }
+    let home = sandbox.vmlabHome
+    let nic = ExtraSpec(qemuArgs: ["-netdev", "user,id=n1"])
+    #expect(VMLabConfig.load(home: home).allowNAT)
+    try VMLabConfig.load(home: home).checkNetwork(mode: .nat, extra: nic, home: home)
+    try Data(#"{"allowNAT": false}"#.utf8).write(to: VMLabConfig.url(home: home))
+    let closed = VMLabConfig.load(home: home)
+    #expect(!closed.allowNAT)
+    try closed.checkNetwork(mode: .isolated, extra: nil, home: home)
+    try closed.checkNetwork(mode: .disabled, extra: nil, home: home)
+    for mode in [NetworkSpec.Mode.nat, nil] {
+      #expect {
+        try closed.checkNetwork(mode: mode, extra: nil, home: home)
+      } throws: { error in
+        let error = error as? VMLabError
+        return error?.code == .invalidRequest && error?.data["field"] == .string("network.mode")
+          && error?.hint.contains("allowNAT") == true
+      }
+    }
+    #expect {
+      try closed.checkNetwork(mode: .disabled, extra: nic, home: home)
+    } throws: { ($0 as? VMLabError)?.data["field"] == .string("extra.qemuArgs[1]") }
+  }
+
   /// The owner's toggle lives in VMLAB_HOME/config.json and defaults off.
   @Test func allowHostCodeIsReadFromTheConfig() throws {
     let sandbox = try Sandbox()

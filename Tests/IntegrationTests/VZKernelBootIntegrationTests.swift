@@ -104,6 +104,8 @@ import VMLabVZ
       "guest": .object(["os": .string("linux"), "arch": .string("arm64")]),
       "require": .array([.string("serial")]),
       "resources": .object(["cpus": .number(2), "memoryGB": .number(2)]),
+      // NAT: the default network is isolated, which no VZ profile has.
+      "network": .object(["mode": .string("nat")]),
       "image": .string("none"),
       "boot": .object([
         "mode": .string("kernel"), "kernel": .string(kernel.kernel.path),

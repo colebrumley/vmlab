@@ -206,6 +206,7 @@ defaults. No tool can change it.
   "readRoots": ["~/.cache/kernel-builds"],
   "allowAnyPath": false,
   "allowHostCode": false,
+  "allowNAT": true,
   "ignoreMemoryPressure": false
 }
 ```
@@ -220,6 +221,9 @@ defaults. No tool can change it.
   folder among them to reads.
 - `allowHostCode`: let `extra.qemuArgs` use options that run host code or pass host hardware
   through (`-plugin`, `-semihosting`, `usb-host`, `vfio-*`).
+- `allowNAT`: let a guest have a network that routes out through the Mac (`network.mode: nat`,
+  `net_fast`, a network backend in `extra.qemuArgs`). Set it to `false` and every guest is
+  `isolated` or has no NIC; VZ guests, which cannot be isolated, then get no network at all.
 - `ignoreMemoryPressure`: as `VMLAB_IGNORE_MEMORY_PRESSURE=1`.
 
 Slow-probe answers are host facts and live in `~/.vmlab/host-facts.json` whatever `VMLAB_HOME`
@@ -252,6 +256,10 @@ vmlab gives a model real machines on your Mac. Know what that means.
   home, `~/Library` and `VMLAB_HOME` are refused even with `allowAnyPath`. Paths are resolved
   through symlinks before the check, and a pulled file is renamed into place without following a
   symlink planted after it.
+- **Disk images.** A qcow2 can name another file or a network address as its backing store, and
+  QEMU reads it as part of the disk. vmlab reads the header of every image a model names before
+  QEMU or `qemu-img` opens it: `images register` refuses an image that depends on anything else,
+  and an image in `extra.qemuArgs` may only chain to files the read policy allows.
 - **QEMU arguments.** `extra.qemuArgs` is checked against an allowlist of options and keys.
   Monitors, `-serial`, `-incoming`, `-readconfig`, `exec:` and similar are refused; options that run
   host code or reach host hardware need `allowHostCode`.
@@ -264,7 +272,17 @@ vmlab gives a model real machines on your Mac. Know what that means.
 - **Guest output is untrusted.** Framebuffer sizes, VNC updates, ext4 images read on the host and
   serial patterns are bounded; a regular expression on serial output runs in a helper process
   that is killed when the wait ends.
-- **Networks.** Guests get NAT to the internet by default (`network.mode: none` for no NIC).
+- **Networks.** A guest's network is `isolated` unless the request asks otherwise: the Mac
+  reaches the guest over forwarded loopback ports (SSH, `forwards`), and nothing the guest sends
+  is routed to the Mac, the LAN or the internet (QEMU's user-mode networking with `restrict=on`;
+  an integration test connects from a guest to a listener on the Mac's loopback and expects it
+  to fail). Under an isolated network `extra.qemuArgs` may not add a network backend, an inet
+  socket or a block driver that dials out. `network.mode: nat` routes the guest out through the
+  Mac: it then reaches the internet, your LAN, and every service listening on the Mac's own
+  `127.0.0.1` (QEMU maps the guest's gateway `10.0.2.2` to it) or, on a VZ profile, on any
+  address the Mac's services bind. The model can ask for `nat` unless you set `"allowNAT": false`.
+  Apple's Virtualization.framework has no isolated mode, so the VZ profiles (every macOS guest
+  among them) run only with `nat` or `none`. `network.mode: none` is no NIC at all.
   Segments are host-local and carry no host connectivity. QEMU port forwards bind `127.0.0.1`
   only; a VZ guest's NAT address is reachable from the Mac itself.
 - **Resources.** Starts are admitted against a 4 GB host memory reserve, the Mac's memory pressure,
@@ -289,7 +307,11 @@ vmlab gives a model real machines on your Mac. Know what that means.
 - **Display:** QEMU guests have no GPU; their screen is `ramfb`. VZ Linux guests show a desktop
   through an in-guest VNC server that vmlab installs on first boot, which takes minutes.
 - **Fast networking** (`net_fast`, vmnet) on QEMU needs root or a host where the vmnet probe
-  passes; the VZ profiles always have it. Other QEMU guests use user-mode NAT.
+  passes; the VZ profiles always have it. Other QEMU guests use user-mode networking.
+- **Isolated networking** (the default) exists only on QEMU. A request that names no network
+  lands on a QEMU profile, and a macOS guest or a VZ-only feature (`rosetta`, `gui_accel`) needs
+  `network.mode: nat`. An isolated guest installs nothing on first boot: no `provision.packages`,
+  no desktop, no qemu-guest-agent, unless its image is a template that has them.
 - **Performance:** `qemu-tcg` (any non-arm64 guest, and `cpu_emulation`) emulates the CPU and is
   many times slower than the other profiles.
 

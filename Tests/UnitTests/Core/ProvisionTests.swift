@@ -60,9 +60,10 @@ final class FakeProvisioner: GuestProvisioning {
     #expect(r.provision?.packages == ["jq", "nginx=1.26*"])
     #expect(r.provision?.runCommands == ["touch /done"])
     #expect(r.provision?.userData?.hasPrefix("#cloud-config") == true)
-    #expect(r.impliedFeatures.map(\.feature) == [.cloudInit])
+    #expect(r.impliedFeatures.map(\.feature) == [.netIsolated, .cloudInit])
     let empty = try Self.decode(#"{"guest":{"os":"linux","arch":"arm64"},"provision":{}}"#)
-    #expect(empty.provision == ProvisionSpec() && empty.impliedFeatures.isEmpty)
+    #expect(empty.provision == ProvisionSpec())
+    #expect(empty.impliedFeatures.map(\.feature) == [.netIsolated])
     let again = try JSONDecoder().decode(Requirements.self, from: try JSONEncoder().encode(r))
     #expect(again == r)
   }
@@ -70,7 +71,7 @@ final class FakeProvisioner: GuestProvisioning {
   @Test func macOSTakesOnlyRunCommandsOverSSH() throws {
     let ok = try Self.decode(
       #"{"guest":{"os":"macos","arch":"arm64"},"provision":{"runCommands":["brew --version"]}}"#)
-    #expect(ok.impliedFeatures.map(\.feature) == [.execSSH])
+    #expect(ok.impliedFeatures.map(\.feature) == [.netIsolated, .execSSH])
     for (json, field) in [
       (#"{"packages":["jq"]}"#, "provision.packages"),
       (##"{"userData":"#cloud-config\n"}"##, "provision.userData"),
@@ -399,7 +400,8 @@ extension ProvisionTests {
     let r = try Self.decode(
       #"{"guest":{"os":"macos","arch":"arm64"},"provision":{"sudoPassword":"pa ss'\"w"}}"#)
     #expect(r.provision?.sudoPassword == "pa ss'\"w")
-    #expect(r.provision?.isEmpty == true && r.impliedFeatures.isEmpty)
+    #expect(r.provision?.isEmpty == true)
+    #expect(r.impliedFeatures.map(\.feature) == [.netIsolated])
     let encoded = String(decoding: try JSONEncoder().encode(r), as: UTF8.self)
     #expect(!encoded.contains("sudoPassword") && !encoded.contains("pa ss"))
     for (json, os) in [

@@ -16,6 +16,22 @@ struct VMPlanHandler: ToolHandler {
       allowUnverified: allowUnverified, limits: context.limits)
     switch outcome {
     case .success(let plan):
+      // What vm_create would refuse for the owner's allowNAT.
+      let mode: NetworkSpec.Mode? =
+        plan.requests(.netIsolated)
+        ? .isolated : plan.requests(.netNone) ? .disabled : requirements.network.mode
+      do {
+        try VMLabConfig.load(home: context.store.home).checkNetwork(
+          mode: mode, extra: requirements.extra, home: context.store.home)
+      } catch {
+        // A result like any other impossible request (R-204), with vm_create's refusal.
+        var refusal = error.data
+        refusal["satisfiable"] = .bool(false)
+        refusal["code"] = .string(error.code.rawValue)
+        refusal["message"] = .string(error.message)
+        refusal["hint"] = .string(error.hint)
+        return ToolResult(refusal)
+      }
       var object = try JSONValue(encoding: plan).objectValue ?? [:]
       object["satisfiable"] = .bool(true)
       return ToolResult(object)

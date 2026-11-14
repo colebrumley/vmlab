@@ -50,6 +50,30 @@ import VMLabCore
     #expect(try await engine.waitForExit())
   }
 
+  /// A granted net_isolated is recorded as the mode (a record without one is NAT); the owner's
+  /// `"allowNAT": false` refuses a NAT guest at create and one made earlier at start.
+  @Test func networkModeIsRecordedAndHeldToTheOwnersSwitch() async throws {
+    let f = try Fixture()
+    var plan = f.plan([.execSSH, .netIsolated])
+    plan.requested = [.netIsolated]
+    let draft = VMRecord(
+      id: "", name: "closed", profile: .qemuHVF, guest: GuestSpec(os: .linux, arch: .arm64),
+      features: [], image: "debian-13-arm64")
+    #expect(try await f.manager.create(draft, plan: plan).network.mode == .isolated)
+
+    let open = try await f.create()
+    #expect(open.network.mode == nil)
+    try Data(#"{"allowNAT": false}"#.utf8).write(to: VMLabConfig.url(home: f.store.home))
+    await #expect {
+      try await f.manager.run(.start, on: open.id)
+    } throws: { ($0 as? VMLabError)?.hint.contains("allowNAT") == true }
+    var second = draft
+    second.name = "open"
+    await #expect(throws: VMLabError.self) { try await f.manager.create(second, plan: f.plan()) }
+    second.name = "closed-too"
+    _ = try await f.manager.create(second, plan: plan)
+  }
+
   @Test func fullLifecycleThroughCore() async throws {
     let f = try Fixture()
     let vm = try await f.create()

@@ -188,7 +188,10 @@ enum Schema {
         "network": object(
           [
             "mode": string(
-              "nat for outbound internet, none for no network device at all.",
+              "isolated (the default; QEMU profiles only): the host reaches the guest, the "
+                + "guest reaches nothing outside. nat: outbound internet, which also reaches "
+                + "the LAN and the Mac's own services, and is what a VZ profile needs. none: "
+                + "no network device at all.",
               enum: NetworkSpec.Mode.allCases.map(\.rawValue)),
             "segment": segmentName("A private segment (net_segment) to join with a second NIC."),
             "forwards": array(

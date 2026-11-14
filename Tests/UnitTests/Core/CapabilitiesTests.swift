@@ -207,6 +207,7 @@ import VMLabCore
         cloud_init N Y Y Y
         many_guests N Y Y Y
         cpu_emulation N N N Y
+        net_isolated N N Y Y
         """)
   }
 
@@ -242,6 +243,7 @@ import VMLabCore
         cloud_init N Y Y Y
         many_guests N Y Y Y
         cpu_emulation N N N Y
+        net_isolated N N Y Y
         """)
   }
 

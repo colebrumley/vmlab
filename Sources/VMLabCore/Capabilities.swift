@@ -242,6 +242,12 @@ public enum Capabilities {
       n("macOS allows at most two macOS guests at once", note: "limit 2")
     case (.manyGuests, _): y()
 
+    case (.netIsolated, .vzMacOS), (.netIsolated, .vzLinux):
+      n(
+        "Virtualization.framework's NAT cannot be closed to outbound traffic; set network.mode "
+          + "to nat (the guest then reaches the internet, the LAN and the Mac) or to none")
+    case (.netIsolated, _): y("user-mode networking with restrict=on")
+
     case (.cpuEmulation, .qemuTCG): y()
     case (.cpuEmulation, _): n(nativeCPU)
     }

@@ -30,7 +30,20 @@ one of four engine profiles: `vz-macos`, `vz-linux` (Apple's Virtualization.fram
 
 Only `guest` is required. `require` lists features the VM must have; a profile lacking any of them
 is ruled out. `prefer` lists features you would like; they rank profiles but never rule one out.
-With `require: []` a Linux arm64 guest lands on `vz-linux`, the fastest to boot.
+
+**Say which network the guest needs.** `network.mode` is one of:
+
+- `isolated`, the default: the host reaches the guest (SSH, `forwards`) and the guest reaches
+  nothing outside itself and its segment. No internet, so nothing is installed from a mirror:
+  `provision.packages`, the `gui_desktop` install and `apt` all fail unless the image already
+  holds what they need. Only the QEMU profiles have it, so a request that names no network lands
+  on `qemu-hvf` (Linux arm64).
+- `nat`: outbound network through the Mac. The guest reaches the internet, and with it the Mac's
+  own services and its LAN, so ask for it only when the task needs it. The VZ profiles need it:
+  with `network.mode: nat` and `require: []` a Linux arm64 guest lands on `vz-linux`, the fastest
+  to boot, and a macOS guest is always `nat` or `none`. The owner can turn `nat` off; the refusal
+  then names `allowNAT`.
+- `none`: no network device at all.
 
 **Ask for every feature you might need, up front.** A VM cannot change engine. If you create a
 VM without `gdb` and later need to halt its CPU, `vm_debug` fails with `capability_missing` and
@@ -188,7 +201,7 @@ unbootable. Restoring a checkpoint takes seconds; rebuilding a guest takes minut
 
 - `net_segment create` makes a private Ethernet segment with its own `10.n.0.0/24`; pass it as
   `segment` to `fleet create` (or `auto` to make one), or as `requirements.network.segment` to
-  `vm_create`. Segments carry no internet; every guest keeps NAT for that.
+  `vm_create`. Segments carry no internet; a member has it only with `network.mode: nat`.
 - `fleet exec` runs one command on every member (or on `members`) in parallel and returns each
   member's result plus `allSucceeded`.
 - Some members can fail while others start; each failed member has an `error`. Read `members`
@@ -239,9 +252,9 @@ endpoints, the last 20 events, any provisioning failure and the latest kernel pa
   image you registered) with the VM's own key. `sudo` needs no password, and `vm_exec` with
   `user: root` runs the command as root.
 - qemu-guest-agent is not preinstalled. vmlab's cloud-init installs it on first boot, which needs
-  network. A guest created with `network.mode: none` has no agent and so no `exec_agent`. Create it
-  with NAT first, let cloud-init finish, stop it, make it a template (`images template_create`), and
-  create the network-less VM from that template.
+  network. A guest created with `network.mode: none` or `isolated` (the default) has no agent
+  and so no `exec_agent`. Create it with `network.mode: nat` first, let cloud-init finish, stop
+  it, make it a template (`images template_create`), and create the VM from that template.
 - The Debian cloud kernel has no 9p, so `share` (`shared_dir`) does not mount under QEMU. Use a VZ
   profile (virtiofs) or copy with `vm_file`.
 - On QEMU the display is `ramfb` at 800x600. Coordinates in `vm_computer` are in that space.
@@ -376,6 +389,7 @@ guest's screen is a VNC server inside the X session. `serial` is the console to 
     "requirements": {
       "guest": { "os": "linux", "arch": "arm64" },
       "require": ["gui", "gui_desktop", "gui_preboot", "serial", "exec_ssh"],
+      "network": { "mode": "nat" },
       "resources": { "cpus": 2, "memoryGB": 4, "diskGB": 12 },
       "image": "debian-13-arm64"
     }
@@ -713,7 +727,8 @@ guest another session started elsewhere still counts; `vm_create` then fails wit
 { "runningMacOSGuests": "<number>", "freeMemoryGB": "<number>", "tart": { "present": true } }
 ```
 
-A macOS guest always lands on `vz-macos`. `checkpoint_live` lets you checkpoint it while it runs
+A macOS guest always lands on `vz-macos`, which has no isolated network: say `network.mode: nat`
+(or `none`). `checkpoint_live` lets you checkpoint it while it runs
 (otherwise a checkpoint needs it stopped). `vm_create` clones the image, boots it and waits for SSH,
 which takes a minute or two.
 
@@ -724,7 +739,8 @@ which takes a minute or two.
     "name": "mac",
     "requirements": {
       "guest": { "os": "macos", "arch": "arm64" },
-      "require": ["exec_ssh", "checkpoint_live"]
+      "require": ["exec_ssh", "checkpoint_live"],
+      "network": { "mode": "nat" }
     }
   }
 }
@@ -829,7 +845,8 @@ Destroying the VM also deletes its Tart clone and frees the macOS slot:
 ### Session 4: Three-node cluster
 
 The task: three Debian nodes that reach each other by name. Make the segment first so its name
-is yours, then the fleet on it. Nothing here needs QEMU, so the plan lands on `vz-linux`.
+is yours, then the fleet on it. Nothing here needs QEMU, so with `network.mode: nat` the plan
+lands on `vz-linux`.
 
 ```json call
 { "tool": "net_segment", "arguments": { "action": "create", "name": "lab" } }
@@ -850,6 +867,7 @@ is yours, then the fleet on it. Nothing here needs QEMU, so the plan lands on `v
     "requirements": {
       "guest": { "os": "linux", "arch": "arm64" },
       "require": ["net_segment", "exec_ssh"],
+      "network": { "mode": "nat" },
       "resources": { "cpus": 1, "memoryGB": 1, "diskGB": 8 },
       "image": "debian-13-arm64"
     }

@@ -150,10 +150,20 @@ import VMLabCore
       ["create", "-q", "-f", "qcow2", secret.path, "1M"],
       ["create", "-q", "-f", "qcow2", "-F", "qcow2", "-b", secret.path, overlay.path],
       ["create", "-q", "-f", "qcow2", plain.path, "1M"],
+      [
+        "create", "-q", "-f", "qcow2", "-o", "data_file=\(user.path)/split.raw",
+        user.appending(path: "split.qcow2").path, "1M",
+      ],
     ] {
       let result = try #require(await ProcessRunner().run(qemuImg.path, args))
       try #require(result.status == 0, "\(result.output)")
     }
+    // The header scan reads what qemu-img itself wrote.
+    #expect(ImageReferences.scan(overlay) == .qcow2(.init(backing: secret.path)))
+    #expect(ImageReferences.scan(plain) == .qcow2(.init()))
+    #expect(
+      ImageReferences.scan(user.appending(path: "split.qcow2"))
+        == .qcow2(.init(dataFile: user.path + "/split.raw")))
     let policy = PathPolicy(roots: [root.path])
     let refused = ExtraSpec(qemuArgs: ["-drive", "if=none,id=d1,file=\(overlay.path)"])
     // The check runs qemu-img, so off the cooperative pool.
@@ -171,5 +181,58 @@ import VMLabCore
     } throws: { ($0 as? VMLabError)?.code == .invalidRequest }
     let fine = ExtraSpec(qemuArgs: ["-drive", "if=none,id=d1,file=\(plain.path)"])
     try await check(fine).get()
+  }
+
+  /// A header's backing name is an address or a file out of reach: refused from the header
+  /// alone, before qemu-img (here a path with no binary) could open what it names. An isolated
+  /// guest also refuses the formats whose references vmlab does not read.
+  @Test func anImageHeaderThatNamesAnAddressIsRefusedWithoutOpeningIt() throws {
+    let root = URL(filePath: "/tmp/vmlab-hdr-\(getpid())-\(UInt32.random(in: 0...UInt32.max))")
+    let home = root.appending(path: "home")
+    let user = root.appending(path: "user")
+    try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: user, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let policy = PathPolicy(roots: [user.path])
+    // A qemu-img that records being run: a refused header must be refused before it is.
+    let noQemuImg = root.appending(path: "recording-qemu-img")
+    let ran = root.appending(path: "qemu-img-ran")
+    try Data("#!/bin/sh\necho \"$@\" >> '\(ran.path)'\necho '{}'\n".utf8).write(to: noQemuImg)
+    try FileManager.default.setAttributes(
+      [.posixPermissions: 0o755], ofItemAtPath: noQemuImg.path)
+    func check(_ name: String, _ image: Data, format: String? = nil, closed: Bool = false)
+      throws(VMLabError)
+    {
+      let file = user.appending(path: name)
+      FileManager.default.createFile(atPath: file.path, contents: image)
+      let drive = "if=none,id=d1,file=\(file.path)" + (format.map { ",format=\($0)" } ?? "")
+      try QEMUBackend.checkImageChains(
+        ExtraSpec(qemuArgs: ["-drive", drive]), policy: policy, vmlabHome: home,
+        qemuImg: noQemuImg, closed: closed)
+    }
+    try check("plain.qcow2", ImageReferencesTests.qcow2())
+    try check("raw.img", Data(count: 4096))
+    try check("base.qcow2", ImageReferencesTests.qcow2())
+    try check("local.qcow2", ImageReferencesTests.qcow2(backing: "base.qcow2"))
+    for (name, image) in [
+      ("nbd.qcow2", ImageReferencesTests.qcow2(backing: "nbd://127.0.0.1:5432/x")),
+      ("json.qcow2", ImageReferencesTests.qcow2(dataFile: "json:{\"driver\":\"nbd\"}")),
+      ("out.qcow2", ImageReferencesTests.qcow2(backing: home.path + "/vms/x/disk.qcow2")),
+      ("up.qcow2", ImageReferencesTests.qcow2(backing: "../home/vms/x/disk.qcow2")),
+      ("deep.qcow2", ImageReferencesTests.qcow2(backing: "nbd.qcow2")),
+    ] {
+      try? FileManager.default.removeItem(at: ran)
+      #expect(throws: VMLabError.self, "\(name)") { try check(name, image) }
+      #expect(!FileManager.default.fileExists(atPath: ran.path), "\(name): qemu-img ran")
+    }
+    try check("plain.qcow2", ImageReferencesTests.qcow2())
+    #expect(FileManager.default.fileExists(atPath: ran.path))
+    let vmdk = Data("KDMV".utf8) + Data(count: 512)
+    try check("disk.vmdk", vmdk)
+    #expect(throws: VMLabError.self) { try check("disk.vmdk", vmdk, closed: true) }
+    #expect(throws: VMLabError.self) {
+      try check("raw.img", Data(count: 4096), format: "vmdk", closed: true)
+    }
+    try check("raw.img", Data(count: 4096), format: "raw", closed: true)
   }
 }

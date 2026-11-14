@@ -420,6 +420,17 @@ public enum ProfileSelector {
         "a desktop (xfce4, lightdm) is installed on first boot, which adds about "
           + "\(Plan.desktopInstallSeconds / 60) minutes to the first start")
     }
+    if asked.contains(.netIsolated) {
+      var note =
+        "the network is isolated: the host reaches the guest (SSH, forwards), the guest reaches "
+        + "nothing outside itself and its segment; set network.mode to nat for outbound network"
+      if desktop || !(r.provision?.packages ?? []).isEmpty {
+        note +=
+          "; packages installed on first boot have no mirror to come from unless the image "
+          + "already holds them"
+      }
+      notes.append(note)
+    }
     if profile.isVZ, asked.contains(.netPortForward) {
       notes.append(
         "VZ guests get a host-reachable address: reach guest ports at the guest's IP rather than "
